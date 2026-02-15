@@ -11,6 +11,6 @@ services:
     #   docker compose run --rm janulon run --source all
     #   docker compose run --rm janulon post
     #   docker compose run --rm janulon import-data
-    command: [ "--help" ]
+    command: [ "schedule" ]
 
 
