@@ -394,6 +394,8 @@ def _run_schedule(
     schedule.every(post_h).hours.do(job_post)
     schedule.every(cleanup_h).hours.do(job_cleanup)
 
+    job_run()  # initial scrape at startup so there is something to post
+
     while not shutdown:
         schedule.run_pending()
         time.sleep(60)
