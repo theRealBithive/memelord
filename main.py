@@ -1,10 +1,11 @@
 """Janulon CLI: scrape sources and (optionally) run the aesthetic pipeline."""
 
 import argparse
+import os
 from pathlib import Path
 
 from loguru import logger
-from retina import fourchan, tumblr
+from retina import fourchan, imgur, tumblr
 
 
 def _run_4chan(
@@ -64,13 +65,41 @@ def _run_tumblr(
     )
 
 
+def _run_imgur(
+    topic: str,
+    output_folder: Path,
+    max_items: int,
+    client_id: str,
+    data_dir: Path | None,
+) -> None:
+    logger.info(
+        "Starting Imgur scrape: topic={}, output={}, max_items={}",
+        topic,
+        output_folder.resolve(),
+        max_items,
+    )
+    urls = imgur.iter_image_urls(topic=topic, client_id=client_id, max_items=max_items)
+    if not urls:
+        logger.warning("No image URLs found.")
+        return
+    skip_dirs = []
+    if data_dir is not None:
+        skip_dirs = [data_dir / "corpus", data_dir / "void"]
+    paths = imgur.download_images(
+        urls, output_folder, topic, skip_dirs=skip_dirs or None
+    )
+    logger.success(
+        "Done. Downloaded {} images to {}", len(paths), output_folder.resolve()
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Janulon: scrape image sources and filter by taste.",
     )
     parser.add_argument(
         "--source",
-        choices=["4chan", "reddit", "tumblr"],
+        choices=["4chan", "imgur", "reddit", "tumblr"],
         required=True,
         help="Image source to scrape.",
     )
@@ -82,6 +111,22 @@ def main() -> None:
     parser.add_argument(
         "--blog",
         help="Tumblr blog to scrape (tumblr only). Example: staff or blogname.tumblr.com",
+    )
+    parser.add_argument(
+        "--topic",
+        help="Imgur topic to scrape (imgur only). Example: funny (from imgur.com/t/funny)",
+    )
+    parser.add_argument(
+        "--imgur_client_id",
+        default=os.environ.get("IMGUR_CLIENT_ID", ""),
+        help="Imgur API Client ID (imgur only). Default: env IMGUR_CLIENT_ID",
+    )
+    parser.add_argument(
+        "--max_items",
+        type=int,
+        default=120,
+        metavar="N",
+        help="Max image items to fetch (imgur only). Default: 120",
     )
     parser.add_argument(
         "--subreddit",
@@ -126,6 +171,24 @@ def main() -> None:
             board=args.board,
             output_folder=args.output_folder,
             index_pages=args.index_pages,
+            data_dir=args.data_dir,
+        )
+    elif args.source == "imgur":
+        if not args.topic:
+            logger.error(
+                "Imgur source requires --topic (e.g. funny for imgur.com/t/funny)."
+            )
+            raise SystemExit(1)
+        client_id = (args.imgur_client_id or "").strip()
+        if not client_id:
+            logger.info(
+                "No Imgur Client ID; scraping topic pages (API disabled for new apps)."
+            )
+        _run_imgur(
+            topic=args.topic.strip(),
+            output_folder=args.output_folder,
+            max_items=args.max_items,
+            client_id=client_id,
             data_dir=args.data_dir,
         )
     elif args.source == "tumblr":

@@ -2,3 +2,6 @@ loguru>=0.7
 
 [dev]
 pytest>=8
+
+[imgur-browser]
+playwright>=1.40

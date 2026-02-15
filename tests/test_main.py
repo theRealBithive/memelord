@@ -103,6 +103,51 @@ def test_main_tumblr_downloads_to_output_folder(
     assert "Downloaded 1 images" in caplog.text
 
 
+def test_main_imgur_requires_topic(caplog: pytest.LogCaptureFixture) -> None:
+    """main --source imgur without --topic exits 1 and logs error."""
+    with pytest.raises(SystemExit) as exc_info:
+        with patch.dict("os.environ", {"IMGUR_CLIENT_ID": "test"}, clear=False):
+            with patch("sys.argv", ["main.py", "--source", "imgur"]):
+                main()
+    assert exc_info.value.code == 1
+    assert "topic" in caplog.text.lower()
+
+
+def test_main_imgur_downloads_to_output_folder(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """main --source imgur --topic X --output_folder Y calls scraper and download."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "imgur_pics"
+        with patch(
+            "main.imgur.iter_image_urls",
+            return_value=["https://i.imgur.com/abc.jpg"],
+        ):
+            with patch(
+                "main.imgur.download_images",
+                return_value=[out / "funny_abc.jpg"],
+            ) as dl:
+                with patch(
+                    "sys.argv",
+                    [
+                        "main.py",
+                        "--source",
+                        "imgur",
+                        "--topic",
+                        "funny",
+                        "--output_folder",
+                        str(out),
+                    ],
+                ):
+                    main()
+                dl.assert_called_once()
+                call_args = dl.call_args
+                assert call_args[0][0] == ["https://i.imgur.com/abc.jpg"]
+                assert call_args[0][1] == out
+                assert call_args[0][2] == "funny"
+    assert "Downloaded 1 images" in caplog.text
+
+
 def test_main_reddit_exits_with_message(caplog: pytest.LogCaptureFixture) -> None:
     """main --source reddit logs not implemented and exits 1."""
     with pytest.raises(SystemExit) as exc_info:

@@ -27,7 +27,7 @@ graph LR
 - **Tooling:** [uv](https://docs.astral.sh/uv/) (install & run)
 - **Vision:** PyTorch + DINOv2 (ViT-B/14)
 - **Logic:** Scikit-Learn (Logistic Regression / MLP)
-- **Retina (Scrapers):** 4chan JSON API (/wg/), praw (Reddit), pytumblr, requests
+- **Retina (Scrapers):** 4chan, Tumblr (v1 API), Imgur (scraping; optional Playwright for JS-rendered topic pages)
 
 ### Directory Structure
 
@@ -39,7 +39,8 @@ Janulon/
 ├── retina/
 │   ├── fourchan.py    # Scraper for 4chan /wg/ (wallpaper)
 │   ├── tumblr.py      # Scraper for Tumblr
-│   └── reddit.py      # Scraper for Reddit/Imgur
+│   ├── imgur.py       # Scraper for Imgur topics (e.g. /t/funny)
+│   └── reddit.py      # Scraper for Reddit
 ├── data/
 │   ├── corpus/        # POSITIVE samples (Images you love)
 │   └── void/          # NEGATIVE samples (Random noise/memes)
@@ -81,6 +82,10 @@ Once calibrated, run the main loop. Janulon will scrape configured sources, judg
 ```bash
 # 4chan /wg/ (wallpaper general): no API key, images saved to a folder
 python3 main.py --source 4chan --board wg --output_folder ./pics --index_pages 2
+
+# Imgur topic (e.g. /t/funny): scraping only; for JS-rendered pages install optional browser support
+uv pip install 'janulon[imgur-browser]' && playwright install chromium
+python3 main.py --source imgur --topic funny --output_folder ./pics
 
 # Reddit (when implemented): requires API key
 python3 main.py --source reddit --subreddit architecture --threshold 0.85

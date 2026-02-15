@@ -8,6 +8,7 @@ dependencies = ["loguru>=0.7"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+imgur-browser = ["playwright>=1.40"]
 
 [build-system]
 requires = ["setuptools>=61"]
