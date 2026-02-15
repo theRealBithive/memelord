@@ -1,6 +1,7 @@
 """Tests for core.db: database init and Image model."""
 
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -243,3 +244,46 @@ def test_import_data_skips_missing_dirs(
         inserted, skipped = db.import_data(data_dir, data_dir / "nom.db")
     assert inserted == 1
     assert skipped == 0
+
+
+def test_get_random_unposted_corpus_image_returns_none_when_none_eligible(
+    database: SqliteDatabase,
+) -> None:
+    """get_random_unposted_corpus_image returns None when no corpus or all posted."""
+    assert db.get_random_unposted_corpus_image() is None
+    db.Image.create(
+        content_hash="posted1",
+        file_path="/nonexistent/corpus/a.jpg",
+        source_label="funny",
+        location="corpus",
+        posted_at=datetime.now(timezone.utc),
+    )
+    assert db.get_random_unposted_corpus_image() is None
+    db.Image.create(
+        content_hash="deleted1",
+        file_path="/also/nonexistent/b.jpg",
+        source_label="wg",
+        location="corpus",
+        file_deleted=True,
+    )
+    assert db.get_random_unposted_corpus_image() is None
+
+
+def test_get_random_unposted_corpus_image_returns_one_when_file_exists(
+    database: SqliteDatabase,
+) -> None:
+    """get_random_unposted_corpus_image returns an unposted corpus row when file exists."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "corpus_img.png"
+        path.write_bytes(minimal_png_bytes())
+        db.Image.create(
+            content_hash="unposted1",
+            file_path=str(path.resolve()),
+            source_label="funny",
+            location="corpus",
+        )
+        row = db.get_random_unposted_corpus_image()
+        assert row is not None
+        assert row.content_hash == "unposted1"
+        assert row.posted_at is None
+        assert Path(row.file_path).exists()

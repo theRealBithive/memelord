@@ -4,12 +4,13 @@ import argparse
 import hashlib
 import os
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
 from retina import fourchan, image_validation, imgur, tumblr
 
-from core import brain, db
+from core import brain, caption, db, mastodon as mastodon_module
 
 _INBOX_DIR = "inbox"
 _CONFIG_DEFAULT = "config.toml"
@@ -19,8 +20,8 @@ _VOID_DIR = "void"
 
 def _load_config(config_path: Path) -> dict:
     """
-    Load config.toml; return dict with "4chan", "tumblr", "imgur" keys.
-    Each value is a dict with "boards"/"blogs"/"topics" list of strings.
+    Load config.toml; return dict with "4chan", "tumblr", "imgur", "mastodon" keys.
+    Sources use "boards"/"blogs"/"topics"; mastodon uses "base_url" and "access_token".
     """
     if not config_path.exists():
         logger.error(
@@ -34,6 +35,7 @@ def _load_config(config_path: Path) -> dict:
         "4chan": {"boards": []},
         "tumblr": {"blogs": []},
         "imgur": {"topics": []},
+        "mastodon": {"base_url": "", "access_token": ""},
     }
     for key in ("4chan", "tumblr", "imgur"):
         if key not in data or not isinstance(data[key], dict):
@@ -48,6 +50,12 @@ def _load_config(config_path: Path) -> dict:
         elif key == "imgur" and "topics" in section:
             raw = section["topics"]
             out[key]["topics"] = [str(x).strip() for x in raw if isinstance(x, str)]
+    if "mastodon" in data and isinstance(data["mastodon"], dict):
+        m = data["mastodon"]
+        out["mastodon"]["base_url"] = str(m.get("base_url", "")).strip()
+        out["mastodon"]["access_token"] = str(
+            m.get("access_token") or os.environ.get("MASTODON_ACCESS_TOKEN", "")
+        ).strip()
     return out
 
 
@@ -371,7 +379,50 @@ def main() -> None:
         help="SQLite database path. Default: data/janulon.db",
     )
 
+    post_parser = subparsers.add_parser(
+        "post",
+        help="Post a random unposted corpus image to Mastodon (with generated alt text).",
+    )
+    post_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(_CONFIG_DEFAULT),
+        help="Config file with [mastodon] base_url and access_token.",
+    )
+    post_parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("data/janulon.db"),
+        help="SQLite database. Default: data/janulon.db",
+    )
+
     args = parser.parse_args()
+
+    if args.command == "post":
+        cfg = _load_config(Path(args.config))
+        base_url = cfg["mastodon"]["base_url"]
+        access_token = cfg["mastodon"]["access_token"]
+        if not base_url or not access_token:
+            logger.error(
+                "Mastodon config missing: set [mastodon] base_url and access_token in {} "
+                "or MASTODON_ACCESS_TOKEN env.",
+                args.config,
+            )
+            raise SystemExit(1)
+        db.init_db(args.db)
+        row = db.get_random_unposted_corpus_image()
+        if row is None:
+            logger.warning("No unposted corpus image found.")
+            return
+        path = Path(row.file_path)
+        logger.info("Posting {} (source: {})", path.name, row.source_label)
+        alt_text = caption.describe_for_alt(path)
+        client = mastodon_module.create_client(base_url, access_token)
+        mastodon_module.post_image(client, path, alt_text)
+        row.posted_at = datetime.now(timezone.utc)
+        row.save()
+        logger.success("Posted and marked as posted: {}", path.name)
+        return
 
     if args.command == "import-data":
         inserted, skipped = db.import_data(args.data_dir, args.db)

@@ -5,7 +5,15 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from peewee import BooleanField, CharField, DateTimeField, Model, Proxy, SqliteDatabase
+from peewee import (
+    BooleanField,
+    CharField,
+    DateTimeField,
+    Model,
+    Proxy,
+    SqliteDatabase,
+    fn,
+)
 
 _db: SqliteDatabase | None = None
 db_proxy = Proxy()
@@ -81,6 +89,29 @@ class Image(BaseModel):
 
     class Meta:
         table_name = "image"
+
+
+def get_random_unposted_corpus_image():  # noqa: ANN201
+    """
+    Return a random corpus image that has not been posted yet, or None.
+
+    Only considers rows where location is "corpus", posted_at is NULL,
+    file_deleted is False, and the file exists on disk. Call init_db first.
+    """
+    candidates = list(
+        Image.select()
+        .where(
+            Image.location == "corpus",
+            Image.posted_at.is_null(),
+            Image.file_deleted == False,
+        )
+        .order_by(fn.Random())
+        .limit(50)
+    )
+    for row in candidates:
+        if Path(row.file_path).exists():
+            return row
+    return None
 
 
 def _source_label_from_filename(path: Path) -> str:
