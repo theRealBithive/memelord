@@ -3,10 +3,15 @@
 import argparse
 import hashlib
 import os
+import signal
+import subprocess
+import sys
+import time
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
+import schedule
 from loguru import logger
 from retina import fourchan, image_validation, imgur, tumblr
 
@@ -57,6 +62,36 @@ def _load_config(config_path: Path) -> dict:
             m.get("access_token") or os.environ.get("MASTODON_ACCESS_TOKEN", "")
         ).strip()
     return out
+
+
+def _get_schedule_from_config(config_path: Path) -> dict:
+    """
+    Load [schedule] from config.toml. Returns scrape_every_hours, post_every_hours,
+    cleanup_every_hours (defaults 6, 24, 24 if section missing).
+    """
+    defaults = {
+        "scrape_every_hours": 6,
+        "post_every_hours": 24,
+        "cleanup_every_hours": 24,
+    }
+    if not config_path.exists():
+        return defaults
+    with config_path.open("rb") as f:
+        data = tomllib.load(f)
+    if "schedule" not in data or not isinstance(data["schedule"], dict):
+        return defaults
+    s = data["schedule"]
+    return {
+        "scrape_every_hours": int(
+            s.get("scrape_every_hours", defaults["scrape_every_hours"])
+        ),
+        "post_every_hours": int(
+            s.get("post_every_hours", defaults["post_every_hours"])
+        ),
+        "cleanup_every_hours": int(
+            s.get("cleanup_every_hours", defaults["cleanup_every_hours"])
+        ),
+    }
 
 
 def _skip_dirs(data_dir: Path | None, output_folder: Path) -> list[Path]:
@@ -262,6 +297,94 @@ def _judge_and_sort(
     return moved
 
 
+def _run_schedule(
+    config_path: Path,
+    db_path: Path,
+    weights_path: Path,
+    output_folder: Path,
+    data_dir: Path,
+) -> None:
+    """Run scrape, post, and cleanup on intervals from config; exit on SIGTERM."""
+    intervals = _get_schedule_from_config(config_path)
+    scrape_h = intervals["scrape_every_hours"]
+    post_h = intervals["post_every_hours"]
+    cleanup_h = intervals["cleanup_every_hours"]
+    logger.info(
+        "Schedule: scrape every {}h, post every {}h, cleanup every {}h",
+        scrape_h,
+        post_h,
+        cleanup_h,
+    )
+
+    base_run = [
+        sys.executable,
+        "-m",
+        "main",
+        "run",
+        "--source",
+        "all",
+        "--config",
+        str(config_path),
+        "--db",
+        str(db_path),
+        "--weights",
+        str(weights_path),
+        "--output_folder",
+        str(output_folder),
+        "--data_dir",
+        str(data_dir),
+    ]
+    base_post = [
+        sys.executable,
+        "-m",
+        "main",
+        "post",
+        "--config",
+        str(config_path),
+        "--db",
+        str(db_path),
+    ]
+    base_cleanup = [
+        sys.executable,
+        "-m",
+        "main",
+        "cleanup",
+        "--db",
+        str(db_path),
+    ]
+
+    shutdown = False
+
+    def on_signal(_signum: int, _frame: object) -> None:
+        nonlocal shutdown
+        shutdown = True
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+
+    def job_run() -> None:
+        logger.info("Scheduled run (scrape + judge)")
+        subprocess.run(base_run, check=False)
+
+    def job_post() -> None:
+        logger.info("Scheduled post")
+        subprocess.run(base_post, check=False)
+
+    def job_cleanup() -> None:
+        logger.info("Scheduled cleanup")
+        subprocess.run(base_cleanup, check=False)
+
+    schedule.every(scrape_h).hours.do(job_run)
+    schedule.every(post_h).hours.do(job_post)
+    schedule.every(cleanup_h).hours.do(job_cleanup)
+
+    while not shutdown:
+        schedule.run_pending()
+        time.sleep(60)
+    logger.info("Schedule shutting down")
+    sys.exit(0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Janulon: scrape image sources and filter by taste.",
@@ -396,6 +519,52 @@ def main() -> None:
         help="SQLite database. Default: data/janulon.db",
     )
 
+    cleanup_parser = subparsers.add_parser(
+        "cleanup",
+        help="Remove from disk all posted images and all void images; set file_deleted.",
+    )
+    cleanup_parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("data/janulon.db"),
+        help="SQLite database path. Default: data/janulon.db",
+    )
+
+    schedule_parser = subparsers.add_parser(
+        "schedule",
+        help="Run scrape, post, and cleanup on intervals from config [schedule].",
+    )
+    schedule_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(_CONFIG_DEFAULT),
+        help="Config file (sources + [schedule] intervals).",
+    )
+    schedule_parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("data/janulon.db"),
+        help="SQLite database path. Default: data/janulon.db",
+    )
+    schedule_parser.add_argument(
+        "--weights",
+        type=Path,
+        default=Path("Janulon_weights.pkl"),
+        help="Path to trained classifier (for run).",
+    )
+    schedule_parser.add_argument(
+        "--output_folder",
+        type=Path,
+        default=Path("output"),
+        help="Output folder for run (inbox/corpus/void).",
+    )
+    schedule_parser.add_argument(
+        "--data_dir",
+        type=Path,
+        default=Path("data"),
+        help="Data dir for run (skip_dirs).",
+    )
+
     args = parser.parse_args()
 
     if args.command == "post":
@@ -430,6 +599,21 @@ def main() -> None:
             "Import done: {} inserted, {} skipped (duplicate content hash).",
             inserted,
             skipped,
+        )
+        return
+
+    if args.command == "cleanup":
+        removed = db.cleanup_posted_and_void_files(args.db)
+        logger.info("Cleanup removed {} file(s) from disk (posted + void).", removed)
+        return
+
+    if args.command == "schedule":
+        _run_schedule(
+            config_path=args.config,
+            db_path=args.db,
+            weights_path=args.weights,
+            output_folder=args.output_folder,
+            data_dir=args.data_dir,
         )
         return
 
