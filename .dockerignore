@@ -1,0 +1,33 @@
+# Virtual env and local dev
+.venv/
+venv/
+env/
+.git/
+.gitignore
+
+# Tests and dev tooling
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+*.md
+!README.md
+
+# Local data (not part of image)
+data/
+output/
+out/
+working_dir/
+*.pkl
+config.toml
+
+# Build artifacts
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

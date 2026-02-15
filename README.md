@@ -169,6 +169,31 @@ Run: `python main.py --source all` (optionally `--output_folder ./out`, `--weigh
 - **Tumblr:** Specific aesthetic blogs to traverse reblog trees
 - **Local:** A folder of unsorted images to filter
 
+## Docker
+
+Build and run with a single persistent folder for config, weights, database, and images:
+
+```bash
+docker compose build
+docker compose run --rm janulon run --source all   # scrape + judge
+docker compose run --rm janulon post               # post one to Mastodon
+docker compose run --rm janulon import-data        # import data/corpus + data/void into DB
+```
+
+The compose file mounts a volume at `/data`. Put the following in that folder (e.g. use a bind mount `./janulon-data:/data` and create `janulon-data/` on the host):
+
+- `config.toml` — sources and Mastodon settings
+- `Janulon_weights.pkl` — your trained classifier
+- `janulon.db` — created automatically on first run
+- `corpus/`, `void/` — for skip/import; add `output/` (with `inbox/`, `corpus/`, `void/`) for scrape output and review
+
+To use a bind mount instead of a named volume, in `docker-compose.yml` replace the volume with:
+
+```yaml
+volumes:
+  - ./janulon-data:/data
+```
+
 ## Development
 
 - **Tooling:** [uv](https://docs.astral.sh/uv/) for installs and running scripts (`uv run pytest`, `uv run python main.py`, etc.).

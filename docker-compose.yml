@@ -1,0 +1,17 @@
+services:
+  janulon:
+    build: .
+    image: janulon:latest
+    volumes:
+      # Single folder: config, weights, DB, corpus/void, output (inbox/corpus/void)
+      - janulon-data:/data
+    environment:
+      - JANULON_DATA=/data
+    # Override for one-off commands, e.g.:
+    #   docker compose run --rm janulon run --source all
+    #   docker compose run --rm janulon post
+    #   docker compose run --rm janulon import-data
+    command: [ "--help" ]
+
+volumes:
+  janulon-data:
