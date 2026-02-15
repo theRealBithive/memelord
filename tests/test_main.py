@@ -47,7 +47,7 @@ def test_main_cleanup_calls_cleanup_and_logs(caplog: pytest.LogCaptureFixture) -
                 ["main.py", "cleanup", "--db", str(db_path)],
             ):
                 main()
-        cleanup_mock.assert_called_once_with(db_path)
+        cleanup_mock.assert_called_once_with(db_path, Path("data"))
     assert "5 file(s)" in caplog.text
     assert "Cleanup" in caplog.text or "removed" in caplog.text.lower()
 

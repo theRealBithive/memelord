@@ -1,5 +1,6 @@
 """Local image captioning for alt text using BLIP."""
 
+import os
 from pathlib import Path
 
 import torch
@@ -9,13 +10,35 @@ BLIP_MODEL_ID = "Salesforce/blip-image-captioning-base"
 
 
 def _get_model():
-    """Lazy-load BLIP processor and model (singleton)."""
-    from transformers import BlipForConditionalGeneration, BlipProcessor
+    """Lazy-load BLIP processor and model (singleton). Loads from cache when possible."""
+    import logging
 
-    processor = BlipProcessor.from_pretrained(BLIP_MODEL_ID)
-    model = BlipForConditionalGeneration.from_pretrained(BLIP_MODEL_ID)
-    model.eval()
-    return processor, model
+    from transformers import BlipForConditionalGeneration, BlipProcessor
+    from transformers.utils import logging as tf_logging
+
+    # Load from cache only after first download; avoid network and verbose logs
+    tf_logging.set_verbosity_error()
+    prev = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    try:
+        try:
+            processor = BlipProcessor.from_pretrained(
+                BLIP_MODEL_ID, local_files_only=True
+            )
+            model = BlipForConditionalGeneration.from_pretrained(
+                BLIP_MODEL_ID, local_files_only=True
+            )
+        except (OSError, ValueError):
+            processor = BlipProcessor.from_pretrained(BLIP_MODEL_ID)
+            model = BlipForConditionalGeneration.from_pretrained(BLIP_MODEL_ID)
+        model.eval()
+        return processor, model
+    finally:
+        if prev is None:
+            os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
+        else:
+            os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = prev
+        tf_logging.set_verbosity(logging.WARNING)
 
 
 _processor = None

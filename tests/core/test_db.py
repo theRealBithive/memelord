@@ -28,6 +28,22 @@ def test_get_db_raises_before_init() -> None:
         db._db = saved
 
 
+def test_resolve_file_path_relative() -> None:
+    """resolve_file_path joins data_root with relative file_path."""
+    assert db.resolve_file_path("/data", "corpus/funny.jpg") == Path(
+        "/data/corpus/funny.jpg"
+    )
+    assert db.resolve_file_path(Path("/app/data"), "void/x.png") == Path(
+        "/app/data/void/x.png"
+    )
+
+
+def test_resolve_file_path_absolute() -> None:
+    """resolve_file_path returns path as-is when file_path is absolute (backward compat)."""
+    abs_path = "/var/lib/corpus/old.jpg"
+    assert db.resolve_file_path("/data", abs_path) == Path(abs_path)
+
+
 def test_init_db_creates_tables(database: SqliteDatabase) -> None:
     """init_db creates the image table."""
     cursor = database.execute_sql(
@@ -250,7 +266,8 @@ def test_get_random_unposted_corpus_image_returns_none_when_none_eligible(
     database: SqliteDatabase,
 ) -> None:
     """get_random_unposted_corpus_image returns None when no corpus or all posted."""
-    assert db.get_random_unposted_corpus_image() is None
+    root = Path("/")
+    assert db.get_random_unposted_corpus_image(root) is None
     db.Image.create(
         content_hash="posted1",
         file_path="/nonexistent/corpus/a.jpg",
@@ -258,7 +275,7 @@ def test_get_random_unposted_corpus_image_returns_none_when_none_eligible(
         location="corpus",
         posted_at=datetime.now(timezone.utc),
     )
-    assert db.get_random_unposted_corpus_image() is None
+    assert db.get_random_unposted_corpus_image(root) is None
     db.Image.create(
         content_hash="deleted1",
         file_path="/also/nonexistent/b.jpg",
@@ -266,7 +283,7 @@ def test_get_random_unposted_corpus_image_returns_none_when_none_eligible(
         location="corpus",
         file_deleted=True,
     )
-    assert db.get_random_unposted_corpus_image() is None
+    assert db.get_random_unposted_corpus_image(root) is None
 
 
 def test_get_random_unposted_corpus_image_returns_one_when_file_exists(
@@ -274,19 +291,20 @@ def test_get_random_unposted_corpus_image_returns_one_when_file_exists(
 ) -> None:
     """get_random_unposted_corpus_image returns an unposted corpus row when file exists."""
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "corpus_img.png"
+        tmp_path = Path(tmp)
+        path = tmp_path / "corpus_img.png"
         path.write_bytes(minimal_png_bytes())
         db.Image.create(
             content_hash="unposted1",
-            file_path=str(path.resolve()),
+            file_path="corpus_img.png",
             source_label="funny",
             location="corpus",
         )
-        row = db.get_random_unposted_corpus_image()
+        row = db.get_random_unposted_corpus_image(tmp_path)
         assert row is not None
         assert row.content_hash == "unposted1"
         assert row.posted_at is None
-        assert Path(row.file_path).exists()
+        assert db.resolve_file_path(tmp_path, row.file_path).exists()
 
 
 def test_cleanup_posted_and_void_files_removes_files_and_sets_file_deleted() -> None:
@@ -320,7 +338,7 @@ def test_cleanup_posted_and_void_files_removes_files_and_sets_file_deleted() -> 
             source_label="wg",
             location="corpus",
         )
-        removed = db.cleanup_posted_and_void_files(db_path)
+        removed = db.cleanup_posted_and_void_files(db_path, tmp_path)
         assert removed == 2
         assert not posted_file.exists()
         assert not void_file.exists()
@@ -342,7 +360,7 @@ def test_cleanup_posted_and_void_files_skips_missing_files() -> None:
             source_label="wg",
             location="void",
         )
-        removed = db.cleanup_posted_and_void_files(db_path)
+        removed = db.cleanup_posted_and_void_files(db_path, tmp_path)
         assert removed == 0
         assert db.Image.get_by_id("gone").file_deleted is False
 
@@ -362,6 +380,6 @@ def test_cleanup_posted_and_void_files_skips_already_file_deleted() -> None:
             location="void",
             file_deleted=True,
         )
-        removed = db.cleanup_posted_and_void_files(db_path)
+        removed = db.cleanup_posted_and_void_files(db_path, tmp_path)
         assert removed == 0
         assert f.exists()

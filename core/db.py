@@ -1,4 +1,9 @@
-"""SQLite database and Image model for storing and indexing downloaded images."""
+"""SQLite database and Image model for storing and indexing downloaded images.
+
+Image file_path is stored relative to the data root (directory containing corpus/
+and void/) so the DB is portable across hosts and Docker. Resolve at runtime
+with resolve_file_path(data_root, row.file_path).
+"""
 
 import hashlib
 from collections.abc import Callable
@@ -17,6 +22,21 @@ from peewee import (
 
 _db: SqliteDatabase | None = None
 db_proxy = Proxy()
+
+
+def resolve_file_path(data_root: Path | str, file_path: str) -> Path:
+    """
+    Resolve file_path to an absolute Path.
+
+    If file_path is already absolute (e.g. from an older DB), return it as-is.
+    Otherwise treat it as relative to data_root (portable storage for Docker).
+    """
+    p = file_path.strip()
+    if not p:
+        return Path(data_root) / ""
+    if Path(p).is_absolute():
+        return Path(p)
+    return Path(data_root) / p
 
 
 def get_db() -> SqliteDatabase:
@@ -91,13 +111,15 @@ class Image(BaseModel):
         table_name = "image"
 
 
-def get_random_unposted_corpus_image():  # noqa: ANN201
+def get_random_unposted_corpus_image(data_root: Path | str):  # noqa: ANN201
     """
     Return a random corpus image that has not been posted yet, or None.
 
     Only considers rows where location is "corpus", posted_at is NULL,
-    file_deleted is False, and the file exists on disk. Call init_db first.
+    file_deleted is False, and the file exists on disk. file_path is resolved
+    against data_root (relative paths). Call init_db first.
     """
+    root = Path(data_root)
     candidates = list(
         Image.select()
         .where(
@@ -109,7 +131,7 @@ def get_random_unposted_corpus_image():  # noqa: ANN201
         .limit(50)
     )
     for row in candidates:
-        if Path(row.file_path).exists():
+        if resolve_file_path(root, row.file_path).exists():
             return row
     return None
 
@@ -170,9 +192,13 @@ def import_data(
             if Image.get_or_none(Image.content_hash == content_hash) is not None:
                 skipped += 1
                 continue
+            try:
+                file_path_str = str(path.relative_to(data_dir))
+            except ValueError:
+                file_path_str = str(path.resolve())
             Image.create(
                 content_hash=content_hash,
-                file_path=str(path.resolve()),
+                file_path=file_path_str,
                 source_url=None,
                 source_label=_source_label_from_filename(path),
                 location=location,
@@ -183,20 +209,21 @@ def import_data(
     return inserted, skipped
 
 
-def cleanup_posted_and_void_files(db_path: Path | str) -> int:
+def cleanup_posted_and_void_files(db_path: Path | str, data_root: Path | str) -> int:
     """
     Delete from disk all files for images that are posted or in the void.
     Sets file_deleted=True for each removed file. Rows are kept for dedup.
-    Returns the number of files removed.
+    file_path is resolved against data_root (relative paths). Returns files removed.
     """
     init_db(db_path)
+    root = Path(data_root)
     removed = 0
     candidates = Image.select().where(
         (Image.posted_at.is_null(False) | (Image.location == "void")),
         Image.file_deleted == False,
     )
     for row in candidates:
-        path = Path(row.file_path)
+        path = resolve_file_path(root, row.file_path)
         if path.is_file():
             try:
                 path.unlink()
