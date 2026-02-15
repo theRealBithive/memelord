@@ -1,1 +1,1 @@
-"""The neural logic: CLIP encoder + classifier (taste matrix)."""
+"""The neural logic: DINOv2 encoder + classifier (taste matrix)."""

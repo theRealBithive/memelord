@@ -1,4 +1,4 @@
-"""Tests for core.brain (CLIP + classifier)."""
+"""Tests for core.brain (DINOv2 + classifier)."""
 
 import pytest
 

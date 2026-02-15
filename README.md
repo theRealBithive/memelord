@@ -4,7 +4,7 @@
 
 Janulon is a subjective aesthetic engine. Unlike generative AI (which creates new noise), Janulon is a curatorial AI designed to filter the digital ocean for specific visual frequencies.
 
-It uses OpenAI's CLIP (Contrastive Language-Image Pre-Training) to map images into high-dimensional vector space, then applies a custom-trained linear probe to determine if a new image aligns with the operator's specific taste.
+It uses Meta's DINOv2 (self-supervised vision transformer) to map images into high-dimensional vector space, then applies a custom-trained linear probe to determine if a new image aligns with the operator's specific taste. Unlike language-supervised models, DINOv2 learns pure visual structure — texture, composition, light — which is exactly what aesthetic judgement demands.
 
 It is a mirror. You teach it what you love; it finds more of it.
 
@@ -15,8 +15,8 @@ Janulon operates in a continuous loop of three phases: Acquisition, Evaluation, 
 ```mermaid
 graph LR
     A[The Web] -->|Scrapers| B(Input Buffer)
-    B -->|Pre-process| C{CLIP Encoder}
-    C -->|Vector 512d| D[The Taste Matrix]
+    B -->|Pre-process| C{DINOv2 Encoder}
+    C -->|Vector 768d| D[The Taste Matrix]
     D -->|Score > 0.90| E[Archive / Post]
     D -->|Score < 0.90| F[The Void]
 ```
@@ -25,7 +25,7 @@ graph LR
 
 - **Core:** Python 3.9+
 - **Tooling:** [uv](https://docs.astral.sh/uv/) (install & run)
-- **Vision:** PyTorch + OpenAI CLIP (ViT-B/32)
+- **Vision:** PyTorch + DINOv2 (ViT-B/14)
 - **Logic:** Scikit-Learn (Logistic Regression / MLP)
 - **Retina (Scrapers):** praw (Reddit), pytumblr, requests
 
@@ -34,7 +34,7 @@ graph LR
 ```
 Janulon/
 ├── core/
-│   ├── brain.py       # The neural logic (CLIP + Classifier)
+│   ├── brain.py       # The neural logic (DINOv2 + Classifier)
 │   └── trainer.py     # The script that learns your taste
 ├── retina/
 │   ├── tumblr.py      # Scraper for Tumblr

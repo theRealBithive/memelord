@@ -1,1 +1,1 @@
-"""Core neural logic: CLIP encoder and taste classifier."""
+"""Core neural logic: DINOv2 encoder and taste classifier."""
