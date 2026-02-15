@@ -1,0 +1,27 @@
+---
+description: Testing standards - every feature must have tests
+alwaysApply: true
+---
+
+# Testing Standards
+
+- **Every** new function, class, or feature must have corresponding tests
+- Use **pytest** as the test framework
+- Place tests in a `tests/` directory mirroring the source structure
+- Test file naming: `test_<module>.py`
+- Test function naming: `test_<behavior_being_tested>`
+
+# Test Quality
+
+- Each test should verify one behavior
+- Use descriptive test names that read like specifications
+- Arrange-Act-Assert pattern for test structure
+- Prefer plain asserts over unittest-style methods
+- Use fixtures for shared setup, keep them minimal
+
+# What to Test
+
+- Happy paths and edge cases
+- Error handling and invalid inputs
+- Boundary conditions
+- Public interfaces (not private implementation details)

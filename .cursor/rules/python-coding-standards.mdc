@@ -1,0 +1,34 @@
+---
+description: Python coding standards - clean code, clean architecture, Zen of Python
+alwaysApply: true
+---
+
+# Python Project Standards
+
+- Language: **Python**
+- Dependency management: **pyproject.toml** (no setup.py, no requirements.txt)
+- Do **not** introduce new dependencies unless explicitly asked
+
+# Clean Code & Zen of Python
+
+- Simple is better than complex; flat is better than nested
+- Explicit is better than implicit; readability counts
+- Functions should do one thing and be short (<20 lines preferred)
+- Use meaningful, descriptive names for variables, functions, classes
+- Avoid deep nesting -- return early, use guard clauses
+- No dead code, no commented-out code
+- Prefer composition over inheritance
+
+# Clean Architecture
+
+- Separate concerns: domain logic, infrastructure, interfaces
+- Business logic must not depend on frameworks or I/O
+- Use dependency injection over hard-coded dependencies
+- Keep modules focused and loosely coupled
+
+# Style
+
+- Follow PEP 8 and PEP 257 (docstrings)
+- Use type hints on all function signatures
+- Prefer pathlib over os.path
+- Use f-strings for string formatting
