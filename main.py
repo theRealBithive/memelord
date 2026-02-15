@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from loguru import logger
-from retina import fourchan
+from retina import fourchan, tumblr
 
 
 def _run_4chan(
@@ -37,13 +37,40 @@ def _run_4chan(
     )
 
 
+def _run_tumblr(
+    blog: str,
+    output_folder: Path,
+    num_posts: int,
+    data_dir: Path | None,
+) -> None:
+    logger.info(
+        "Starting Tumblr scrape: blog={}, output={}, num_posts={}",
+        blog,
+        output_folder.resolve(),
+        num_posts,
+    )
+    urls = tumblr.iter_image_urls(blog=blog, num_posts=num_posts)
+    if not urls:
+        logger.warning("No image URLs found.")
+        return
+    skip_dirs = []
+    if data_dir is not None:
+        skip_dirs = [data_dir / "corpus", data_dir / "void"]
+    paths = tumblr.download_images(
+        urls, output_folder, blog, skip_dirs=skip_dirs or None
+    )
+    logger.success(
+        "Done. Downloaded {} images to {}", len(paths), output_folder.resolve()
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Janulon: scrape image sources and filter by taste.",
     )
     parser.add_argument(
         "--source",
-        choices=["4chan", "reddit"],
+        choices=["4chan", "reddit", "tumblr"],
         required=True,
         help="Image source to scrape.",
     )
@@ -53,8 +80,19 @@ def main() -> None:
         help="Board to scrape (4chan only). Default: wg (wallpaper general).",
     )
     parser.add_argument(
+        "--blog",
+        help="Tumblr blog to scrape (tumblr only). Example: staff or blogname.tumblr.com",
+    )
+    parser.add_argument(
         "--subreddit",
         help="Subreddit to scrape (reddit only).",
+    )
+    parser.add_argument(
+        "--num_posts",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Max number of posts to fetch (tumblr only). Default: 50",
     )
     parser.add_argument(
         "--output_folder",
@@ -88,6 +126,18 @@ def main() -> None:
             board=args.board,
             output_folder=args.output_folder,
             index_pages=args.index_pages,
+            data_dir=args.data_dir,
+        )
+    elif args.source == "tumblr":
+        if not args.blog:
+            logger.error(
+                "Tumblr source requires --blog (e.g. staff or blogname.tumblr.com)."
+            )
+            raise SystemExit(1)
+        _run_tumblr(
+            blog=args.blog.strip(),
+            output_folder=args.output_folder,
+            num_posts=args.num_posts,
             data_dir=args.data_dir,
         )
     elif args.source == "reddit":
