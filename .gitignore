@@ -37,3 +37,13 @@ Thumbs.db
 .env
 .env.local
 *.local
+
+# Project: data, output, weights, DB
+data/corpus/*
+!data/corpus/.gitkeep
+data/void/*
+!data/void/.gitkeep
+data/*.db
+out/
+working_dir/
+*.pkl
