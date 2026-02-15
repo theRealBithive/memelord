@@ -1,3 +1,12 @@
+Metadata-Version: 2.4
+Name: janulon
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.14
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+
 # JANULON
 
 > "The machine does not need to see. It only needs to feel."
@@ -87,11 +96,10 @@ python3 main.py --source reddit --subreddit architecture --threshold 0.85
 - **Layout:** Tests live in `tests/`, mirroring the source layout (e.g. `tests/core/test_brain.py`).
 - **Naming:** Files `test_<module>.py`; functions `test_<behavior_being_tested>`.
 
-Install dev dependencies and run tests:
+Run tests:
 
 ```bash
-uv sync --extra dev
-uv run pytest
+pytest
 ```
 
 Every new function, class, or feature must have corresponding tests. Use one behavior per test, Arrange–Act–Assert structure, and minimal fixtures.
