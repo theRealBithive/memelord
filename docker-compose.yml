@@ -4,7 +4,7 @@ services:
     image: janulon:latest
     volumes:
       # Single folder: config, weights, DB, corpus/void, output (inbox/corpus/void)
-      - janulon-data:/data
+      - ./janulon-data:/data
     environment:
       - JANULON_DATA=/data
     # Override for one-off commands, e.g.:
@@ -13,5 +13,4 @@ services:
     #   docker compose run --rm janulon import-data
     command: [ "--help" ]
 
-volumes:
-  janulon-data:
+

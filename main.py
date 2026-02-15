@@ -223,8 +223,13 @@ def _remove_inbox_duplicates_by_hash(inbox_dir: Path) -> None:
         )
 
 
-def _insert_judged_image(dest_path: Path, location: str) -> None:
-    """Insert a judged image (moved to corpus/void) into the database."""
+def _insert_judged_image(
+    dest_path: Path, location: str, data_root: Path | None = None
+) -> None:
+    """Insert a judged image (moved to corpus/void) into the database.
+
+    file_path is stored relative to data_root when given (portable for Docker).
+    """
     try:
         raw = dest_path.read_bytes()
     except OSError:
@@ -232,9 +237,16 @@ def _insert_judged_image(dest_path: Path, location: str) -> None:
     content_hash = hashlib.sha256(raw).hexdigest()
     if db.Image.get_or_none(db.Image.content_hash == content_hash) is not None:
         return
+    if data_root is not None:
+        try:
+            file_path_str = str(dest_path.relative_to(data_root))
+        except ValueError:
+            file_path_str = str(dest_path.resolve())
+    else:
+        file_path_str = str(dest_path.resolve())
     db.Image.create(
         content_hash=content_hash,
-        file_path=str(dest_path.resolve()),
+        file_path=file_path_str,
         source_url=None,
         source_label=db._source_label_from_filename(dest_path),
         location=location,
@@ -343,6 +355,8 @@ def _run_schedule(
         str(config_path),
         "--db",
         str(db_path),
+        "--data_dir",
+        str(data_dir),
     ]
     base_cleanup = [
         sys.executable,
@@ -351,6 +365,8 @@ def _run_schedule(
         "cleanup",
         "--db",
         str(db_path),
+        "--data_dir",
+        str(data_dir),
     ]
 
     shutdown = False
@@ -518,6 +534,12 @@ def main() -> None:
         default=Path("data/janulon.db"),
         help="SQLite database. Default: data/janulon.db",
     )
+    post_parser.add_argument(
+        "--data_dir",
+        type=Path,
+        default=Path("data"),
+        help="Data root (corpus/void live here). Default: data",
+    )
 
     cleanup_parser = subparsers.add_parser(
         "cleanup",
@@ -528,6 +550,12 @@ def main() -> None:
         type=Path,
         default=Path("data/janulon.db"),
         help="SQLite database path. Default: data/janulon.db",
+    )
+    cleanup_parser.add_argument(
+        "--data_dir",
+        type=Path,
+        default=Path("data"),
+        help="Data root (corpus/void live here). Default: data",
     )
 
     schedule_parser = subparsers.add_parser(
@@ -579,11 +607,11 @@ def main() -> None:
             )
             raise SystemExit(1)
         db.init_db(args.db)
-        row = db.get_random_unposted_corpus_image()
+        row = db.get_random_unposted_corpus_image(args.data_dir)
         if row is None:
             logger.warning("No unposted corpus image found.")
             return
-        path = Path(row.file_path)
+        path = db.resolve_file_path(args.data_dir, row.file_path)
         logger.info("Posting {} (source: {})", path.name, row.source_label)
         alt_text = caption.describe_for_alt(path)
         client = mastodon_module.create_client(base_url, access_token)
@@ -603,7 +631,7 @@ def main() -> None:
         return
 
     if args.command == "cleanup":
-        removed = db.cleanup_posted_and_void_files(args.db)
+        removed = db.cleanup_posted_and_void_files(args.db, args.data_dir)
         logger.info("Cleanup removed {} file(s) from disk (posted + void).", removed)
         return
 
@@ -624,8 +652,9 @@ def main() -> None:
     skip_dirs = _skip_dirs(args.data_dir, output_folder)
 
     db.init_db(args.db)
+    data_root = Path(args.data_dir)
     skip_paths = {
-        str(Path(r.file_path).resolve())
+        str(db.resolve_file_path(data_root, r.file_path))
         for r in db.Image.select(db.Image.file_path).iterator()
     }
 
@@ -712,7 +741,7 @@ def main() -> None:
                 threshold=args.threshold,
             )
             for dest_path, location in moved:
-                _insert_judged_image(dest_path, location)
+                _insert_judged_image(dest_path, location, data_root=output_folder)
 
 
 if __name__ == "__main__":
