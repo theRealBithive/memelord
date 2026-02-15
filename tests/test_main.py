@@ -35,6 +35,90 @@ def test_main_import_data_calls_import_data_and_logs(
     assert "1 skipped" in caplog.text
 
 
+def test_main_cleanup_calls_cleanup_and_logs(caplog: pytest.LogCaptureFixture) -> None:
+    """main cleanup calls db.cleanup_posted_and_void_files with db, logs count."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "janulon.db"
+        with patch(
+            "main.db.cleanup_posted_and_void_files", return_value=5
+        ) as cleanup_mock:
+            with patch(
+                "sys.argv",
+                ["main.py", "cleanup", "--db", str(db_path)],
+            ):
+                main()
+        cleanup_mock.assert_called_once_with(db_path)
+    assert "5 file(s)" in caplog.text
+    assert "Cleanup" in caplog.text or "removed" in caplog.text.lower()
+
+
+def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
+    """_get_schedule_from_config returns default intervals when file or [schedule] missing."""
+    from main import _get_schedule_from_config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = Path(tmp) / "missing.toml"
+        out = _get_schedule_from_config(missing)
+    assert out["scrape_every_hours"] == 6
+    assert out["post_every_hours"] == 24
+    assert out["cleanup_every_hours"] == 24
+
+
+def test_get_schedule_from_config_returns_values_from_file() -> None:
+    """_get_schedule_from_config returns [schedule] values when present."""
+    from main import _get_schedule_from_config
+
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".toml", delete=False) as f:
+        f.write(
+            b"[schedule]\n"
+            b"scrape_every_hours = 2\n"
+            b"post_every_hours = 12\n"
+            b"cleanup_every_hours = 48\n"
+        )
+        path = Path(f.name)
+    try:
+        out = _get_schedule_from_config(path)
+        assert out["scrape_every_hours"] == 2
+        assert out["post_every_hours"] == 12
+        assert out["cleanup_every_hours"] == 48
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_main_schedule_calls_run_schedule_with_paths() -> None:
+    """main schedule invokes _run_schedule with config, db, weights, output, data_dir."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        config = tmp_path / "config.toml"
+        config.write_text("[schedule]\nscrape_every_hours = 1\n")
+        with patch("main._run_schedule") as run_schedule_mock:
+            with patch(
+                "sys.argv",
+                [
+                    "main.py",
+                    "schedule",
+                    "--config",
+                    str(config),
+                    "--db",
+                    str(tmp_path / "db"),
+                    "--weights",
+                    str(tmp_path / "w.pkl"),
+                    "--output_folder",
+                    str(tmp_path / "out"),
+                    "--data_dir",
+                    str(tmp_path),
+                ],
+            ):
+                main()
+        run_schedule_mock.assert_called_once()
+        call_kw = run_schedule_mock.call_args[1]
+        assert call_kw["config_path"] == config
+        assert call_kw["db_path"] == tmp_path / "db"
+        assert call_kw["weights_path"] == tmp_path / "w.pkl"
+        assert call_kw["output_folder"] == tmp_path / "out"
+        assert call_kw["data_dir"] == tmp_path
+
+
 def test_main_4chan_downloads_to_output_folder(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

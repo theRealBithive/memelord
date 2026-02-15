@@ -287,3 +287,81 @@ def test_get_random_unposted_corpus_image_returns_one_when_file_exists(
         assert row.content_hash == "unposted1"
         assert row.posted_at is None
         assert Path(row.file_path).exists()
+
+
+def test_cleanup_posted_and_void_files_removes_files_and_sets_file_deleted() -> None:
+    """cleanup_posted_and_void_files deletes posted and void files, leaves corpus unposted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        db_path = tmp_path / "janulon.db"
+        db.init_db(db_path)
+        posted_file = tmp_path / "posted.png"
+        void_file = tmp_path / "void.png"
+        corpus_file = tmp_path / "corpus.png"
+        posted_file.write_bytes(minimal_png_bytes())
+        void_file.write_bytes(minimal_png_bytes())
+        corpus_file.write_bytes(minimal_png_bytes())
+        db.Image.create(
+            content_hash="p1",
+            file_path=str(posted_file.resolve()),
+            source_label="wg",
+            location="corpus",
+            posted_at=datetime.now(timezone.utc),
+        )
+        db.Image.create(
+            content_hash="v1",
+            file_path=str(void_file.resolve()),
+            source_label="funny",
+            location="void",
+        )
+        db.Image.create(
+            content_hash="c1",
+            file_path=str(corpus_file.resolve()),
+            source_label="wg",
+            location="corpus",
+        )
+        removed = db.cleanup_posted_and_void_files(db_path)
+        assert removed == 2
+        assert not posted_file.exists()
+        assert not void_file.exists()
+        assert corpus_file.exists()
+        assert db.Image.get_by_id("p1").file_deleted is True
+        assert db.Image.get_by_id("v1").file_deleted is True
+        assert db.Image.get_by_id("c1").file_deleted is False
+
+
+def test_cleanup_posted_and_void_files_skips_missing_files() -> None:
+    """cleanup_posted_and_void_files does not update row when file already missing."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        db_path = tmp_path / "janulon.db"
+        db.init_db(db_path)
+        db.Image.create(
+            content_hash="gone",
+            file_path=str((tmp_path / "nonexistent.png").resolve()),
+            source_label="wg",
+            location="void",
+        )
+        removed = db.cleanup_posted_and_void_files(db_path)
+        assert removed == 0
+        assert db.Image.get_by_id("gone").file_deleted is False
+
+
+def test_cleanup_posted_and_void_files_skips_already_file_deleted() -> None:
+    """cleanup_posted_and_void_files does not process rows already marked file_deleted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        db_path = tmp_path / "janulon.db"
+        db.init_db(db_path)
+        f = tmp_path / "already_gone.png"
+        f.write_bytes(minimal_png_bytes())
+        db.Image.create(
+            content_hash="del",
+            file_path=str(f.resolve()),
+            source_label="wg",
+            location="void",
+            file_deleted=True,
+        )
+        removed = db.cleanup_posted_and_void_files(db_path)
+        assert removed == 0
+        assert f.exists()

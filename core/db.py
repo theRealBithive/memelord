@@ -181,3 +181,28 @@ def import_data(
             inserted += 1
 
     return inserted, skipped
+
+
+def cleanup_posted_and_void_files(db_path: Path | str) -> int:
+    """
+    Delete from disk all files for images that are posted or in the void.
+    Sets file_deleted=True for each removed file. Rows are kept for dedup.
+    Returns the number of files removed.
+    """
+    init_db(db_path)
+    removed = 0
+    candidates = Image.select().where(
+        (Image.posted_at.is_null(False) | (Image.location == "void")),
+        Image.file_deleted == False,
+    )
+    for row in candidates:
+        path = Path(row.file_path)
+        if path.is_file():
+            try:
+                path.unlink()
+                row.file_deleted = True
+                row.save()
+                removed += 1
+            except OSError:
+                continue
+    return removed

@@ -27,6 +27,20 @@ if [ -n "$JANULON_DATA" ]; then
         --db "$JANULON_DATA/janulon.db" \
         "$@"
       ;;
+    cleanup)
+      shift
+      set -- cleanup --db "$JANULON_DATA/janulon.db" "$@"
+      ;;
+    schedule)
+      shift
+      set -- schedule \
+        --config "$JANULON_DATA/config.toml" \
+        --weights "$JANULON_DATA/Janulon_weights.pkl" \
+        --db "$JANULON_DATA/janulon.db" \
+        --output_folder "$JANULON_DATA/output" \
+        --data_dir "$JANULON_DATA" \
+        "$@"
+      ;;
   esac
 fi
 exec python -m main "$@"

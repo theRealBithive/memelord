@@ -1,8 +1,10 @@
 """Post images to Mastodon with alt text."""
 
+import time
 from pathlib import Path
 
 from mastodon import Mastodon
+from mastodon.errors import MastodonAPIError
 
 # MIME types for supported image extensions (matches brain.IMAGE_EXTENSIONS)
 _MIME_BY_SUFFIX = {
@@ -18,6 +20,33 @@ _MIME_BY_SUFFIX = {
 def _mime_for_path(path: Path) -> str:
     """Return MIME type for path; default to image/jpeg if unknown."""
     return _MIME_BY_SUFFIX.get(path.suffix.lower(), "image/jpeg")
+
+
+def _wait_for_media_ready(
+    client: Mastodon,
+    media_id: str,
+    *,
+    poll_interval: float = 1.0,
+    timeout: float = 30.0,
+) -> None:
+    """
+    Poll until the media attachment has finished processing (url is set).
+
+    Mastodon processes uploads asynchronously; status_post fails with 422
+    if media is not ready. Raises MastodonAPIError if timeout is exceeded.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        media = client.media(media_id)
+        url = (
+            media.get("url") if isinstance(media, dict) else getattr(media, "url", None)
+        )
+        if url:
+            return
+        time.sleep(poll_interval)
+    raise MastodonAPIError(
+        "Media attachment did not finish processing before timeout. Try again in a moment."
+    )
 
 
 def create_client(base_url: str, access_token: str) -> Mastodon:
@@ -62,4 +91,6 @@ def post_image(
         mime_type=mime,
         description=alt_text,
     )
-    return client.status_post(status=status_text or "", media_ids=[media["id"]])
+    media_id = media["id"] if isinstance(media, dict) else media.id
+    _wait_for_media_ready(client, media_id)
+    return client.status_post(status=status_text or "", media_ids=[media_id])
