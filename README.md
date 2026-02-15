@@ -27,7 +27,7 @@ graph LR
 - **Tooling:** [uv](https://docs.astral.sh/uv/) (install & run)
 - **Vision:** PyTorch + DINOv2 (ViT-B/14)
 - **Logic:** Scikit-Learn (Logistic Regression / MLP)
-- **Retina (Scrapers):** praw (Reddit), pytumblr, requests
+- **Retina (Scrapers):** 4chan JSON API (/wg/), praw (Reddit), pytumblr, requests
 
 ### Directory Structure
 
@@ -37,6 +37,7 @@ Janulon/
 │   ├── brain.py       # The neural logic (DINOv2 + Classifier)
 │   └── trainer.py     # The script that learns your taste
 ├── retina/
+│   ├── fourchan.py    # Scraper for 4chan /wg/ (wallpaper)
 │   ├── tumblr.py      # Scraper for Tumblr
 │   └── reddit.py      # Scraper for Reddit/Imgur
 ├── data/
@@ -78,6 +79,10 @@ Output: `Janulon_weights.pkl` (the mathematical representation of your taste).
 Once calibrated, run the main loop. Janulon will scrape configured sources, judge images, and save the matches.
 
 ```bash
+# 4chan /wg/ (wallpaper general): no API key, images saved to a folder
+python3 main.py --source 4chan --board wg --output_folder ./pics --index_pages 2
+
+# Reddit (when implemented): requires API key
 python3 main.py --source reddit --subreddit architecture --threshold 0.85
 ```
 
@@ -111,6 +116,23 @@ The confidence required for Janulon to accept an image.
 ### Sources
 
 Edit `config.yaml` to set your hunting grounds:
+
+- **4chan /wg/ (wallpaper general):** Public JSON API, no API key. Use the `retina.fourchan` scraper:
+
+  ```python
+  from retina.fourchan import iter_image_urls, get_index, get_thread, image_url_from_post
+
+  # Collect image URLs from the first 2 index pages (rate-limited to 1 req/s)
+  urls = iter_image_urls(board="wg", index_pages=2)
+
+  # Or fetch a single index page or full thread
+  page = get_index("wg", page=1)
+  thread = get_thread("wg", thread_no=12345)
+  for post in thread.get("posts", []):
+      url = image_url_from_post(post, "wg")
+      if url:
+          ...
+  ```
 
 - **Reddit:** Subreddits like /r/Brutalism, /r/LiminalSpace, /r/Cyberpunk
 - **Tumblr:** Specific aesthetic blogs to traverse reblog trees

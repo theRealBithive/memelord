@@ -4,6 +4,7 @@ Version: 0.1.0
 Summary: Add your description here
 Requires-Python: >=3.14
 Description-Content-Type: text/markdown
+Requires-Dist: loguru>=0.7
 Provides-Extra: dev
 Requires-Dist: pytest>=8; extra == "dev"
 
@@ -13,7 +14,7 @@ Requires-Dist: pytest>=8; extra == "dev"
 
 Janulon is a subjective aesthetic engine. Unlike generative AI (which creates new noise), Janulon is a curatorial AI designed to filter the digital ocean for specific visual frequencies.
 
-It uses OpenAI's CLIP (Contrastive Language-Image Pre-Training) to map images into high-dimensional vector space, then applies a custom-trained linear probe to determine if a new image aligns with the operator's specific taste.
+It uses Meta's DINOv2 (self-supervised vision transformer) to map images into high-dimensional vector space, then applies a custom-trained linear probe to determine if a new image aligns with the operator's specific taste. Unlike language-supervised models, DINOv2 learns pure visual structure — texture, composition, light — which is exactly what aesthetic judgement demands.
 
 It is a mirror. You teach it what you love; it finds more of it.
 
@@ -24,8 +25,8 @@ Janulon operates in a continuous loop of three phases: Acquisition, Evaluation, 
 ```mermaid
 graph LR
     A[The Web] -->|Scrapers| B(Input Buffer)
-    B -->|Pre-process| C{CLIP Encoder}
-    C -->|Vector 512d| D[The Taste Matrix]
+    B -->|Pre-process| C{DINOv2 Encoder}
+    C -->|Vector 768d| D[The Taste Matrix]
     D -->|Score > 0.90| E[Archive / Post]
     D -->|Score < 0.90| F[The Void]
 ```
@@ -34,18 +35,19 @@ graph LR
 
 - **Core:** Python 3.9+
 - **Tooling:** [uv](https://docs.astral.sh/uv/) (install & run)
-- **Vision:** PyTorch + OpenAI CLIP (ViT-B/32)
+- **Vision:** PyTorch + DINOv2 (ViT-B/14)
 - **Logic:** Scikit-Learn (Logistic Regression / MLP)
-- **Retina (Scrapers):** praw (Reddit), pytumblr, requests
+- **Retina (Scrapers):** 4chan JSON API (/wg/), praw (Reddit), pytumblr, requests
 
 ### Directory Structure
 
 ```
 Janulon/
 ├── core/
-│   ├── brain.py       # The neural logic (CLIP + Classifier)
+│   ├── brain.py       # The neural logic (DINOv2 + Classifier)
 │   └── trainer.py     # The script that learns your taste
 ├── retina/
+│   ├── fourchan.py    # Scraper for 4chan /wg/ (wallpaper)
 │   ├── tumblr.py      # Scraper for Tumblr
 │   └── reddit.py      # Scraper for Reddit/Imgur
 ├── data/
@@ -87,6 +89,10 @@ Output: `Janulon_weights.pkl` (the mathematical representation of your taste).
 Once calibrated, run the main loop. Janulon will scrape configured sources, judge images, and save the matches.
 
 ```bash
+# 4chan /wg/ (wallpaper general): no API key, images saved to a folder
+python3 main.py --source 4chan --board wg --output_folder ./pics --index_pages 2
+
+# Reddit (when implemented): requires API key
 python3 main.py --source reddit --subreddit architecture --threshold 0.85
 ```
 
@@ -96,10 +102,11 @@ python3 main.py --source reddit --subreddit architecture --threshold 0.85
 - **Layout:** Tests live in `tests/`, mirroring the source layout (e.g. `tests/core/test_brain.py`).
 - **Naming:** Files `test_<module>.py`; functions `test_<behavior_being_tested>`.
 
-Run tests:
+Install dev dependencies and run tests:
 
 ```bash
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 
 Every new function, class, or feature must have corresponding tests. Use one behavior per test, Arrange–Act–Assert structure, and minimal fixtures.
@@ -119,6 +126,23 @@ The confidence required for Janulon to accept an image.
 ### Sources
 
 Edit `config.yaml` to set your hunting grounds:
+
+- **4chan /wg/ (wallpaper general):** Public JSON API, no API key. Use the `retina.fourchan` scraper:
+
+  ```python
+  from retina.fourchan import iter_image_urls, get_index, get_thread, image_url_from_post
+
+  # Collect image URLs from the first 2 index pages (rate-limited to 1 req/s)
+  urls = iter_image_urls(board="wg", index_pages=2)
+
+  # Or fetch a single index page or full thread
+  page = get_index("wg", page=1)
+  thread = get_thread("wg", thread_no=12345)
+  for post in thread.get("posts", []):
+      url = image_url_from_post(post, "wg")
+      if url:
+          ...
+  ```
 
 - **Reddit:** Subreddits like /r/Brutalism, /r/LiminalSpace, /r/Cyberpunk
 - **Tumblr:** Specific aesthetic blogs to traverse reblog trees
