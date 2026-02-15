@@ -1,4 +1,4 @@
- a"""SQLite database and Image model for storing and indexing downloaded images."""
+"""SQLite database and Image model for storing and indexing downloaded images."""
 
 import hashlib
 from collections.abc import Callable
