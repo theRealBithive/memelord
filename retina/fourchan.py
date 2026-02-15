@@ -8,6 +8,8 @@ from urllib.request import Request, urlopen
 
 from loguru import logger
 
+from retina import image_validation
+
 _BASE = "https://a.4cdn.org"
 _IMAGE_BASE = "https://i.4cdn.org"
 _RATE_LIMIT_SEC = 1.0
@@ -99,11 +101,12 @@ def download_images(
     *,
     rate_limit_sec: float = 0.5,
     skip_dirs: list[Path] | None = None,
+    skip_paths: set[str] | None = None,
 ) -> list[Path]:
     """
     Download each URL into output_dir. Filename is {board}_{tim}{ext} (e.g. wg_123.png).
-    Skips if file already exists in output_dir or in any of skip_dirs (e.g. data/corpus,
-    data/void). Returns list of paths written.
+    Skips if file already exists in output_dir, in skip_dirs, or path is in skip_paths (DB).
+    Returns list of paths written.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -113,6 +116,7 @@ def download_images(
     written: list[Path] = []
     skipped_output = 0
     skipped_sets = 0
+    skipped_db = 0
     for url in urls:
         name = Path(url).name
         if not name or name == ".":
@@ -132,20 +136,29 @@ def download_images(
             skipped_sets += 1
             logger.debug("Skipped (already in corpus/void): {}", filename)
             continue
+        if skip_paths and str(path.resolve()) in skip_paths:
+            skipped_db += 1
+            logger.debug("Skipped (path in database): {}", filename)
+            continue
         try:
             time.sleep(rate_limit_sec)
             req = Request(url, headers={"User-Agent": "Janulon/1.0"})
             with urlopen(req, timeout=30) as resp:
                 path.write_bytes(resp.read())
+            if not image_validation.is_readable_image(path):
+                path.unlink(missing_ok=True)
+                logger.warning("Removed corrupted download: {}", filename)
+                continue
             written.append(path)
             logger.info("Downloaded {}/{}: {}", len(written), total, filename)
         except (HTTPError, URLError, OSError) as e:
             logger.warning("Failed to download {}: {}", filename, e)
-    if skipped_output or skipped_sets:
+    if skipped_output or skipped_sets or skipped_db:
         logger.info(
-            "Skipped {} (already in output), {} (already in corpus/void)",
+            "Skipped {} (already in output), {} (already in corpus/void), {} (path in DB)",
             skipped_output,
             skipped_sets,
+            skipped_db,
         )
     logger.info(
         "Downloaded {} of {} images to {}", len(written), total, output_dir.resolve()

@@ -1,7 +1,17 @@
 """Pytest configuration: make loguru output visible to caplog."""
 
+import io
+
 import pytest
 from loguru import logger
+from PIL import Image
+
+
+def minimal_png_bytes() -> bytes:
+    """Return bytes of a minimal valid PNG (1x1 pixel) for download tests."""
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), color=(0, 0, 0)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 @pytest.fixture

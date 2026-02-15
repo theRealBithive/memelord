@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from retina import fourchan
+from tests.conftest import minimal_png_bytes
 
 
 def test_fourchan_module_imports() -> None:
@@ -89,18 +90,18 @@ def test_iter_image_urls_deduplicates() -> None:
 
 def test_download_images_writes_files_with_board_prefix() -> None:
     """download_images writes files named {board}_{tim}{ext} with correct content."""
-    fake_content = b"fake image bytes"
+    content = minimal_png_bytes()
     url = "https://i.4cdn.org/wg/999.png"
 
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
         with patch("retina.fourchan.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
-            mock_resp.read.return_value = fake_content
+            mock_resp.read.return_value = content
             paths = fourchan.download_images([url], out, "wg", rate_limit_sec=0)
         assert len(paths) == 1
         assert paths[0] == out / "wg_999.png"
-        assert paths[0].read_bytes() == fake_content
+        assert paths[0].read_bytes() == content
 
 
 def test_download_images_creates_directory() -> None:
@@ -109,7 +110,7 @@ def test_download_images_creates_directory() -> None:
         out = Path(tmp) / "nested" / "dir"
         with patch("retina.fourchan.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
-            mock_resp.read.return_value = b"x"
+            mock_resp.read.return_value = minimal_png_bytes()
             fourchan.download_images(
                 ["https://i.4cdn.org/wg/1.jpg"], out, "wg", rate_limit_sec=0
             )
@@ -144,3 +145,16 @@ def test_download_images_skips_if_already_in_skip_dirs() -> None:
         assert len(paths) == 0
         mock_urlopen.assert_not_called()
         assert not (out / "wg_99.png").exists()
+
+
+def test_download_images_removes_corrupted_download() -> None:
+    """download_images removes file and does not return it when content is not a valid image."""
+    url = "https://i.4cdn.org/wg/123.png"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        with patch("retina.fourchan.urlopen") as mock_urlopen:
+            mock_resp = mock_urlopen.return_value.__enter__.return_value
+            mock_resp.read.return_value = b"corrupted or not an image"
+            paths = fourchan.download_images([url], out, "wg", rate_limit_sec=0)
+        assert len(paths) == 0
+        assert not (out / "wg_123.png").exists()

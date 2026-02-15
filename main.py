@@ -1,6 +1,7 @@
 """Janulon CLI: scrape sources and run the aesthetic pipeline (download + judge)."""
 
 import argparse
+import hashlib
 import os
 import tomllib
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 from loguru import logger
 from retina import fourchan, image_validation, imgur, tumblr
 
-from core import brain
+from core import brain, db
 
 _INBOX_DIR = "inbox"
 _CONFIG_DEFAULT = "config.toml"
@@ -64,6 +65,7 @@ def _run_4chan(
     inbox_dir: Path,
     index_pages: int,
     skip_dirs: list[Path],
+    skip_paths: set[str] | None = None,
 ) -> None:
     logger.info(
         "Starting 4chan scrape: board=/{}/, inbox={}, index_pages={}",
@@ -79,7 +81,11 @@ def _run_4chan(
         logger.warning("No image URLs found.")
         return
     paths = fourchan.download_images(
-        urls, inbox_dir, board, skip_dirs=skip_dirs or None
+        urls,
+        inbox_dir,
+        board,
+        skip_dirs=skip_dirs or None,
+        skip_paths=skip_paths,
     )
     logger.success("Done. Downloaded {} images to {}", len(paths), inbox_dir.resolve())
 
@@ -89,6 +95,7 @@ def _run_tumblr(
     inbox_dir: Path,
     num_posts: int,
     skip_dirs: list[Path],
+    skip_paths: set[str] | None = None,
 ) -> None:
     logger.info(
         "Starting Tumblr scrape: blog={}, inbox={}, num_posts={}",
@@ -100,7 +107,13 @@ def _run_tumblr(
     if not urls:
         logger.warning("No image URLs found.")
         return
-    paths = tumblr.download_images(urls, inbox_dir, blog, skip_dirs=skip_dirs or None)
+    paths = tumblr.download_images(
+        urls,
+        inbox_dir,
+        blog,
+        skip_dirs=skip_dirs or None,
+        skip_paths=skip_paths,
+    )
     logger.success("Done. Downloaded {} images to {}", len(paths), inbox_dir.resolve())
 
 
@@ -110,6 +123,7 @@ def _run_imgur(
     max_items: int,
     client_id: str,
     skip_dirs: list[Path],
+    skip_paths: set[str] | None = None,
 ) -> None:
     logger.info(
         "Starting Imgur scrape: topic={}, inbox={}, max_items={}",
@@ -121,7 +135,13 @@ def _run_imgur(
     if not urls:
         logger.warning("No image URLs found.")
         return
-    paths = imgur.download_images(urls, inbox_dir, topic, skip_dirs=skip_dirs or None)
+    paths = imgur.download_images(
+        urls,
+        inbox_dir,
+        topic,
+        skip_dirs=skip_dirs or None,
+        skip_paths=skip_paths,
+    )
     logger.success("Done. Downloaded {} images to {}", len(paths), inbox_dir.resolve())
 
 
@@ -138,14 +158,53 @@ def _unique_dest(parent: Path, name: str) -> Path:
     return parent / f"{stem}_{n}{suffix}"
 
 
+def _remove_inbox_duplicates_by_hash(inbox_dir: Path) -> None:
+    """Delete inbox files whose content hash is already in the database."""
+    paths = sorted(
+        p for p in inbox_dir.iterdir() if p.is_file() and brain.is_image_path(p)
+    )
+    paths = [p for p in paths if image_validation.is_readable_image(p)]
+    removed = 0
+    for path in paths:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        h = hashlib.sha256(raw).hexdigest()
+        if db.Image.get_or_none(db.Image.content_hash == h) is not None:
+            path.unlink(missing_ok=True)
+            removed += 1
+    if removed:
+        logger.info("Removed {} inbox duplicates (content already in database).", removed)
+
+
+def _insert_judged_image(dest_path: Path, location: str) -> None:
+    """Insert a judged image (moved to corpus/void) into the database."""
+    try:
+        raw = dest_path.read_bytes()
+    except OSError:
+        return
+    content_hash = hashlib.sha256(raw).hexdigest()
+    if db.Image.get_or_none(db.Image.content_hash == content_hash) is not None:
+        return
+    db.Image.create(
+        content_hash=content_hash,
+        file_path=str(dest_path.resolve()),
+        source_url=None,
+        source_label=db._source_label_from_filename(dest_path),
+        location=location,
+        file_deleted=False,
+    )
+
+
 def _judge_and_sort(
     output_folder: Path,
     weights_path: Path,
     threshold: float,
-) -> None:
+) -> list[tuple[Path, str]]:
     """
     Encode inbox images, move to corpus (>= threshold) or void (< threshold).
-    Leaves data_dir untouched.
+    Returns list of (dest_path, location) for each moved file (for DB insert).
     """
     inbox_dir = output_folder / _INBOX_DIR
     corpus_dir = output_folder / _CORPUS_DIR
@@ -160,7 +219,7 @@ def _judge_and_sort(
     paths = [p for p in paths if image_validation.is_readable_image(p)]
     if not paths:
         logger.info("No images in inbox to judge.")
-        return
+        return []
 
     logger.info("Judging {} images with encoder + classifier", len(paths))
     encoder = brain.get_encoder()
@@ -173,115 +232,153 @@ def _judge_and_sort(
     elif len(probas) != len(paths):
         probas = list(probas)
 
-    moved_corpus = 0
-    moved_void = 0
+    moved: list[tuple[Path, str]] = []
     for path, proba in zip(paths, probas):
         name = path.name
         if proba >= threshold:
             dest = _unique_dest(corpus_dir, name)
             path.rename(dest)
-            moved_corpus += 1
+            moved.append((dest, "corpus"))
         else:
             dest = _unique_dest(void_dir, name)
             path.rename(dest)
-            moved_void += 1
+            moved.append((dest, "void"))
     logger.success(
         "Judged {} images: {} → corpus, {} → void",
         len(paths),
-        moved_corpus,
-        moved_void,
+        sum(1 for _, loc in moved if loc == "corpus"),
+        sum(1 for _, loc in moved if loc == "void"),
     )
+    return moved
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Janulon: scrape image sources and filter by taste.",
     )
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser(
+        "run", help="Scrape sources and optionally judge."
+    )
+    run_parser.add_argument(
         "--source",
         choices=["4chan", "all", "imgur", "reddit", "tumblr"],
         required=True,
         help="Source. 'all' = load config and run all listed boards/blogs/topics.",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--board",
         default="wg",
         help="4chan board. Default: wg (wallpaper general).",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--blog",
         help="Tumblr blog (tumblr only). Example: staff or blogname.tumblr.com",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--topic",
         help="Imgur topic (imgur only). Example: funny (imgur.com/t/funny)",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--imgur_client_id",
         default=os.environ.get("IMGUR_CLIENT_ID", ""),
         help="Imgur API Client ID (imgur only). Default: env IMGUR_CLIENT_ID",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--max_items",
         type=int,
         default=120,
         metavar="N",
         help="Max image items (imgur only). Default: 120",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--subreddit",
         help="Subreddit to scrape (reddit only).",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--num_posts",
         type=int,
         default=50,
         metavar="N",
         help="Max posts to fetch (tumblr only). Default: 50",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--output_folder",
         type=Path,
         default=Path("output"),
         help="Folder for inbox/ and judged corpus/void. Default: output",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--data_dir",
         type=Path,
         default=Path("data"),
         help="Skip download if image in data/corpus or data/void. Default: data",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--index_pages",
         type=int,
         default=2,
         metavar="N",
         help="Index pages to scrape (4chan only). Default: 2",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--threshold",
         type=float,
         default=0.85,
         help="Score >= threshold → corpus, else void. Default: 0.85",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--weights",
         type=Path,
         default=Path("Janulon_weights.pkl"),
         help="Path to trained classifier. Default: Janulon_weights.pkl",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--no_judge",
         action="store_true",
         help="Only download; skip encoder/classifier and corpus/void move.",
     )
-    parser.add_argument(
+    run_parser.add_argument(
         "--config",
         type=Path,
         default=Path(_CONFIG_DEFAULT),
         help="Config file for --source all (4chan boards, tumblr blogs, imgur topics).",
     )
+    run_parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("data/janulon.db"),
+        help="SQLite database for dedup and judged image index. Default: data/janulon.db",
+    )
+
+    import_parser = subparsers.add_parser(
+        "import-data",
+        help="Import images from data/corpus and data/void into the SQLite database.",
+    )
+    import_parser.add_argument(
+        "--data_dir",
+        type=Path,
+        default=Path("data"),
+        help="Data directory containing corpus/ and void/. Default: data",
+    )
+    import_parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("data/janulon.db"),
+        help="SQLite database path. Default: data/janulon.db",
+    )
+
     args = parser.parse_args()
+
+    if args.command == "import-data":
+        inserted, skipped = db.import_data(args.data_dir, args.db)
+        logger.info(
+            "Import done: {} inserted, {} skipped (duplicate content hash).",
+            inserted,
+            skipped,
+        )
+        return
 
     output_folder = Path(args.output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
@@ -289,12 +386,19 @@ def main() -> None:
     inbox_dir.mkdir(parents=True, exist_ok=True)
     skip_dirs = _skip_dirs(args.data_dir, output_folder)
 
+    db.init_db(args.db)
+    skip_paths = {
+        str(Path(r.file_path).resolve())
+        for r in db.Image.select(db.Image.file_path).iterator()
+    }
+
     if args.source == "4chan":
         _run_4chan(
             board=args.board,
             inbox_dir=inbox_dir,
             index_pages=args.index_pages,
             skip_dirs=skip_dirs,
+            skip_paths=skip_paths,
         )
     elif args.source == "imgur":
         if not args.topic:
@@ -309,6 +413,7 @@ def main() -> None:
             max_items=args.max_items,
             client_id=client_id,
             skip_dirs=skip_dirs,
+            skip_paths=skip_paths,
         )
     elif args.source == "tumblr":
         if not args.blog:
@@ -319,6 +424,7 @@ def main() -> None:
             inbox_dir=inbox_dir,
             num_posts=args.num_posts,
             skip_dirs=skip_dirs,
+            skip_paths=skip_paths,
         )
     elif args.source == "all":
         cfg = _load_config(Path(args.config))
@@ -330,6 +436,7 @@ def main() -> None:
                     inbox_dir=inbox_dir,
                     index_pages=args.index_pages,
                     skip_dirs=skip_dirs,
+                    skip_paths=skip_paths,
                 )
         for topic in cfg["imgur"]["topics"]:
             if topic:
@@ -339,6 +446,7 @@ def main() -> None:
                     max_items=args.max_items,
                     client_id=client_id,
                     skip_dirs=skip_dirs,
+                    skip_paths=skip_paths,
                 )
         for blog in cfg["tumblr"]["blogs"]:
             if blog:
@@ -347,6 +455,7 @@ def main() -> None:
                     inbox_dir=inbox_dir,
                     num_posts=args.num_posts,
                     skip_dirs=skip_dirs,
+                    skip_paths=skip_paths,
                 )
     elif args.source == "reddit":
         logger.error("Reddit source is not implemented (API key required).")
@@ -359,11 +468,14 @@ def main() -> None:
                 args.weights.resolve(),
             )
         else:
-            _judge_and_sort(
+            _remove_inbox_duplicates_by_hash(inbox_dir)
+            moved = _judge_and_sort(
                 output_folder=output_folder,
                 weights_path=args.weights,
                 threshold=args.threshold,
             )
+            for dest_path, location in moved:
+                _insert_judged_image(dest_path, location)
 
 
 if __name__ == "__main__":

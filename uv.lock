@@ -89,33 +89,31 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "loguru" },
+    { name = "peewee" },
     { name = "pillow" },
+    { name = "playwright" },
     { name = "scikit-learn" },
     { name = "torch" },
     { name = "torchvision" },
-    { name = "xformers" },
 ]
 
 [package.optional-dependencies]
 dev = [
     { name = "pytest" },
 ]
-imgur-browser = [
-    { name = "playwright" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
+    { name = "peewee", specifier = ">=3.19.0" },
     { name = "pillow", specifier = ">=12.1.1" },
-    { name = "playwright", marker = "extra == 'imgur-browser'", specifier = ">=1.40" },
+    { name = "playwright", specifier = ">=1.40" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "torch", specifier = ">=2.10.0" },
     { name = "torchvision", specifier = ">=0.25.0" },
-    { name = "xformers", specifier = ">=0.0.34" },
 ]
-provides-extras = ["dev", "imgur-browser"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "jinja2"
@@ -369,6 +367,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/65/ee/299d360cdc32edc7d2cf530f3accf79c4fca01e96ffc950d8a52213bd8e4/packaging-26.0.tar.gz", hash = "sha256:00243ae351a257117b6a241061796684b084ed1c516a08c48a3f7e147a9d80b4", size = 143416, upload-time = "2026-01-21T20:50:39.064Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529", size = 74366, upload-time = "2026-01-21T20:50:37.788Z" },
+]
+
+[[package]]
+name = "peewee"
+version = "3.19.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/b0/79462b42e89764998756e0557f2b58a15610a5b4512fbbcccae58fba7237/peewee-3.19.0.tar.gz", hash = "sha256:f88292a6f0d7b906cb26bca9c8599b8f4d8920ebd36124400d0cbaaaf915511f", size = 974035, upload-time = "2026-01-07T17:24:59.597Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/41/19c65578ef9a54b3083253c68a607f099642747168fe00f3a2bceb7c3a34/peewee-3.19.0-py3-none-any.whl", hash = "sha256:de220b94766e6008c466e00ce4ba5299b9a832117d9eb36d45d0062f3cfd7417", size = 411885, upload-time = "2026-01-07T17:24:58.33Z" },
 ]
 
 [[package]]
@@ -642,18 +649,4 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
-]
-
-[[package]]
-name = "xformers"
-version = "0.0.34"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ef/2b/365151a1e2e6aa70c1bd66e0532e3d71915a28a34ebde3d9b068e8849f66/xformers-0.0.34.tar.gz", hash = "sha256:716bd9ffe61f46c2cc0536abf8b8c43ec594bea47a49394ea5cfa417e9de6a6f", size = 14303297, upload-time = "2026-01-23T18:14:31.457Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/33/3f4316a70ebbc2cccd3219d85bec9f4c134e5c135afbf8cba2b2be26cb40/xformers-0.0.34-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:381cc47f43e95893e21b7f04f1aa31dc10a81fc95ba92482e4465a5064c77743", size = 110763890, upload-time = "2026-01-23T18:14:22.583Z" },
-    { url = "https://files.pythonhosted.org/packages/15/03/5e3cfc5b45d008667e3cb87f1e75144a6fcd87eafa1fabb923f10c4cd9f5/xformers-0.0.34-cp39-abi3-win_amd64.whl", hash = "sha256:941979e890dd18e26f9860daa83acb706e658345d18511a962f909067331cc19", size = 103155172, upload-time = "2026-01-23T18:14:27.798Z" },
 ]

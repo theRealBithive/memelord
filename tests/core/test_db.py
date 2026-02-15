@@ -1,0 +1,245 @@
+"""Tests for core.db: database init and Image model."""
+
+import tempfile
+from pathlib import Path
+
+import pytest
+from peewee import SqliteDatabase
+
+from core import db
+from tests.conftest import minimal_png_bytes
+
+
+@pytest.fixture
+def database():
+    """Initialize DB with in-memory SQLite; use for tests that need the DB."""
+    return db.init_db(":memory:")
+
+
+def test_get_db_raises_before_init() -> None:
+    """get_db raises RuntimeError if init_db has not been called."""
+    saved = db._db
+    try:
+        db._db = None
+        with pytest.raises(RuntimeError, match="not initialized"):
+            db.get_db()
+    finally:
+        db._db = saved
+
+
+def test_init_db_creates_tables(database: SqliteDatabase) -> None:
+    """init_db creates the image table."""
+    cursor = database.execute_sql(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='image'"
+    )
+    row = cursor.fetchone()
+    cursor.close()
+    assert row is not None
+    assert row[0] == "image"
+
+
+def test_image_create_and_retrieve(database: SqliteDatabase) -> None:
+    """Creating an Image and retrieving by content_hash returns the same data."""
+    db.Image.create(
+        content_hash="a1b2c3d4",
+        file_path="/data/corpus/funny_abc.jpg",
+        source_label="funny",
+        source_url="https://example.com/img.jpg",
+    )
+    row = db.Image.get_by_id("a1b2c3d4")
+    assert row.content_hash == "a1b2c3d4"
+    assert row.file_path == "/data/corpus/funny_abc.jpg"
+    assert row.source_label == "funny"
+    assert row.source_url == "https://example.com/img.jpg"
+    assert row.posted_at is None
+    assert row.downloaded_at is not None
+
+
+def test_image_get_or_none_for_dedup(database: SqliteDatabase) -> None:
+    """get_or_none by content_hash supports dedup check before insert."""
+    existing = db.Image.create(
+        content_hash="deadbeef",
+        file_path="/data/corpus/existing.jpg",
+        source_label="wg",
+    )
+    found = db.Image.get_or_none(db.Image.content_hash == "deadbeef")
+    assert found is not None
+    assert found.content_hash == existing.content_hash
+    missing = db.Image.get_or_none(db.Image.content_hash == "nonexistent")
+    assert missing is None
+
+
+def test_image_posted_at_null_by_default(database: SqliteDatabase) -> None:
+    """New images have posted_at set to None."""
+    db.Image.create(
+        content_hash="new1",
+        file_path="/path/to/img.png",
+        source_label="blog",
+    )
+    row = db.Image.get_by_id("new1")
+    assert row.posted_at is None
+
+
+def test_image_source_url_optional(database: SqliteDatabase) -> None:
+    """source_url can be omitted (null)."""
+    db.Image.create(
+        content_hash="no_url",
+        file_path="/data/void/img.jpg",
+        source_label="tg",
+        source_url=None,
+    )
+    row = db.Image.get_by_id("no_url")
+    assert row.source_url is None
+
+
+def test_image_location_corpus_or_void(database: SqliteDatabase) -> None:
+    """location stores corpus or void."""
+    db.Image.create(
+        content_hash="c1",
+        file_path="/data/corpus/a.jpg",
+        source_label="funny",
+        location="corpus",
+    )
+    db.Image.create(
+        content_hash="v1",
+        file_path="/data/void/b.jpg",
+        source_label="wg",
+        location="void",
+    )
+    assert db.Image.get_by_id("c1").location == "corpus"
+    assert db.Image.get_by_id("v1").location == "void"
+
+
+def test_image_location_defaults_to_corpus(database: SqliteDatabase) -> None:
+    """New images default to location corpus."""
+    db.Image.create(
+        content_hash="default_loc",
+        file_path="/path/to/img.jpg",
+        source_label="blog",
+    )
+    assert db.Image.get_by_id("default_loc").location == "corpus"
+
+
+def test_image_file_deleted_tracks_disk_removal(database: SqliteDatabase) -> None:
+    """file_deleted defaults to False; can be set when file on disk is removed."""
+    db.Image.create(
+        content_hash="del1",
+        file_path="/data/corpus/gone.jpg",
+        source_label="tg",
+    )
+    row = db.Image.get_by_id("del1")
+    assert row.file_deleted is False
+    row.file_deleted = True
+    row.save()
+    assert db.Image.get_by_id("del1").file_deleted is True
+
+
+def test_migrate_adds_location_and_file_deleted_to_existing_table(
+    database: SqliteDatabase,
+) -> None:
+    """Migration adds location and file_deleted columns to tables created without them."""
+    database.execute_sql("DROP TABLE image")
+    database.execute_sql(
+        """
+        CREATE TABLE image (
+            content_hash VARCHAR(64) PRIMARY KEY,
+            file_path VARCHAR(2048),
+            source_url VARCHAR(2048),
+            source_label VARCHAR(255),
+            downloaded_at DATETIME,
+            posted_at DATETIME
+        )
+    """
+    )
+    db._migrate_add_location_and_file_deleted(database)
+    db.Image.create(
+        content_hash="migrated",
+        file_path="/data/corpus/m.jpg",
+        source_label="funny",
+        location="void",
+        file_deleted=True,
+    )
+    row = db.Image.get_by_id("migrated")
+    assert row.location == "void"
+    assert row.file_deleted is True
+
+
+def test_source_label_from_filename() -> None:
+    """_source_label_from_filename takes prefix before first underscore."""
+    assert db._source_label_from_filename(Path("funny_abc123.jpg")) == "funny"
+    assert db._source_label_from_filename(Path("wg_1754153031540706.jpg")) == "wg"
+    assert db._source_label_from_filename(Path("image.png")) == "image"
+    assert db._source_label_from_filename(Path("a_b_c.webp")) == "a"
+
+
+def test_import_data_inserts_corpus_and_void(
+    database: SqliteDatabase,
+) -> None:
+    """import_data hashes files and inserts rows with location from subdir."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir()
+        (data_dir / "void").mkdir()
+        (data_dir / "corpus" / "funny_one.jpg").write_bytes(minimal_png_bytes())
+        (data_dir / "void" / "wg_two.png").write_bytes(b"different content for void")
+        db_path = data_dir / "import.db"
+        inserted, skipped = db.import_data(data_dir, db_path)
+    assert inserted == 2
+    assert skipped == 0
+    row_corpus = db.Image.select().where(db.Image.location == "corpus").first()
+    row_void = db.Image.select().where(db.Image.location == "void").first()
+    assert row_corpus is not None
+    assert "corpus" in row_corpus.file_path
+    assert row_corpus.source_label == "funny"
+    assert row_void is not None
+    assert "void" in row_void.file_path
+    assert row_void.source_label == "wg"
+
+
+def test_import_data_skips_duplicate_hash(
+    database: SqliteDatabase,
+) -> None:
+    """import_data skips a file when its content hash already exists."""
+    same_content = minimal_png_bytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir()
+        (data_dir / "void").mkdir()
+        (data_dir / "corpus" / "first.jpg").write_bytes(same_content)
+        (data_dir / "void" / "second.jpg").write_bytes(same_content)
+        inserted, skipped = db.import_data(data_dir, data_dir / "dup.db")
+    assert inserted == 1
+    assert skipped == 1
+
+
+def test_import_data_uses_is_image_path(
+    database: SqliteDatabase,
+) -> None:
+    """import_data only imports files that pass is_image_path."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir()
+        (data_dir / "corpus" / "image.jpg").write_bytes(minimal_png_bytes())
+        (data_dir / "corpus" / "readme.txt").write_text("not an image")
+
+        def only_png(p: Path) -> bool:
+            return p.suffix.lower() == ".png"
+
+        inserted, skipped = db.import_data(
+            data_dir, data_dir / "filter.db", is_image_path=only_png
+        )
+    assert inserted == 0
+    assert skipped == 0
+
+
+def test_import_data_skips_missing_dirs(
+    database: SqliteDatabase,
+) -> None:
+    """import_data does not fail when corpus or void dir is missing."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir()
+        (data_dir / "corpus" / "only.jpg").write_bytes(minimal_png_bytes())
+        inserted, skipped = db.import_data(data_dir, data_dir / "nom.db")
+    assert inserted == 1
+    assert skipped == 0

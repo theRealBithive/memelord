@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from retina import imgur
+from tests.conftest import minimal_png_bytes
 
 
 def test_imgur_module_imports() -> None:
@@ -100,17 +101,17 @@ def test_iter_image_urls_deduplicates() -> None:
 
 def test_download_images_writes_files_with_topic_prefix() -> None:
     """download_images writes files with stable topic_hash.ext naming."""
-    fake_content = b"fake image bytes"
+    content = minimal_png_bytes()
     url = "https://i.imgur.com/abc.jpg"
 
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
         with patch("retina.imgur.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
-            mock_resp.read.return_value = fake_content
+            mock_resp.read.return_value = content
             paths = imgur.download_images([url], out, "funny", rate_limit_sec=0)
         assert len(paths) == 1
-        assert paths[0].read_bytes() == fake_content
+        assert paths[0].read_bytes() == content
         assert paths[0].name.startswith("funny_")
         assert paths[0].suffix == ".jpg"
 

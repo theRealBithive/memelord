@@ -2,10 +2,10 @@
 # Add board/blog/topic names; leave empty or omit section to skip that source.
 
 [4chan]
-boards = ["wg", "b"]
+boards = ["wg", "tg"]
 
 [tumblr]
-blogs = ["prettyprettyarchitecture"]
+blogs = []
 
 [imgur]
 topics = ["funny", "warhammer40k", "architecture"]

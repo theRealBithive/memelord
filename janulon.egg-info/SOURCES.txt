@@ -10,6 +10,7 @@ janulon.egg-info/requires.txt
 janulon.egg-info/top_level.txt
 retina/__init__.py
 retina/fourchan.py
+retina/image_validation.py
 retina/imgur.py
 retina/reddit.py
 retina/tumblr.py

@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from retina import tumblr
+from tests.conftest import minimal_png_bytes
 
 
 def test_tumblr_module_imports() -> None:
@@ -104,17 +105,17 @@ def test_iter_image_urls_deduplicates() -> None:
 
 def test_download_images_writes_files_with_blog_prefix() -> None:
     """download_images writes files with stable blog_hash.ext naming."""
-    fake_content = b"fake image bytes"
+    content = minimal_png_bytes()
     url = "https://64.media.tumblr.com/abc/photo.jpg"
 
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
         with patch("retina.tumblr.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
-            mock_resp.read.return_value = fake_content
+            mock_resp.read.return_value = content
             paths = tumblr.download_images([url], out, "myblog", rate_limit_sec=0)
         assert len(paths) == 1
-        assert paths[0].read_bytes() == fake_content
+        assert paths[0].read_bytes() == content
         assert paths[0].parent == out
         assert paths[0].name.startswith("myblog_")
         assert paths[0].suffix == ".jpg"
@@ -126,7 +127,7 @@ def test_download_images_creates_directory() -> None:
         out = Path(tmp) / "nested" / "dir"
         with patch("retina.tumblr.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
-            mock_resp.read.return_value = b"x"
+            mock_resp.read.return_value = minimal_png_bytes()
             tumblr.download_images(
                 ["https://x.com/photo.jpg"], out, "blog", rate_limit_sec=0
             )

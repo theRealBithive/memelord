@@ -1,0 +1,152 @@
+"""SQLite database and Image model for storing and indexing downloaded images."""
+
+import hashlib
+from collections.abc import Callable
+from datetime import datetime, timezone
+from pathlib import Path
+
+from peewee import BooleanField, CharField, DateTimeField, Model, Proxy, SqliteDatabase
+
+_db: SqliteDatabase | None = None
+db_proxy = Proxy()
+
+
+def get_db() -> SqliteDatabase:
+    """Return the global database instance. Call init_db first."""
+    if _db is None:
+        raise RuntimeError("Database not initialized; call init_db() first")
+    return _db
+
+
+def init_db(db_path: Path | str) -> SqliteDatabase:
+    """
+    Initialize the database and create tables. Safe to call multiple times.
+
+    Args:
+        db_path: Path to the SQLite file (e.g. data/janulon.db).
+
+    Returns:
+        The database instance.
+    """
+    global _db
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _db = SqliteDatabase(str(path))
+    _db.connect()
+    db_proxy.initialize(_db)
+    _db.create_tables([Image])
+    _migrate_add_location_and_file_deleted(_db)
+    return _db
+
+
+def _migrate_add_location_and_file_deleted(database: SqliteDatabase) -> None:
+    """Add location and file_deleted columns if missing (for existing DBs)."""
+    cursor = database.execute_sql("PRAGMA table_info(image)")
+    columns = {row[1] for row in cursor.fetchall()}
+    cursor.close()
+    if "location" not in columns:
+        database.execute_sql(
+            "ALTER TABLE image ADD COLUMN location VARCHAR(32) NOT NULL DEFAULT 'corpus'"
+        )
+    if "file_deleted" not in columns:
+        database.execute_sql(
+            "ALTER TABLE image ADD COLUMN file_deleted INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+class BaseModel(Model):
+    """Base model bound to the global SQLite database."""
+
+    class Meta:
+        database = db_proxy
+
+
+class Image(BaseModel):
+    """
+    One row per distinct image content, keyed by content hash.
+
+    Used for content deduplication and for the bot to track what has been posted.
+    location: "corpus" (positive) or "void" (negative).
+    file_deleted: True if the file on disk was removed; row kept for reference.
+    """
+
+    content_hash = CharField(primary_key=True, max_length=64)
+    file_path = CharField(max_length=2048)
+    source_url = CharField(null=True, max_length=2048)
+    source_label = CharField(max_length=255)
+    location = CharField(max_length=32, default="corpus")  # "corpus" | "void"
+    downloaded_at = DateTimeField(default=lambda: datetime.now(timezone.utc))
+    posted_at = DateTimeField(null=True)
+    file_deleted = BooleanField(default=False)
+
+    class Meta:
+        table_name = "image"
+
+
+def _source_label_from_filename(path: Path) -> str:
+    """Derive source_label from filename (e.g. funny_abc.jpg -> funny, wg_123.png -> wg)."""
+    stem = path.stem
+    if "_" in stem:
+        return stem.split("_", 1)[0]
+    return stem or "unknown"
+
+
+def import_data(
+    data_dir: Path | str,
+    db_path: Path | str,
+    *,
+    is_image_path: Callable[[Path], bool] | None = None,
+) -> tuple[int, int]:
+    """
+    Import images from data_dir/corpus and data_dir/void into the database.
+
+    Each file is hashed (SHA-256); if the hash already exists, the file is skipped.
+    location is set from the subdir (corpus or void). source_label is derived from
+    the filename prefix before the first underscore.
+
+    Args:
+        data_dir: Root data directory containing corpus/ and void/ subdirs.
+        db_path: Path to the SQLite database (created if missing).
+        is_image_path: Predicate(path) -> bool; defaults to core.brain.is_image_path.
+
+    Returns:
+        (inserted_count, skipped_count) where skipped = already in DB by hash.
+    """
+    from core import brain as brain_module
+
+    data_dir = Path(data_dir)
+    db_path = Path(db_path)
+    if is_image_path is None:
+        is_image_path = brain_module.is_image_path
+
+    init_db(db_path)
+    corpus_dir = data_dir / "corpus"
+    void_dir = data_dir / "void"
+    inserted = 0
+    skipped = 0
+
+    for location, dir_path in [("corpus", corpus_dir), ("void", void_dir)]:
+        if not dir_path.is_dir():
+            continue
+        for path in sorted(dir_path.iterdir()):
+            if not path.is_file() or not is_image_path(path):
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            content_hash = hashlib.sha256(raw).hexdigest()
+            if Image.get_or_none(Image.content_hash == content_hash) is not None:
+                skipped += 1
+                continue
+            Image.create(
+                content_hash=content_hash,
+                file_path=str(path.resolve()),
+                source_url=None,
+                source_label=_source_label_from_filename(path),
+                location=location,
+                file_deleted=False,
+            )
+            inserted += 1
+
+    return inserted, skipped
