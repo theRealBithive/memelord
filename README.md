@@ -79,8 +79,17 @@ Output: `Janulon_weights.pkl` (the mathematical representation of your taste).
 
 Once calibrated, run the main loop. Janulon will scrape configured sources, judge images, and save the matches.
 
+**Simple (all sources from config):**
+
 ```bash
-# 4chan /wg/ (wallpaper general): no API key, images saved to a folder
+# Edit config.toml with 4chan boards, tumblr blogs, imgur topics, then:
+python3 main.py --source all
+```
+
+**Single source (CLI):**
+
+```bash
+# 4chan /wg/ (wallpaper general): no API key
 python3 main.py --source 4chan --board wg --output_folder ./pics --index_pages 2
 
 # Imgur topic (e.g. /t/funny): scraping only; for JS-rendered pages install optional browser support
@@ -118,9 +127,26 @@ The confidence required for Janulon to accept an image.
 | 0.85 | Strict. High quality, distinct style match. **(Recommended)** |
 | 0.98 | The God Tier. Only images mathematically nearly identical to your corpus. |
 
-### Sources
+### Config (for `--source all`)
 
-Edit `config.yaml` to set your hunting grounds:
+With `--source all`, Janulon reads **`config.toml`** (or `--config <path>`) and scrapes every listed 4chan board, Tumblr blog, and Imgur topic. No need to pass `--board`, `--blog`, or `--topic` on the CLI.
+
+Example **`config.toml`**:
+
+```toml
+[4chan]
+boards = ["wg", "a"]
+
+[tumblr]
+blogs = ["staff", "someblog"]
+
+[imgur]
+topics = ["funny", "pics"]
+```
+
+Run: `python main.py --source all` (optionally `--output_folder ./out`, `--weights Janulon_weights.pkl`).
+
+### Sources (API usage)
 
 - **4chan /wg/ (wallpaper general):** Public JSON API, no API key. Use the `retina.fourchan` scraper:
 

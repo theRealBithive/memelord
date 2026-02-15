@@ -4,7 +4,14 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = ["loguru>=0.7"]
+dependencies = [
+    "loguru>=0.7",
+    "pillow>=12.1.1",
+    "scikit-learn>=1.8.0",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "xformers>=0.0.34",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
