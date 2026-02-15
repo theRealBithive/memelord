@@ -147,6 +147,22 @@ def test_download_images_skips_if_already_in_skip_dirs() -> None:
         assert not (out / "wg_99.png").exists()
 
 
+def test_download_images_skips_if_path_in_skip_paths() -> None:
+    """download_images skips URL when destination path is in skip_paths (e.g. from DB)."""
+    url = "https://i.4cdn.org/wg/77.jpg"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        dest = (out / "wg_77.jpg").resolve()
+        skip_paths = {str(dest)}
+        with patch("retina.fourchan.urlopen") as mock_urlopen:
+            paths = fourchan.download_images(
+                [url], out, "wg", skip_paths=skip_paths, rate_limit_sec=0
+            )
+        assert len(paths) == 0
+        mock_urlopen.assert_not_called()
+        assert not (out / "wg_77.jpg").exists()
+
+
 def test_download_images_removes_corrupted_download() -> None:
     """download_images removes file and does not return it when content is not a valid image."""
     url = "https://i.4cdn.org/wg/123.png"

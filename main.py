@@ -175,7 +175,9 @@ def _remove_inbox_duplicates_by_hash(inbox_dir: Path) -> None:
             path.unlink(missing_ok=True)
             removed += 1
     if removed:
-        logger.info("Removed {} inbox duplicates (content already in database).", removed)
+        logger.info(
+            "Removed {} inbox duplicates (content already in database).", removed
+        )
 
 
 def _insert_judged_image(dest_path: Path, location: str) -> None:

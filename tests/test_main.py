@@ -298,6 +298,8 @@ def test_main_judge_and_sort_moves_to_corpus_and_void(
                             str(out),
                             "--weights",
                             str(weights),
+                            "--db",
+                            str(out / "janulon.db"),
                             "--index_pages",
                             "1",
                         ],
@@ -310,3 +312,9 @@ def test_main_judge_and_sort_moves_to_corpus_and_void(
         assert not (inbox / "test.png").exists()
         assert (corpus_dir / "test.png").exists() or (void_dir / "test.png").exists()
         assert "Judged 1 images" in caplog.text
+        from core import db
+
+        rows = list(db.Image.select())
+        assert len(rows) == 1
+        assert rows[0].location in ("corpus", "void")
+        assert "test.png" in rows[0].file_path
