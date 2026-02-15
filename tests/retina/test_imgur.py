@@ -146,6 +146,22 @@ def test_is_gallery_url_filters_banner_and_logo() -> None:
     assert imgur._is_gallery_url("https://i.imgur.com/banner.jpg") is False
 
 
+def test_imgur_to_original_url_strips_size_suffix() -> None:
+    """_imgur_to_original_url converts thumbnail URLs to full-size."""
+    assert (
+        imgur._imgur_to_original_url("https://i.imgur.com/7A7RZay_d.webp")
+        == "https://i.imgur.com/7A7RZay.webp"
+    )
+    assert (
+        imgur._imgur_to_original_url("https://i.imgur.com/abc123l.jpg")
+        == "https://i.imgur.com/abc123.jpg"
+    )
+    assert (
+        imgur._imgur_to_original_url("https://i.imgur.com/xyz.png")
+        == "https://i.imgur.com/xyz.png"
+    )
+
+
 def test_extract_image_urls_from_html_finds_direct_links() -> None:
     """_extract_image_urls_from_html finds https://i.imgur.com/... URLs."""
     html = (

@@ -22,6 +22,15 @@ _DIRECT_IMAGE_RE = re.compile(
 )
 # URL path substrings that indicate non-gallery assets (banner, logo, etc.)
 _NON_GALLERY_URL_PATTERNS = ("logo", "banner", "favicon", "og-image", "avatar", "icon")
+# Imgur size suffix: strip _X (e.g. _d) or single letter s,b,t,m,l,h before extension for original
+_IMGUR_UNDERSCORE_SUFFIX_RE = re.compile(
+    r"(https?://i\.imgur\.com/[a-zA-Z0-9]+)_[a-zA-Z0-9](\.(?:jpg|jpeg|png|gif|webp))",
+    re.IGNORECASE,
+)
+_IMGUR_LETTER_SUFFIX_RE = re.compile(
+    r"(https?://i\.imgur\.com/)([a-zA-Z0-9]*?)([sbtmlh])(\.(?:jpg|jpeg|png|gif|webp))",
+    re.IGNORECASE,
+)
 # Browser-like User-Agent to reduce chance of redirect/block when scraping
 _USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -55,6 +64,17 @@ def _is_gallery_url(url: str) -> bool:
     return not any(pat in url_lower for pat in _NON_GALLERY_URL_PATTERNS)
 
 
+def _imgur_to_original_url(url: str) -> str:
+    """
+    Convert an Imgur thumbnail/size-variant URL to the original full-size URL.
+    Strips _X (e.g. _d) or single letter (s,b,t,m,l,h) before the extension.
+    """
+    base = url.split("?")[0]
+    base = _IMGUR_UNDERSCORE_SUFFIX_RE.sub(r"\1\2", base)
+    base = _IMGUR_LETTER_SUFFIX_RE.sub(r"\1\2\4", base)
+    return base
+
+
 def _extract_image_urls_from_html(html: str) -> list[str]:
     """
     Extract direct Imgur image URLs from HTML (and embedded JSON).
@@ -64,18 +84,24 @@ def _extract_image_urls_from_html(html: str) -> list[str]:
     out: list[str] = []
     for m in _DIRECT_IMAGE_RE.finditer(html):
         url = m.group(0).split("?")[0]
-        if url not in seen and _is_gallery_url(url):
-            seen.add(url)
-            out.append(url)
+        if not _is_gallery_url(url):
+            continue
+        orig = _imgur_to_original_url(url)
+        if orig not in seen:
+            seen.add(orig)
+            out.append(orig)
     for pattern in (
         r'"link"\s*:\s*"(https://i\.imgur\.com/[^"]+\.(?:jpg|jpeg|png|gif|webp))"',
         r'"url"\s*:\s*"(https://i\.imgur\.com/[^"]+\.(?:jpg|jpeg|png|gif|webp))"',
     ):
         for m in re.finditer(pattern, html):
             url = m.group(1).split("?")[0]
-            if url not in seen and _is_gallery_url(url):
-                seen.add(url)
-                out.append(url)
+            if not _is_gallery_url(url):
+                continue
+            orig = _imgur_to_original_url(url)
+            if orig not in seen:
+                seen.add(orig)
+                out.append(orig)
     return out
 
 
@@ -157,8 +183,11 @@ def _fetch_image_urls_with_browser(
                         if not isinstance(u, str):
                             continue
                         u = u.split("?")[0]
-                        if u not in seen and _is_gallery_url(u):
-                            seen.add(u)
+                        if not _is_gallery_url(u):
+                            continue
+                        orig = _imgur_to_original_url(u)
+                        if orig not in seen:
+                            seen.add(orig)
                             added += 1
                     if added == 0:
                         stale_rounds += 1
