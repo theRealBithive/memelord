@@ -2,7 +2,7 @@
 # Add board/blog/topic names; leave empty or omit section to skip that source.
 
 [4chan]
-boards = ["wg", "tg", "b", "gif"]
+boards = ["wg", "tg"]
 
 [tumblr]
 blogs = []
@@ -19,6 +19,6 @@ access_token = " REDACTED "
 
 # Schedule: for "schedule" command (run scrape/post/cleanup on intervals).
 [schedule]
-scrape_every_hours = 6
+scrape_every_hours = 24
 post_every_hours = 1
 cleanup_every_hours = 24

@@ -171,24 +171,30 @@ Run: `python main.py --source all` (optionally `--output_folder ./out`, `--weigh
 
 ## Docker
 
-Build and run with a single persistent folder for config, weights, database, and images:
+Build and run with a single persistent folder for config, weights, database, and images. The entrypoint sets `JANULON_DATA` so that `output_folder` and `data_dir` both point at the same directory; judged corpus images are then found by the post job.
 
 ```bash
 docker compose build
 docker compose run --rm janulon run --source all   # scrape + judge
 docker compose run --rm janulon post               # post one to Mastodon
-docker compose run --rm janulon import-data        # import data/corpus + data/void into DB
-docker compose run janulon schedule                 # run scrape/post/cleanup on intervals (long-running)
+docker compose run --rm janulon import-data       # import corpus/ + void/ into DB
+docker compose up -d                               # or: run janulon schedule (scrape/post/cleanup on intervals)
 ```
 
-The compose file mounts a volume at `/data`. Put the following in that folder (e.g. use a bind mount `./janulon-data:/data` and create `janulon-data/` on the host):
+**Schedule (recommended):** The default command is `schedule`. Run the container long-lived so it periodically scrapes, judges, posts, and cleans up:
+
+```bash
+docker compose up -d
+```
+
+The compose file mounts a volume at `/data`. Put the following in that folder (e.g. bind mount `./janulon-data:/data` and create `janulon-data/` on the host):
 
 - `config.toml` — sources, Mastodon, and optional `[schedule]` (scrape/post/cleanup intervals in hours)
 - `Janulon_weights.pkl` — your trained classifier
 - `janulon.db` — created automatically on first run
-- `corpus/`, `void/` — for skip/import; add `output/` (with `inbox/`, `corpus/`, `void/`) for scrape output and review
+- `inbox/`, `corpus/`, `void/` — created under the same data dir; scrape output and judged images live here so post can find unposted corpus images
 
-To use a bind mount instead of a named volume, in `docker-compose.yml` replace the volume with:
+To use a bind mount, in `docker-compose.yml`:
 
 ```yaml
 volumes:
