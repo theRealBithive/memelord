@@ -53,19 +53,19 @@ def test_main_cleanup_calls_cleanup_and_logs(caplog: pytest.LogCaptureFixture) -
 
 
 def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
-    """_get_schedule_from_config returns default intervals when file or [schedule] missing."""
+    """_get_schedule_from_config returns default intervals (in minutes) when file or [schedule] missing."""
     from main import _get_schedule_from_config
 
     with tempfile.TemporaryDirectory() as tmp:
         missing = Path(tmp) / "missing.toml"
         out = _get_schedule_from_config(missing)
-    assert out["scrape_every_hours"] == 6
-    assert out["post_every_hours"] == 24
-    assert out["cleanup_every_hours"] == 24
+    assert out["scrape_every_minutes"] == 360
+    assert out["post_every_minutes"] == 1440
+    assert out["cleanup_every_minutes"] == 1440
 
 
 def test_get_schedule_from_config_returns_values_from_file() -> None:
-    """_get_schedule_from_config returns [schedule] values when present."""
+    """_get_schedule_from_config returns [schedule] values as minutes when present."""
     from main import _get_schedule_from_config
 
     with tempfile.NamedTemporaryFile(mode="wb", suffix=".toml", delete=False) as f:
@@ -78,9 +78,30 @@ def test_get_schedule_from_config_returns_values_from_file() -> None:
         path = Path(f.name)
     try:
         out = _get_schedule_from_config(path)
-        assert out["scrape_every_hours"] == 2
-        assert out["post_every_hours"] == 12
-        assert out["cleanup_every_hours"] == 48
+        assert out["scrape_every_minutes"] == 120
+        assert out["post_every_minutes"] == 720
+        assert out["cleanup_every_minutes"] == 2880
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_get_schedule_from_config_accepts_fractional_hours() -> None:
+    """_get_schedule_from_config converts fractional hours to minutes (e.g. 0.5 -> 30)."""
+    from main import _get_schedule_from_config
+
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".toml", delete=False) as f:
+        f.write(
+            b"[schedule]\n"
+            b"scrape_every_hours = 6\n"
+            b"post_every_hours = 0.5\n"
+            b"cleanup_every_hours = 24\n"
+        )
+        path = Path(f.name)
+    try:
+        out = _get_schedule_from_config(path)
+        assert out["scrape_every_minutes"] == 360
+        assert out["post_every_minutes"] == 30
+        assert out["cleanup_every_minutes"] == 1440
     finally:
         path.unlink(missing_ok=True)
 

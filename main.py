@@ -66,30 +66,58 @@ def _load_config(config_path: Path) -> dict:
 
 def _get_schedule_from_config(config_path: Path) -> dict:
     """
-    Load [schedule] from config.toml. Returns scrape_every_hours, post_every_hours,
-    cleanup_every_hours (defaults 6, 24, 24 if section missing).
+    Load [schedule] from config.toml. Reads scrape_every_hours, post_every_hours,
+    cleanup_every_hours (floats supported, e.g. 0.5 for 30 min). Returns
+    scrape_every_minutes, post_every_minutes, cleanup_every_minutes (defaults
+    360, 1440, 1440 if section missing).
     """
-    defaults = {
-        "scrape_every_hours": 6,
-        "post_every_hours": 24,
-        "cleanup_every_hours": 24,
+    defaults_h = {
+        "scrape_every_hours": 6.0,
+        "post_every_hours": 24.0,
+        "cleanup_every_hours": 24.0,
     }
     if not config_path.exists():
-        return defaults
+        return {
+            k.replace("_hours", "_minutes"): max(1, int(round(v * 60)))
+            for k, v in defaults_h.items()
+        }
     with config_path.open("rb") as f:
         data = tomllib.load(f)
     if "schedule" not in data or not isinstance(data["schedule"], dict):
-        return defaults
+        return {
+            k.replace("_hours", "_minutes"): max(1, int(round(v * 60)))
+            for k, v in defaults_h.items()
+        }
     s = data["schedule"]
     return {
-        "scrape_every_hours": int(
-            s.get("scrape_every_hours", defaults["scrape_every_hours"])
+        "scrape_every_minutes": max(
+            1,
+            int(
+                round(
+                    float(s.get("scrape_every_hours", defaults_h["scrape_every_hours"]))
+                    * 60
+                )
+            ),
         ),
-        "post_every_hours": int(
-            s.get("post_every_hours", defaults["post_every_hours"])
+        "post_every_minutes": max(
+            1,
+            int(
+                round(
+                    float(s.get("post_every_hours", defaults_h["post_every_hours"]))
+                    * 60
+                )
+            ),
         ),
-        "cleanup_every_hours": int(
-            s.get("cleanup_every_hours", defaults["cleanup_every_hours"])
+        "cleanup_every_minutes": max(
+            1,
+            int(
+                round(
+                    float(
+                        s.get("cleanup_every_hours", defaults_h["cleanup_every_hours"])
+                    )
+                    * 60
+                )
+            ),
         ),
     }
 
@@ -318,14 +346,14 @@ def _run_schedule(
 ) -> None:
     """Run scrape, post, and cleanup on intervals from config; exit on SIGTERM."""
     intervals = _get_schedule_from_config(config_path)
-    scrape_h = intervals["scrape_every_hours"]
-    post_h = intervals["post_every_hours"]
-    cleanup_h = intervals["cleanup_every_hours"]
+    scrape_m = intervals["scrape_every_minutes"]
+    post_m = intervals["post_every_minutes"]
+    cleanup_m = intervals["cleanup_every_minutes"]
     logger.info(
-        "Schedule: scrape every {}h, post every {}h, cleanup every {}h",
-        scrape_h,
-        post_h,
-        cleanup_h,
+        "Schedule: scrape every {}m, post every {}m, cleanup every {}m",
+        scrape_m,
+        post_m,
+        cleanup_m,
     )
 
     base_run = [
@@ -390,9 +418,9 @@ def _run_schedule(
         logger.info("Scheduled cleanup")
         subprocess.run(base_cleanup, check=False)
 
-    schedule.every(scrape_h).hours.do(job_run)
-    schedule.every(post_h).hours.do(job_post)
-    schedule.every(cleanup_h).hours.do(job_cleanup)
+    schedule.every(scrape_m).minutes.do(job_run)
+    schedule.every(post_m).minutes.do(job_post)
+    schedule.every(cleanup_m).minutes.do(job_cleanup)
 
     job_run()  # initial scrape at startup so there is something to post
 

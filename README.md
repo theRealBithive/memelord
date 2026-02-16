@@ -189,7 +189,7 @@ docker compose up -d
 
 The compose file mounts a volume at `/data`. Put the following in that folder (e.g. bind mount `./janulon-data:/data` and create `janulon-data/` on the host):
 
-- `config.toml` — sources, Mastodon, and optional `[schedule]` (scrape/post/cleanup intervals in hours)
+- `config.toml` — sources, Mastodon, and optional `[schedule]` (scrape/post/cleanup intervals in hours; fractional allowed, e.g. `post_every_hours = 0.5` for 30 minutes)
 - `Janulon_weights.pkl` — your trained classifier
 - `janulon.db` — created automatically on first run
 - `inbox/`, `corpus/`, `void/` — created under the same data dir; scrape output and judged images live here so post can find unposted corpus images
