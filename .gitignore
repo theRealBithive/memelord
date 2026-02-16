@@ -47,3 +47,9 @@ data/*.db
 out/
 working_dir/
 *.pkl
+*/janulon.db
+*.webp
+*.png
+*.jpg
+*.gif
+
