@@ -18,6 +18,7 @@ base_url = "https://mastodon.social/"
 access_token = " REDACTED "
 
 # Schedule: for "schedule" command (run scrape/post/cleanup on intervals).
+# Values are in hours; fractional allowed (e.g. post_every_hours = 0.5 for 30 min).
 [schedule]
 scrape_every_hours = 24
 post_every_hours = 1
