@@ -53,3 +53,4 @@ working_dir/
 *.jpg
 *.gif
 
+*/config.toml
