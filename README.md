@@ -75,6 +75,14 @@ python3 core/trainer.py
 
 Output: `Janulon_weights.pkl` (the mathematical representation of your taste).
 
+**Retraining with engagement (Phase II):** After posting to Mastodon, you can retrain so that posted images are weighted by social feedback. You still need the original `corpus/` and `void/` folders on disk (the trainer reads and encodes them). Pass the same data dir and your DB so posted images get sample weights: faves (+1), replies (+0.5), reblogs (+2):
+
+```bash
+python3 core/trainer.py --data_dir data --weights Janulon_weights.pkl --db data/janulon.db
+```
+
+Posted corpus images that have engagement data in the DB are weighted by that formula; all other corpus and void images use weight 1.0.
+
 ### 3. Observation (Inference Phase)
 
 Once calibrated, run the main loop. Janulon will scrape configured sources, judge images, and save the matches.
@@ -181,18 +189,27 @@ docker compose run --rm janulon import-data       # import corpus/ + void/ into 
 docker compose up -d                               # or: run janulon schedule (scrape/post/cleanup on intervals)
 ```
 
-**Schedule (recommended):** The default command is `schedule`. Run the container long-lived so it periodically scrapes, judges, posts, and cleans up:
+**Schedule (recommended):** The default command is `schedule`. Run the container long-lived so it periodically scrapes, judges, posts, cleans up, and retrains:
 
 ```bash
 docker compose up -d
 ```
 
+On first start, if no `Janulon_weights.pkl` exists, the schedule runs an initial train so the run/post jobs can use the classifier. Retrains then run on the interval from `[schedule]` (default weekly) with engagement weighting when `janulon.db` exists.
+
 The compose file mounts a volume at `/data`. Put the following in that folder (e.g. bind mount `./janulon-data:/data` and create `janulon-data/` on the host):
 
-- `config.toml` — sources, Mastodon, and optional `[schedule]` (scrape/post/cleanup intervals in hours; fractional allowed, e.g. `post_every_hours = 0.5` for 30 minutes)
-- `Janulon_weights.pkl` — your trained classifier
+- `config.toml` — sources, Mastodon, and optional `[schedule]` (scrape/post/cleanup/retrain intervals in hours; fractional allowed, e.g. `post_every_hours = 0.5` for 30 minutes). Defaults: scrape 6h, post 24h, cleanup 24h, retrain 168h (weekly).
+- `corpus/`, `void/` — your initial training images (required for first train). Judged images from runs are added here when `output_folder` and `data_dir` both point at `/data`.
+- `Janulon_weights.pkl` — created by initial train or retrain; omit on first deploy to trigger train at startup.
 - `janulon.db` — created automatically on first run
-- `inbox/`, `corpus/`, `void/` — created under the same data dir; scrape output and judged images live here so post can find unposted corpus images
+- `inbox/`, … — created under the same data dir; scrape output and judged images live here. Cleanup removes only void files; posted corpus images are kept on disk.
+
+One-off train/retrain (e.g. after adding images):
+
+```bash
+docker compose run --rm janulon train
+```
 
 To use a bind mount, in `docker-compose.yml`:
 

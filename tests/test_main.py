@@ -2,7 +2,7 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -36,20 +36,84 @@ def test_main_import_data_calls_import_data_and_logs(
 
 
 def test_main_cleanup_calls_cleanup_and_logs(caplog: pytest.LogCaptureFixture) -> None:
-    """main cleanup calls db.cleanup_posted_and_void_files with db, logs count."""
+    """main cleanup calls db.cleanup_void_files with db, logs count."""
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "janulon.db"
-        with patch(
-            "main.db.cleanup_posted_and_void_files", return_value=5
-        ) as cleanup_mock:
+        with patch("main.db.cleanup_void_files", return_value=5) as cleanup_mock:
             with patch(
                 "sys.argv",
                 ["main.py", "cleanup", "--db", str(db_path)],
             ):
                 main()
         cleanup_mock.assert_called_once_with(db_path, Path("data"))
-    assert "5 file(s)" in caplog.text
+    assert "5" in caplog.text and "void" in caplog.text
     assert "Cleanup" in caplog.text or "removed" in caplog.text.lower()
+
+
+def test_main_post_saves_status_id_and_engagement_then_refreshes_others(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """main post saves mastodon status ID and engagement from response, then refreshes all posted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir()
+        db_path = data_dir / "janulon.db"
+        config_path = data_dir / "config.toml"
+        config_path.write_text(
+            '[mastodon]\nbase_url = "https://example.com"\naccess_token = "token"\n'
+        )
+        mock_row = MagicMock()
+        mock_row.content_hash = "abc123"
+        mock_row.file_path = "corpus/img.jpg"
+        mock_row.source_label = "wg"
+        status_response = {
+            "id": 98765,
+            "favourites_count": 1,
+            "reblogs_count": 0,
+            "replies_count": 0,
+        }
+        with patch("main.db.init_db"):
+            with patch(
+                "main.db.get_random_unposted_corpus_image",
+                return_value=mock_row,
+            ):
+                with patch(
+                    "main.db.resolve_file_path",
+                    return_value=data_dir / "corpus" / "img.jpg",
+                ):
+                    with patch(
+                        "main.caption.describe_for_alt",
+                        return_value="alt text",
+                    ):
+                        with patch(
+                            "main.mastodon_module.post_image",
+                            return_value=status_response,
+                        ):
+                            with patch("main.db.update_image_engagement") as update_eng:
+                                with patch(
+                                    "main._refresh_posted_engagement",
+                                ) as refresh_mock:
+                                    with patch(
+                                        "sys.argv",
+                                        [
+                                            "main.py",
+                                            "post",
+                                            "--config",
+                                            str(config_path),
+                                            "--db",
+                                            str(db_path),
+                                            "--data_dir",
+                                            str(data_dir),
+                                        ],
+                                    ):
+                                        main()
+        update_eng.assert_called_once()
+        assert update_eng.call_args[0][1] == 1  # favourites_count
+        assert update_eng.call_args[0][2] == 0  # reblogs_count
+        assert update_eng.call_args[0][3] == 0  # replies_count
+        refresh_mock.assert_called_once()
+        assert refresh_mock.call_args[1]["exclude_content_hash"] == "abc123"
+    assert "Posted" in caplog.text
 
 
 def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
@@ -62,6 +126,7 @@ def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
     assert out["scrape_every_minutes"] == 360
     assert out["post_every_minutes"] == 1440
     assert out["cleanup_every_minutes"] == 1440
+    assert out["retrain_every_minutes"] == 10080  # 168h default
 
 
 def test_get_schedule_from_config_returns_values_from_file() -> None:
@@ -74,6 +139,7 @@ def test_get_schedule_from_config_returns_values_from_file() -> None:
             b"scrape_every_hours = 2\n"
             b"post_every_hours = 12\n"
             b"cleanup_every_hours = 48\n"
+            b"retrain_every_hours = 24\n"
         )
         path = Path(f.name)
     try:
@@ -81,6 +147,7 @@ def test_get_schedule_from_config_returns_values_from_file() -> None:
         assert out["scrape_every_minutes"] == 120
         assert out["post_every_minutes"] == 720
         assert out["cleanup_every_minutes"] == 2880
+        assert out["retrain_every_minutes"] == 1440
     finally:
         path.unlink(missing_ok=True)
 
@@ -102,8 +169,41 @@ def test_get_schedule_from_config_accepts_fractional_hours() -> None:
         assert out["scrape_every_minutes"] == 360
         assert out["post_every_minutes"] == 30
         assert out["cleanup_every_minutes"] == 1440
+        assert out["retrain_every_minutes"] == 10080
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_main_train_calls_trainer_run() -> None:
+    """main train invokes trainer.run with data_dir, weights, db_path."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir()
+        (data_dir / "void").mkdir()
+        (data_dir / "corpus" / "a.jpg").write_bytes(b"x")
+        (data_dir / "void" / "b.jpg").write_bytes(b"y")
+        weights = data_dir / "w.pkl"
+        db_path = data_dir / "janulon.db"
+        with patch("core.trainer.run") as run_mock:
+            with patch(
+                "sys.argv",
+                [
+                    "main.py",
+                    "train",
+                    "--data_dir",
+                    str(data_dir),
+                    "--weights",
+                    str(weights),
+                    "--db",
+                    str(db_path),
+                ],
+            ):
+                main()
+        run_mock.assert_called_once_with(
+            data_dir=data_dir,
+            weights_path=weights,
+            db_path=db_path,
+        )
 
 
 def test_main_schedule_calls_run_schedule_with_paths() -> None:

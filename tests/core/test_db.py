@@ -169,6 +169,7 @@ def test_migrate_adds_location_and_file_deleted_to_existing_table(
     """
     )
     db._migrate_add_location_and_file_deleted(database)
+    db._migrate_add_engagement_columns(database)
     db.Image.create(
         content_hash="migrated",
         file_path="/data/corpus/m.jpg",
@@ -307,8 +308,8 @@ def test_get_random_unposted_corpus_image_returns_one_when_file_exists(
         assert db.resolve_file_path(tmp_path, row.file_path).exists()
 
 
-def test_cleanup_posted_and_void_files_removes_files_and_sets_file_deleted() -> None:
-    """cleanup_posted_and_void_files deletes posted and void files, leaves corpus unposted."""
+def test_cleanup_void_files_removes_void_only_keeps_posted_corpus() -> None:
+    """cleanup_void_files deletes void files only; posted and unposted corpus files are kept."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         db_path = tmp_path / "janulon.db"
@@ -338,18 +339,18 @@ def test_cleanup_posted_and_void_files_removes_files_and_sets_file_deleted() -> 
             source_label="wg",
             location="corpus",
         )
-        removed = db.cleanup_posted_and_void_files(db_path, tmp_path)
-        assert removed == 2
-        assert not posted_file.exists()
+        removed = db.cleanup_void_files(db_path, tmp_path)
+        assert removed == 1
+        assert posted_file.exists()
         assert not void_file.exists()
         assert corpus_file.exists()
-        assert db.Image.get_by_id("p1").file_deleted is True
+        assert db.Image.get_by_id("p1").file_deleted is False
         assert db.Image.get_by_id("v1").file_deleted is True
         assert db.Image.get_by_id("c1").file_deleted is False
 
 
-def test_cleanup_posted_and_void_files_skips_missing_files() -> None:
-    """cleanup_posted_and_void_files does not update row when file already missing."""
+def test_cleanup_void_files_skips_missing_files() -> None:
+    """cleanup_void_files does not update row when file already missing."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         db_path = tmp_path / "janulon.db"
@@ -360,13 +361,13 @@ def test_cleanup_posted_and_void_files_skips_missing_files() -> None:
             source_label="wg",
             location="void",
         )
-        removed = db.cleanup_posted_and_void_files(db_path, tmp_path)
+        removed = db.cleanup_void_files(db_path, tmp_path)
         assert removed == 0
         assert db.Image.get_by_id("gone").file_deleted is False
 
 
-def test_cleanup_posted_and_void_files_skips_already_file_deleted() -> None:
-    """cleanup_posted_and_void_files does not process rows already marked file_deleted."""
+def test_cleanup_void_files_skips_already_file_deleted() -> None:
+    """cleanup_void_files does not process rows already marked file_deleted."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         db_path = tmp_path / "janulon.db"
@@ -380,6 +381,125 @@ def test_cleanup_posted_and_void_files_skips_already_file_deleted() -> None:
             location="void",
             file_deleted=True,
         )
-        removed = db.cleanup_posted_and_void_files(db_path, tmp_path)
+        removed = db.cleanup_void_files(db_path, tmp_path)
         assert removed == 0
         assert f.exists()
+
+
+def test_get_posted_images_with_status_returns_only_posted_with_status_id(
+    database: SqliteDatabase,
+) -> None:
+    """get_posted_images_with_status returns rows that have posted_at and mastodon_status_id."""
+    db.Image.create(
+        content_hash="unposted",
+        file_path="corpus/a.jpg",
+        source_label="wg",
+        location="corpus",
+    )
+    db.Image.create(
+        content_hash="posted_no_id",
+        file_path="corpus/b.jpg",
+        source_label="wg",
+        location="corpus",
+        posted_at=datetime.now(timezone.utc),
+    )
+    db.Image.create(
+        content_hash="posted_with_id",
+        file_path="corpus/c.jpg",
+        source_label="wg",
+        location="corpus",
+        posted_at=datetime.now(timezone.utc),
+        mastodon_status_id="12345",
+    )
+    rows = db.get_posted_images_with_status()
+    assert len(rows) == 1
+    assert rows[0].content_hash == "posted_with_id"
+    assert rows[0].mastodon_status_id == "12345"
+
+
+def test_update_image_engagement_sets_and_persists(
+    database: SqliteDatabase,
+) -> None:
+    """update_image_engagement sets engagement fields and saves."""
+    db.Image.create(
+        content_hash="eng1",
+        file_path="corpus/x.jpg",
+        source_label="wg",
+        location="corpus",
+        posted_at=datetime.now(timezone.utc),
+        mastodon_status_id="999",
+    )
+    row = db.Image.get_by_id("eng1")
+    assert row.engagement_favourites is None
+    db.update_image_engagement(row, favourites=10, reblogs=2, replies=1)
+    row2 = db.Image.get_by_id("eng1")
+    assert row2.engagement_favourites == 10
+    assert row2.engagement_reblogs == 2
+    assert row2.engagement_replies == 1
+    assert row2.engagement_fetched_at is not None
+
+
+def test_engagement_weight_formula() -> None:
+    """engagement_weight = faves + 0.5*replies + 2*reblogs."""
+    assert db.engagement_weight(0, 0, 0) == 0.0
+    assert db.engagement_weight(10, 0, 0) == 10.0
+    assert db.engagement_weight(0, 2, 0) == 4.0
+    assert db.engagement_weight(0, 0, 4) == 2.0
+    assert db.engagement_weight(1, 1, 2) == 1.0 + 2.0 + 1.0  # 4.0
+
+
+def test_get_posted_engagement_weights_returns_map(database: SqliteDatabase) -> None:
+    """get_posted_engagement_weights returns file_path -> weight for posted with engagement."""
+    now = datetime.now(timezone.utc)
+    db.Image.create(
+        content_hash="a",
+        file_path="corpus/one.jpg",
+        source_label="wg",
+        location="corpus",
+        posted_at=now,
+        mastodon_status_id="1",
+        engagement_favourites=2,
+        engagement_reblogs=1,
+        engagement_replies=0,
+    )
+    db.Image.create(
+        content_hash="b",
+        file_path="corpus/two.jpg",
+        source_label="wg",
+        location="corpus",
+        posted_at=now,
+        mastodon_status_id="2",
+        engagement_favourites=0,
+        engagement_reblogs=2,
+        engagement_replies=2,
+    )
+    weights = db.get_posted_engagement_weights()
+    assert weights == {"corpus/one.jpg": 4.0, "corpus/two.jpg": 5.0}  # 2+2*1; 2*2+0.5*2
+
+
+def test_get_top_posted_by_engagement_returns_sorted_by_faves_plus_reblogs(
+    database: SqliteDatabase,
+) -> None:
+    """get_top_posted_by_engagement returns rows ordered by favourites + reblogs desc."""
+    now = datetime.now(timezone.utc)
+    for content_hash, faves, reblogs in [
+        ("low", 1, 0),
+        ("mid", 5, 2),
+        ("high", 10, 3),
+    ]:
+        db.Image.create(
+            content_hash=content_hash,
+            file_path=f"corpus/{content_hash}.jpg",
+            source_label="wg",
+            location="corpus",
+            posted_at=now,
+            mastodon_status_id=content_hash + "id",
+            engagement_favourites=faves,
+            engagement_reblogs=reblogs,
+        )
+    top = db.get_top_posted_by_engagement(limit=10)
+    assert [r.content_hash for r in top] == ["high", "mid", "low"]
+    top2 = db.get_top_posted_by_engagement(limit=2)
+    assert len(top2) == 2
+    assert top2[0].content_hash == "high"
+    assert top2[1].content_hash == "mid"

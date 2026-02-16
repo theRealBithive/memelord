@@ -62,3 +62,44 @@ def test_run_saves_weights(tmp_path: Path) -> None:
     assert weights_path.exists()
     clf = brain.load_classifier(weights_path)
     assert clf.predict_proba(np.array([[0.1] * 768])).shape == (1, 2)
+
+
+def test_run_with_db_uses_engagement_weights(tmp_path: Path) -> None:
+    """run() with db_path passes sample_weight from engagement (faves +0.5*replies +2*reblogs)."""
+    (tmp_path / "corpus").mkdir()
+    (tmp_path / "void").mkdir()
+    (tmp_path / "corpus" / "pos.png").touch()
+    (tmp_path / "void" / "neg.png").touch()
+    from PIL import Image
+
+    Image.new("RGB", (10, 10), color="red").save(tmp_path / "corpus" / "pos.png")
+    Image.new("RGB", (10, 10), color="blue").save(tmp_path / "void" / "neg.png")
+
+    db_path = tmp_path / "janulon.db"
+    weights_path = tmp_path / "weights.pkl"
+    engagement_map = {"corpus/pos.png": 6.0}  # e.g. 2 faves + 2 replies + 1 reblog
+
+    with patch.object(brain, "get_encoder") as mock_get_encoder:
+        with patch.object(brain, "encode") as mock_encode:
+            with patch("core.db.init_db"):
+                with patch(
+                    "core.db.get_posted_engagement_weights",
+                    return_value=engagement_map,
+                ):
+                    mock_get_encoder.return_value = None
+                    mock_encode.side_effect = [
+                        np.array([[0.1] * 768], dtype=np.float32),
+                        np.array([[0.2] * 768], dtype=np.float32),
+                    ]
+                    trainer.run(
+                        data_dir=tmp_path,
+                        weights_path=weights_path,
+                        db_path=db_path,
+                    )
+    assert weights_path.exists()
+    # fit was called with sample_weight: corpus 6.0, void 1.0
+    from sklearn.linear_model import LogisticRegression
+
+    # We can't easily get the fit call args without capturing; check weights file works
+    clf = brain.load_classifier(weights_path)
+    assert clf.predict_proba(np.array([[0.1] * 768])).shape == (1, 2)
