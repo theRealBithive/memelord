@@ -94,3 +94,42 @@ def post_image(
     media_id = media["id"] if isinstance(media, dict) else media.id
     _wait_for_media_ready(client, media_id)
     return client.status_post(status=status_text or "", media_ids=[media_id])
+
+
+def engagement_from_status(status: dict | object) -> dict[str, int]:
+    """
+    Extract engagement counts from a Status dict or entity (e.g. from status_post).
+
+    Returns:
+        Dict with keys favourites_count, reblogs_count, replies_count (all int).
+    """
+    if isinstance(status, dict):
+        return {
+            "favourites_count": int(status.get("favourites_count", 0)),
+            "reblogs_count": int(status.get("reblogs_count", 0)),
+            "replies_count": int(status.get("replies_count", 0)),
+        }
+    return {
+        "favourites_count": getattr(status, "favourites_count", 0) or 0,
+        "reblogs_count": getattr(status, "reblogs_count", 0) or 0,
+        "replies_count": getattr(status, "replies_count", 0) or 0,
+    }
+
+
+def fetch_status_engagement(client: Mastodon, status_id: str | int) -> dict[str, int]:
+    """
+    Fetch a status by ID and return engagement counts.
+
+    Args:
+        client: Authenticated Mastodon client.
+        status_id: The status ID (string or int).
+
+    Returns:
+        Dict with keys favourites_count, reblogs_count, replies_count (all int).
+
+    Raises:
+        MastodonAPIError: If the status cannot be fetched.
+    """
+    sid = int(status_id) if isinstance(status_id, str) else status_id
+    status = client.status(sid)
+    return engagement_from_status(status)

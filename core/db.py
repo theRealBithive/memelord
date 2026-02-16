@@ -14,6 +14,7 @@ from peewee import (
     BooleanField,
     CharField,
     DateTimeField,
+    IntegerField,
     Model,
     Proxy,
     SqliteDatabase,
@@ -64,7 +65,35 @@ def init_db(db_path: Path | str) -> SqliteDatabase:
     db_proxy.initialize(_db)
     _db.create_tables([Image])
     _migrate_add_location_and_file_deleted(_db)
+    _migrate_add_engagement_columns(_db)
     return _db
+
+
+def _migrate_add_engagement_columns(database: SqliteDatabase) -> None:
+    """Add Mastodon status ID and engagement columns if missing (for existing DBs)."""
+    cursor = database.execute_sql("PRAGMA table_info(image)")
+    columns = {row[1] for row in cursor.fetchall()}
+    cursor.close()
+    if "mastodon_status_id" not in columns:
+        database.execute_sql(
+            "ALTER TABLE image ADD COLUMN mastodon_status_id VARCHAR(32) NULL"
+        )
+    if "engagement_favourites" not in columns:
+        database.execute_sql(
+            "ALTER TABLE image ADD COLUMN engagement_favourites INTEGER NULL"
+        )
+    if "engagement_reblogs" not in columns:
+        database.execute_sql(
+            "ALTER TABLE image ADD COLUMN engagement_reblogs INTEGER NULL"
+        )
+    if "engagement_replies" not in columns:
+        database.execute_sql(
+            "ALTER TABLE image ADD COLUMN engagement_replies INTEGER NULL"
+        )
+    if "engagement_fetched_at" not in columns:
+        database.execute_sql(
+            "ALTER TABLE image ADD COLUMN engagement_fetched_at DATETIME NULL"
+        )
 
 
 def _migrate_add_location_and_file_deleted(database: SqliteDatabase) -> None:
@@ -96,6 +125,8 @@ class Image(BaseModel):
     Used for content deduplication and for the bot to track what has been posted.
     location: "corpus" (positive) or "void" (negative).
     file_deleted: True if the file on disk was removed; row kept for reference.
+    mastodon_status_id: ID of the Mastodon status after posting (for engagement).
+    engagement_*: Fetched from Mastodon API; updated when we post or refresh.
     """
 
     content_hash = CharField(primary_key=True, max_length=64)
@@ -106,6 +137,11 @@ class Image(BaseModel):
     downloaded_at = DateTimeField(default=lambda: datetime.now(timezone.utc))
     posted_at = DateTimeField(null=True)
     file_deleted = BooleanField(default=False)
+    mastodon_status_id = CharField(null=True, max_length=32)
+    engagement_favourites = IntegerField(null=True)
+    engagement_reblogs = IntegerField(null=True)
+    engagement_replies = IntegerField(null=True)
+    engagement_fetched_at = DateTimeField(null=True)
 
     class Meta:
         table_name = "image"
@@ -134,6 +170,87 @@ def get_random_unposted_corpus_image(data_root: Path | str):  # noqa: ANN201
         if resolve_file_path(root, row.file_path).exists():
             return row
     return None
+
+
+def get_posted_images_with_status():  # noqa: ANN201
+    """
+    Return all Image rows that have been posted and have a Mastodon status ID.
+
+    Used to refresh engagement counts. Call init_db first.
+    """
+    return list(
+        Image.select().where(
+            Image.posted_at.is_null(False),
+            Image.mastodon_status_id.is_null(False),
+        )
+    )
+
+
+def get_top_posted_by_engagement(limit: int = 10):  # noqa: ANN201
+    """
+    Return posted images with status ID, sorted by favourites + reblogs descending.
+
+    Call init_db first. Returns at most `limit` rows.
+    """
+    total = fn.COALESCE(Image.engagement_favourites, 0) + fn.COALESCE(
+        Image.engagement_reblogs, 0
+    )
+    return list(
+        Image.select()
+        .where(
+            Image.posted_at.is_null(False),
+            Image.mastodon_status_id.is_null(False),
+        )
+        .order_by(total.desc())
+        .limit(limit)
+    )
+
+
+def engagement_weight(
+    favourites: int,
+    reblogs: int,
+    replies: int,
+) -> float:
+    """
+    Compute training weight from engagement: faves (+1), replies (+0.5), reblogs (+2).
+    Used for sample_weight when retraining with posted images.
+    """
+    return float(favourites) + 0.5 * float(replies) + 2.0 * float(reblogs)
+
+
+def get_posted_engagement_weights():  # noqa: ANN201
+    """
+    Return dict mapping file_path (normalized) -> engagement weight for training.
+
+    Only includes posted images that have engagement data. Call init_db first.
+    Keys use forward slashes for portability.
+    """
+    rows = get_posted_images_with_status()
+    out: dict[str, float] = {}
+    for row in rows:
+        f = row.engagement_favourites or 0
+        r = row.engagement_reblogs or 0
+        rep = row.engagement_replies or 0
+        key = (row.file_path or "").strip().replace("\\", "/")
+        if key:
+            out[key] = engagement_weight(f, r, rep)
+    return out
+
+
+def update_image_engagement(
+    row: Image,
+    favourites: int,
+    reblogs: int,
+    replies: int,
+) -> None:
+    """
+    Set engagement counts and engagement_fetched_at on an Image row and save.
+    """
+    row.engagement_favourites = favourites
+    row.engagement_reblogs = reblogs
+    row.engagement_replies = replies
+    row.engagement_fetched_at = datetime.now(timezone.utc)
+    row.save()
 
 
 def _source_label_from_filename(path: Path) -> str:
@@ -209,17 +326,18 @@ def import_data(
     return inserted, skipped
 
 
-def cleanup_posted_and_void_files(db_path: Path | str, data_root: Path | str) -> int:
+def cleanup_void_files(db_path: Path | str, data_root: Path | str) -> int:
     """
-    Delete from disk all files for images that are posted or in the void.
+    Delete from disk all files for images in the void.
     Sets file_deleted=True for each removed file. Rows are kept for dedup.
+    Posted corpus images are left on disk (for Phase II engagement / retraining).
     file_path is resolved against data_root (relative paths). Returns files removed.
     """
     init_db(db_path)
     root = Path(data_root)
     removed = 0
     candidates = Image.select().where(
-        (Image.posted_at.is_null(False) | (Image.location == "void")),
+        Image.location == "void",
         Image.file_deleted == False,
     )
     for row in candidates:

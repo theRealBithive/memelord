@@ -32,6 +32,14 @@ if [ -n "$JANULON_DATA" ]; then
       shift
       set -- cleanup --db "$JANULON_DATA/janulon.db" --data_dir "$JANULON_DATA" "$@"
       ;;
+    train)
+      shift
+      set -- train \
+        --data_dir "$JANULON_DATA" \
+        --weights "$JANULON_DATA/Janulon_weights.pkl" \
+        --db "$JANULON_DATA/janulon.db" \
+        "$@"
+      ;;
     schedule)
       shift
       set -- schedule \

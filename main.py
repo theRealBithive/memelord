@@ -67,14 +67,15 @@ def _load_config(config_path: Path) -> dict:
 def _get_schedule_from_config(config_path: Path) -> dict:
     """
     Load [schedule] from config.toml. Reads scrape_every_hours, post_every_hours,
-    cleanup_every_hours (floats supported, e.g. 0.5 for 30 min). Returns
-    scrape_every_minutes, post_every_minutes, cleanup_every_minutes (defaults
-    360, 1440, 1440 if section missing).
+    cleanup_every_hours, retrain_every_hours (floats supported, e.g. 0.5 for 30 min).
+    Returns scrape_every_minutes, post_every_minutes, cleanup_every_minutes,
+    retrain_every_minutes (defaults 360, 1440, 1440, 10080 if section missing).
     """
     defaults_h = {
         "scrape_every_hours": 6.0,
         "post_every_hours": 24.0,
         "cleanup_every_hours": 24.0,
+        "retrain_every_hours": 168.0,  # weekly
     }
     if not config_path.exists():
         return {
@@ -119,7 +120,80 @@ def _get_schedule_from_config(config_path: Path) -> dict:
                 )
             ),
         ),
+        "retrain_every_minutes": max(
+            1,
+            int(
+                round(
+                    float(
+                        s.get(
+                            "retrain_every_hours",
+                            defaults_h["retrain_every_hours"],
+                        )
+                    )
+                    * 60
+                )
+            ),
+        ),
     }
+
+
+def _refresh_posted_engagement(
+    client,
+    *,
+    exclude_content_hash: str | None = None,
+) -> None:
+    """
+    Fetch current engagement from Mastodon for all posted images with a status ID,
+    and update DB. Skips the row with content_hash == exclude_content_hash.
+    Rate-limits to one request per second.
+    """
+    for row in db.get_posted_images_with_status():
+        if (
+            exclude_content_hash is not None
+            and row.content_hash == exclude_content_hash
+        ):
+            continue
+        try:
+            eng = mastodon_module.fetch_status_engagement(
+                client, row.mastodon_status_id
+            )
+            db.update_image_engagement(
+                row,
+                eng["favourites_count"],
+                eng["reblogs_count"],
+                eng["replies_count"],
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Could not refresh engagement for status {}: {}",
+                row.mastodon_status_id,
+                e,
+            )
+        time.sleep(1)
+
+
+def _log_top_posts_by_engagement(limit: int = 10) -> None:
+    """Log the top N posted images by engagement (favourites + reblogs)."""
+    top = db.get_top_posted_by_engagement(limit=limit)
+    if not top:
+        logger.info("No posted images with engagement data yet.")
+        return
+    logger.info("Top {} posts by engagement (faves + reblogs):", limit)
+    for i, row in enumerate(top, 1):
+        f = row.engagement_favourites or 0
+        r = row.engagement_reblogs or 0
+        replies = row.engagement_replies or 0
+        total = f + r
+        name = Path(row.file_path).name if row.file_path else row.content_hash[:12]
+        logger.info(
+            "  {:2}. {}  total={} (faves={} reblogs={} replies={})",
+            i,
+            name,
+            total,
+            f,
+            r,
+            replies,
+        )
 
 
 def _skip_dirs(data_dir: Path | None, output_folder: Path) -> list[Path]:
@@ -344,17 +418,35 @@ def _run_schedule(
     output_folder: Path,
     data_dir: Path,
 ) -> None:
-    """Run scrape, post, and cleanup on intervals from config; exit on SIGTERM."""
+    """Run scrape, post, cleanup, and retrain on intervals from config; exit on SIGTERM."""
     intervals = _get_schedule_from_config(config_path)
     scrape_m = intervals["scrape_every_minutes"]
     post_m = intervals["post_every_minutes"]
     cleanup_m = intervals["cleanup_every_minutes"]
+    retrain_m = intervals["retrain_every_minutes"]
     logger.info(
-        "Schedule: scrape every {}m, post every {}m, cleanup every {}m",
+        "Schedule: scrape every {}m, post every {}m, cleanup every {}m, retrain every {}m",
         scrape_m,
         post_m,
         cleanup_m,
+        retrain_m,
     )
+
+    if not weights_path.exists():
+        logger.info("No weights file at {}; running initial train.", weights_path)
+        base_train = [
+            sys.executable,
+            "-m",
+            "main",
+            "train",
+            "--data_dir",
+            str(data_dir),
+            "--weights",
+            str(weights_path),
+        ]
+        if db_path.exists():
+            base_train.extend(["--db", str(db_path)])
+        subprocess.run(base_train, check=False)
 
     base_run = [
         sys.executable,
@@ -396,6 +488,18 @@ def _run_schedule(
         "--data_dir",
         str(data_dir),
     ]
+    base_train = [
+        sys.executable,
+        "-m",
+        "main",
+        "train",
+        "--data_dir",
+        str(data_dir),
+        "--weights",
+        str(weights_path),
+    ]
+    if db_path.exists():
+        base_train.extend(["--db", str(db_path)])
 
     shutdown = False
 
@@ -418,9 +522,14 @@ def _run_schedule(
         logger.info("Scheduled cleanup")
         subprocess.run(base_cleanup, check=False)
 
+    def job_retrain() -> None:
+        logger.info("Scheduled retrain")
+        subprocess.run(base_train, check=False)
+
     schedule.every(scrape_m).minutes.do(job_run)
     schedule.every(post_m).minutes.do(job_post)
     schedule.every(cleanup_m).minutes.do(job_cleanup)
+    schedule.every(retrain_m).minutes.do(job_retrain)
 
     job_run()  # initial scrape at startup so there is something to post
 
@@ -573,7 +682,7 @@ def main() -> None:
 
     cleanup_parser = subparsers.add_parser(
         "cleanup",
-        help="Remove from disk all posted images and all void images; set file_deleted.",
+        help="Remove from disk void images only; set file_deleted. Posted corpus images are kept.",
     )
     cleanup_parser.add_argument(
         "--db",
@@ -588,9 +697,32 @@ def main() -> None:
         help="Data root (corpus/void live here). Default: data",
     )
 
+    train_parser = subparsers.add_parser(
+        "train",
+        help="Train or retrain the classifier on data_dir/corpus and data_dir/void (optional --db for engagement weights).",
+    )
+    train_parser.add_argument(
+        "--data_dir",
+        type=Path,
+        default=Path("data"),
+        help="Directory containing corpus/ and void/. Default: data",
+    )
+    train_parser.add_argument(
+        "--weights",
+        type=Path,
+        default=Path("Janulon_weights.pkl"),
+        help="Output path for classifier weights. Default: Janulon_weights.pkl",
+    )
+    train_parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Optional SQLite DB path for engagement-weighted retrain (faves +0.5*replies +2*reblogs).",
+    )
+
     schedule_parser = subparsers.add_parser(
         "schedule",
-        help="Run scrape, post, and cleanup on intervals from config [schedule].",
+        help="Run scrape, post, cleanup, and retrain on intervals from config [schedule].",
     )
     schedule_parser.add_argument(
         "--config",
@@ -645,10 +777,24 @@ def main() -> None:
         logger.info("Posting {} (source: {})", path.name, row.source_label)
         alt_text = caption.describe_for_alt(path)
         client = mastodon_module.create_client(base_url, access_token)
-        mastodon_module.post_image(client, path, alt_text)
+        status = mastodon_module.post_image(client, path, alt_text)
+        status_id = (
+            status.get("id")
+            if isinstance(status, dict)
+            else getattr(status, "id", None)
+        )
         row.posted_at = datetime.now(timezone.utc)
-        row.save()
+        row.mastodon_status_id = str(status_id) if status_id is not None else None
+        eng = mastodon_module.engagement_from_status(status)
+        db.update_image_engagement(
+            row,
+            eng["favourites_count"],
+            eng["reblogs_count"],
+            eng["replies_count"],
+        )
         logger.success("Posted and marked as posted: {}", path.name)
+        _refresh_posted_engagement(client, exclude_content_hash=row.content_hash)
+        _log_top_posts_by_engagement(limit=10)
         return
 
     if args.command == "import-data":
@@ -661,8 +807,18 @@ def main() -> None:
         return
 
     if args.command == "cleanup":
-        removed = db.cleanup_posted_and_void_files(args.db, args.data_dir)
-        logger.info("Cleanup removed {} file(s) from disk (posted + void).", removed)
+        removed = db.cleanup_void_files(args.db, args.data_dir)
+        logger.info("Cleanup removed {} void file(s) from disk.", removed)
+        return
+
+    if args.command == "train":
+        from core import trainer as trainer_module
+
+        trainer_module.run(
+            data_dir=args.data_dir,
+            weights_path=args.weights,
+            db_path=args.db,
+        )
         return
 
     if args.command == "schedule":
