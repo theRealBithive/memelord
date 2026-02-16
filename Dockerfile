@@ -11,8 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Layer 2: Playwright + Chromium (invalidated only when this RUN changes)
-RUN playwright install chromium && playwright install-deps chromium
+# Layer 2: Playwright CLI + Chromium (install playwright first so the CLI exists)
+RUN pip install --no-cache-dir playwright \
+    && playwright install chromium \
+    && playwright install-deps chromium
 
 # Layer 3: Python deps only — copy just metadata so code changes don't bust this layer
 COPY pyproject.toml README.md ./
