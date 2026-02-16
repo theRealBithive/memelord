@@ -35,9 +35,21 @@ def test_image_urls_from_post_collects_all_sizes() -> None:
 
 
 def test_image_urls_from_post_returns_empty_for_non_photo() -> None:
-    """Text post yields no URLs."""
+    """Text post with no images yields no URLs."""
     post = {"type": "text", "regular-body": "<p>Hi</p>"}
     assert tumblr.image_urls_from_post(post) == []
+
+
+def test_image_urls_from_post_extracts_from_regular_body_html() -> None:
+    """Regular post with img in regular-body yields that URL (e.g. wh40kartwork-style)."""
+    post = {
+        "type": "regular",
+        "regular-body": '<figure><img src="https://64.media.tumblr.com/aa/bb/s640x960/hash.jpg"></figure>',
+    }
+    urls = tumblr.image_urls_from_post(post)
+    assert len(urls) == 1
+    assert "64.media.tumblr.com" in urls[0]
+    assert urls[0].endswith("hash.jpg") or "hash" in urls[0]
 
 
 def test_image_urls_from_post_returns_empty_for_empty_dict() -> None:
@@ -84,6 +96,26 @@ def test_iter_image_urls_uses_mocked_posts() -> None:
     assert "https://x.com/1.jpg" in urls
     assert "https://x.com/2.png" in urls
     assert len(urls) == 2
+
+
+def test_iter_image_urls_collects_from_regular_posts() -> None:
+    """iter_image_urls collects image URLs from type=regular posts (regular-body)."""
+    fake_response = {
+        "posts": [
+            {
+                "type": "regular",
+                "regular-body": '<img src="https://64.media.tumblr.com/x/y.jpg">',
+            },
+        ],
+    }
+    with patch.object(tumblr, "get_posts", return_value=fake_response):
+        urls = tumblr.iter_image_urls(
+            blog="wh40kartwork",
+            num_posts=20,
+            rate_limit_sec=0,
+        )
+    assert len(urls) == 1
+    assert "64.media.tumblr.com" in urls[0]
 
 
 def test_iter_image_urls_deduplicates() -> None:

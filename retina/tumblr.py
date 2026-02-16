@@ -15,6 +15,8 @@ from retina import image_validation
 _RATE_LIMIT_SEC = 1.5
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
 _PAGE_SIZE = 20
+# Match img src="..." or src='...' (URLs only; no HTML entities in URL)
+_IMG_SRC_RE = re.compile(r'src=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
 def _get_json(url: str) -> dict:
@@ -50,14 +52,41 @@ def get_posts(blog: str, num: int = _PAGE_SIZE, start: int = 0) -> dict:
     return _get_json(url)
 
 
+def _image_urls_from_html(html: str) -> list[str]:
+    """
+    Extract image URLs from HTML (e.g. regular-body) via img src.
+    Returns only URLs that look like images (Tumblr media or known extensions).
+    """
+    if not html or not isinstance(html, str):
+        return []
+    urls: list[str] = []
+    for match in _IMG_SRC_RE.finditer(html):
+        url = match.group(1).strip()
+        if not url or url in urls:
+            continue
+        lower = url.split("?")[0].lower()
+        if "media.tumblr.com" in lower or "tumblr.com" in lower:
+            urls.append(url)
+            continue
+        if any(lower.endswith(ext) for ext in _IMAGE_EXTENSIONS):
+            urls.append(url)
+    return urls
+
+
 def image_urls_from_post(post: dict) -> list[str]:
     """
-    Return all image URLs for a post (photo-url-* and photos[]).
-    Empty list for non-photo posts or if no images found.
+    Return all image URLs for a post.
+    Handles type "photo" (photo-url-* and photos[]) and type "regular" (img in regular-body).
+    Empty list for other types or if no images found.
     """
     if not isinstance(post, dict):
         return []
     post_type = post.get("type")
+
+    if post_type == "regular":
+        body = post.get("regular-body") or ""
+        return _image_urls_from_html(body)
+
     if post_type != "photo":
         return []
 
