@@ -4,6 +4,7 @@ venv/
 env/
 .git/
 .gitignore
+.gitlab-ci.yml
 
 # Tests and dev tooling
 tests/
