@@ -8,6 +8,7 @@ from core.mastodon import (
     _wait_for_media_ready,
     engagement_from_status,
     fetch_status_engagement,
+    post_status,
 )
 
 
@@ -81,3 +82,12 @@ def test_fetch_status_engagement_calls_client_and_returns_counts() -> None:
         "reblogs_count": 4,
         "replies_count": 0,
     }
+
+
+def test_post_status_posts_text_only() -> None:
+    """post_status calls status_post with the given text and returns the API response."""
+    client = Mock()
+    client.status_post.return_value = {"id": "99", "content": "Pondering."}
+    result = post_status(client, "Pondering the means of discernment anew.")
+    client.status_post.assert_called_once_with(status="Pondering the means of discernment anew.")
+    assert result == {"id": "99", "content": "Pondering."}

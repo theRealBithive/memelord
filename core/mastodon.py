@@ -63,6 +63,23 @@ def create_client(base_url: str, access_token: str) -> Mastodon:
     return Mastodon(access_token=access_token.strip(), api_base_url=base_url.strip())
 
 
+def post_status(client: Mastodon, status_text: str) -> dict:
+    """
+    Post a text-only status (no media).
+
+    Args:
+        client: Authenticated Mastodon client from create_client().
+        status_text: The status text to post.
+
+    Returns:
+        The Status dict returned by the API.
+
+    Raises:
+        MastodonAPIError: On post failure.
+    """
+    return client.status_post(status=status_text)
+
+
 def post_image(
     client: Mastodon,
     image_path: Path | str,
