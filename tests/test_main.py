@@ -125,7 +125,6 @@ def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
         out = _get_schedule_from_config(missing)
     assert out["scrape_every_minutes"] == 360
     assert out["post_every_minutes"] == 1440
-    assert out["cleanup_every_minutes"] == 1440
     assert out["retrain_every_minutes"] == 10080  # 168h default
 
 
@@ -138,7 +137,6 @@ def test_get_schedule_from_config_returns_values_from_file() -> None:
             b"[schedule]\n"
             b"scrape_every_hours = 2\n"
             b"post_every_hours = 12\n"
-            b"cleanup_every_hours = 48\n"
             b"retrain_every_hours = 24\n"
         )
         path = Path(f.name)
@@ -146,7 +144,6 @@ def test_get_schedule_from_config_returns_values_from_file() -> None:
         out = _get_schedule_from_config(path)
         assert out["scrape_every_minutes"] == 120
         assert out["post_every_minutes"] == 720
-        assert out["cleanup_every_minutes"] == 2880
         assert out["retrain_every_minutes"] == 1440
     finally:
         path.unlink(missing_ok=True)
@@ -157,18 +154,12 @@ def test_get_schedule_from_config_accepts_fractional_hours() -> None:
     from main import _get_schedule_from_config
 
     with tempfile.NamedTemporaryFile(mode="wb", suffix=".toml", delete=False) as f:
-        f.write(
-            b"[schedule]\n"
-            b"scrape_every_hours = 6\n"
-            b"post_every_hours = 0.5\n"
-            b"cleanup_every_hours = 24\n"
-        )
+        f.write(b"[schedule]\n" b"scrape_every_hours = 6\n" b"post_every_hours = 0.5\n")
         path = Path(f.name)
     try:
         out = _get_schedule_from_config(path)
         assert out["scrape_every_minutes"] == 360
         assert out["post_every_minutes"] == 30
-        assert out["cleanup_every_minutes"] == 1440
         assert out["retrain_every_minutes"] == 10080
     finally:
         path.unlink(missing_ok=True)

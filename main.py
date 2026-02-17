@@ -67,14 +67,14 @@ def _load_config(config_path: Path) -> dict:
 def _get_schedule_from_config(config_path: Path) -> dict:
     """
     Load [schedule] from config.toml. Reads scrape_every_hours, post_every_hours,
-    cleanup_every_hours, retrain_every_hours (floats supported, e.g. 0.5 for 30 min).
-    Returns scrape_every_minutes, post_every_minutes, cleanup_every_minutes,
-    retrain_every_minutes (defaults 360, 1440, 1440, 10080 if section missing).
+    retrain_every_hours (floats supported, e.g. 0.5 for 30 min).
+    Returns scrape_every_minutes, post_every_minutes, retrain_every_minutes
+    (defaults 360, 1440, 10080 if section missing). Cleanup is not scheduled;
+    run `main cleanup` manually when needed.
     """
     defaults_h = {
         "scrape_every_hours": 6.0,
         "post_every_hours": 24.0,
-        "cleanup_every_hours": 24.0,
         "retrain_every_hours": 168.0,  # weekly
     }
     if not config_path.exists():
@@ -105,17 +105,6 @@ def _get_schedule_from_config(config_path: Path) -> dict:
             int(
                 round(
                     float(s.get("post_every_hours", defaults_h["post_every_hours"]))
-                    * 60
-                )
-            ),
-        ),
-        "cleanup_every_minutes": max(
-            1,
-            int(
-                round(
-                    float(
-                        s.get("cleanup_every_hours", defaults_h["cleanup_every_hours"])
-                    )
                     * 60
                 )
             ),
@@ -418,17 +407,15 @@ def _run_schedule(
     output_folder: Path,
     data_dir: Path,
 ) -> None:
-    """Run scrape, post, cleanup, and retrain on intervals from config; exit on SIGTERM."""
+    """Run scrape, post, and retrain on intervals from config; exit on SIGTERM. Run cleanup manually when needed."""
     intervals = _get_schedule_from_config(config_path)
     scrape_m = intervals["scrape_every_minutes"]
     post_m = intervals["post_every_minutes"]
-    cleanup_m = intervals["cleanup_every_minutes"]
     retrain_m = intervals["retrain_every_minutes"]
     logger.info(
-        "Schedule: scrape every {}m, post every {}m, cleanup every {}m, retrain every {}m",
+        "Schedule: scrape every {}m, post every {}m, retrain every {}m",
         scrape_m,
         post_m,
-        cleanup_m,
         retrain_m,
     )
 
@@ -478,16 +465,6 @@ def _run_schedule(
         "--data_dir",
         str(data_dir),
     ]
-    base_cleanup = [
-        sys.executable,
-        "-m",
-        "main",
-        "cleanup",
-        "--db",
-        str(db_path),
-        "--data_dir",
-        str(data_dir),
-    ]
     base_train = [
         sys.executable,
         "-m",
@@ -518,17 +495,12 @@ def _run_schedule(
         logger.info("Scheduled post")
         subprocess.run(base_post, check=False)
 
-    def job_cleanup() -> None:
-        logger.info("Scheduled cleanup")
-        subprocess.run(base_cleanup, check=False)
-
     def job_retrain() -> None:
         logger.info("Scheduled retrain")
         subprocess.run(base_train, check=False)
 
     schedule.every(scrape_m).minutes.do(job_run)
     schedule.every(post_m).minutes.do(job_post)
-    schedule.every(cleanup_m).minutes.do(job_cleanup)
     schedule.every(retrain_m).minutes.do(job_retrain)
 
     job_run()  # initial scrape at startup so there is something to post
