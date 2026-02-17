@@ -1,4 +1,4 @@
-"""Local image captioning for alt text using BLIP."""
+"""Local image captioning for alt text using Moondream2."""
 
 import os
 from pathlib import Path
@@ -6,33 +6,48 @@ from pathlib import Path
 import torch
 from PIL import Image
 
-BLIP_MODEL_ID = "Salesforce/blip-image-captioning-base"
+MOONDREAM_MODEL_ID = "vikhyatk/moondream2"
+MOONDREAM_REVISION = "2025-06-21"
+
+
+def _detect_device() -> str:
+    """Return the best available torch device name."""
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
 
 def _get_model():
-    """Lazy-load BLIP processor and model (singleton). Loads from cache when possible."""
+    """Lazy-load Moondream2 model (singleton). Uses cache when available."""
     import logging
 
-    from transformers import BlipForConditionalGeneration, BlipProcessor
+    from transformers import AutoModelForCausalLM
     from transformers.utils import logging as tf_logging
 
-    # Load from cache only after first download; avoid network and verbose logs
     tf_logging.set_verbosity_error()
     prev = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    device = _detect_device()
+    dtype = torch.float16 if device == "cuda" else torch.float32
     try:
         try:
-            processor = BlipProcessor.from_pretrained(
-                BLIP_MODEL_ID, local_files_only=True
-            )
-            model = BlipForConditionalGeneration.from_pretrained(
-                BLIP_MODEL_ID, local_files_only=True
+            model = AutoModelForCausalLM.from_pretrained(
+                MOONDREAM_MODEL_ID,
+                revision=MOONDREAM_REVISION,
+                local_files_only=True,
+                trust_remote_code=True,
+                torch_dtype=dtype,
             )
         except (OSError, ValueError):
-            processor = BlipProcessor.from_pretrained(BLIP_MODEL_ID)
-            model = BlipForConditionalGeneration.from_pretrained(BLIP_MODEL_ID)
+            model = AutoModelForCausalLM.from_pretrained(
+                MOONDREAM_MODEL_ID,
+                revision=MOONDREAM_REVISION,
+                trust_remote_code=True,
+                torch_dtype=dtype,
+            )
+        model = model.to(device)
         model.eval()
-        return processor, model
+        return model
     finally:
         if prev is None:
             os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
@@ -41,7 +56,6 @@ def _get_model():
         tf_logging.set_verbosity(logging.WARNING)
 
 
-_processor = None
 _model = None
 
 
@@ -52,28 +66,25 @@ def describe_for_alt(
     """
     Generate a short description of the image for use as alt text.
 
-    Uses BLIP (Salesforce/blip-image-captioning-base) locally. Output is
-    trimmed to max_length characters to suit Mastodon's alt field.
+    Uses Moondream2 (vikhyatk/moondream2) locally. Output is trimmed to
+    max_length characters to suit Mastodon's alt field.
 
     Args:
         image_path: Path to the image file.
-        max_length: Maximum character length of the returned string. Default 125.
+        max_length: Max character length of the returned string. Default 125.
 
     Returns:
         A single-sentence description, truncated to max_length.
     """
-    global _processor, _model
-    if _processor is None or _model is None:
-        _processor, _model = _get_model()
+    global _model
+    if _model is None:
+        _model = _get_model()
 
     path = Path(image_path)
     img = Image.open(path).convert("RGB")
 
-    inputs = _processor(images=img, return_tensors="pt")
-    with torch.no_grad():
-        out = _model.generate(**inputs, max_new_tokens=50)
-
-    caption = _processor.decode(out[0], skip_special_tokens=True).strip()
+    result = _model.caption(img, length="short")
+    caption = (result.get("caption") or "").strip()
     if len(caption) > max_length:
         caption = caption[: max_length - 3].rsplit(" ", 1)[0] + "..."
     return caption or "Image"
