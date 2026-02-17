@@ -116,6 +116,129 @@ def test_main_post_saves_status_id_and_engagement_then_refreshes_others(
     assert "Posted" in caplog.text
 
 
+def test_post_run_summary_posts_artefacts_message_when_mastodon_configured() -> None:
+    """_post_run_summary posts text-only status with corpus/void counts when config has mastodon."""
+    from main import _post_run_summary
+
+    with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:
+        config_path = Path(f.name)
+    try:
+        with patch(
+            "main._load_config",
+            return_value={
+                "mastodon": {
+                    "base_url": "https://mastodon.example",
+                    "access_token": "token",
+                }
+            },
+        ):
+            with patch("main.mastodon_module.create_client") as create_mock:
+                with patch("main.mastodon_module.post_status") as post_mock:
+                    create_mock.return_value = MagicMock()
+                    _post_run_summary(
+                        config_path,
+                        corpus_count=3,
+                        void_count=7,
+                        unposted_count=0,
+                    )
+        post_mock.assert_called_once()
+        status_text = post_mock.call_args[0][1]
+        assert "3" in status_text and "7" in status_text
+        assert "corpus" in status_text and "void" in status_text
+        assert "artefacts" in status_text.lower()
+        assert "vault stands empty" in status_text
+    finally:
+        config_path.unlink(missing_ok=True)
+
+
+def test_post_run_summary_includes_unposted_vault_when_positive() -> None:
+    """_post_run_summary includes 'remain in the vault' and count when unposted_count > 0."""
+    from main import _post_run_summary
+
+    with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:
+        config_path = Path(f.name)
+    try:
+        with patch(
+            "main._load_config",
+            return_value={
+                "mastodon": {
+                    "base_url": "https://mastodon.example",
+                    "access_token": "token",
+                }
+            },
+        ):
+            with patch("main.mastodon_module.create_client") as create_mock:
+                with patch("main.mastodon_module.post_status") as post_mock:
+                    create_mock.return_value = MagicMock()
+                    _post_run_summary(
+                        config_path,
+                        corpus_count=1,
+                        void_count=2,
+                        unposted_count=42,
+                    )
+        status_text = post_mock.call_args[0][1]
+        assert "42" in status_text
+        assert "remain in the vault" in status_text
+        assert "awaiting the hour" in status_text
+    finally:
+        config_path.unlink(missing_ok=True)
+
+
+def test_post_run_summary_skips_when_mastodon_config_missing() -> None:
+    """_post_run_summary does not call post_status when mastodon base_url or token is empty."""
+    from main import _post_run_summary
+
+    config_path = Path("/nonexistent/config.toml")
+    with patch(
+        "main._load_config",
+        return_value={"mastodon": {"base_url": "", "access_token": "token"}},
+    ):
+        with patch("main.mastodon_module.post_status") as post_mock:
+            _post_run_summary(config_path, corpus_count=1, void_count=0)
+    post_mock.assert_not_called()
+
+
+def test_post_retrain_summary_posts_ominous_message_when_mastodon_configured() -> None:
+    """_post_retrain_summary posts text-only status with retrain wording when config has mastodon."""
+    from main import _post_retrain_summary
+
+    with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as f:
+        config_path = Path(f.name)
+    try:
+        with patch(
+            "main._load_config",
+            return_value={
+                "mastodon": {
+                    "base_url": "https://mastodon.example",
+                    "access_token": "token",
+                }
+            },
+        ):
+            with patch("main.mastodon_module.create_client") as create_mock:
+                with patch("main.mastodon_module.post_status") as post_mock:
+                    create_mock.return_value = MagicMock()
+                    _post_retrain_summary(config_path)
+        post_mock.assert_called_once()
+        status_text = post_mock.call_args[0][1]
+        assert "discernment" in status_text or "Pondering" in status_text
+    finally:
+        config_path.unlink(missing_ok=True)
+
+
+def test_post_retrain_summary_skips_when_mastodon_config_missing() -> None:
+    """_post_retrain_summary does not call post_status when mastodon config is empty."""
+    from main import _post_retrain_summary
+
+    config_path = Path("/nonexistent/config.toml")
+    with patch(
+        "main._load_config",
+        return_value={"mastodon": {"base_url": "https://x.com", "access_token": ""}},
+    ):
+        with patch("main.mastodon_module.post_status") as post_mock:
+            _post_retrain_summary(config_path)
+    post_mock.assert_not_called()
+
+
 def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
     """_get_schedule_from_config returns default intervals (in minutes) when file or [schedule] missing."""
     from main import _get_schedule_from_config

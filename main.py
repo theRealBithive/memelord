@@ -185,6 +185,71 @@ def _log_top_posts_by_engagement(limit: int = 10) -> None:
         )
 
 
+def _post_run_summary(
+    config_path: Path,
+    corpus_count: int,
+    void_count: int,
+    unposted_count: int = 0,
+) -> None:
+    """Post an ominous artefacts summary to Mastodon (text-only status)."""
+    if not config_path.exists():
+        logger.warning("Config {} not found; skipping run summary post.", config_path)
+        return
+    cfg = _load_config(config_path)
+    base_url = cfg["mastodon"]["base_url"]
+    access_token = cfg["mastodon"]["access_token"]
+    if not base_url or not access_token:
+        logger.warning(
+            "Mastodon config missing in {}; skipping run summary post.", config_path
+        )
+        return
+    # Ominous wording: artefacts, corpus, void, vault/stock
+    if corpus_count == 0 and void_count == 0:
+        base = "Acquired new artefacts. None deemed worthy of the corpus; none cast into the void."
+    else:
+        base = (
+            f"Acquired new artefacts. {corpus_count} have been added to the corpus "
+            f"and {void_count} cast into the void."
+        )
+    if unposted_count > 0:
+        status_text = f"{base} {unposted_count} remain in the vault, awaiting the hour."
+    else:
+        status_text = f"{base} The vault stands empty."
+    try:
+        client = mastodon_module.create_client(base_url, access_token)
+        mastodon_module.post_status(client, status_text)
+        logger.info(
+            "Posted run summary to Mastodon: {}",
+            status_text[:57] + "…" if len(status_text) > 60 else status_text,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to post run summary to Mastodon: {}", e)
+
+
+def _post_retrain_summary(config_path: Path) -> None:
+    """Post an ominous retrain notice to Mastodon (text-only status)."""
+    if not config_path.exists():
+        logger.warning(
+            "Config {} not found; skipping retrain summary post.", config_path
+        )
+        return
+    cfg = _load_config(config_path)
+    base_url = cfg["mastodon"]["base_url"]
+    access_token = cfg["mastodon"]["access_token"]
+    if not base_url or not access_token:
+        logger.warning(
+            "Mastodon config missing in {}; skipping retrain summary post.", config_path
+        )
+        return
+    status_text = "Pondering the means of discernment anew."
+    try:
+        client = mastodon_module.create_client(base_url, access_token)
+        mastodon_module.post_status(client, status_text)
+        logger.info("Posted retrain summary to Mastodon: {}", status_text)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to post retrain summary to Mastodon: {}", e)
+
+
 def _skip_dirs(data_dir: Path | None, output_folder: Path) -> list[Path]:
     """skip_dirs: data corpus/void + output corpus/void to avoid re-download."""
     out = []
@@ -452,6 +517,7 @@ def _run_schedule(
         str(output_folder),
         "--data_dir",
         str(data_dir),
+        "--post_summary",
     ]
     base_post = [
         sys.executable,
@@ -474,6 +540,9 @@ def _run_schedule(
         str(data_dir),
         "--weights",
         str(weights_path),
+        "--config",
+        str(config_path),
+        "--post_summary",
     ]
     if db_path.exists():
         base_train.extend(["--db", str(db_path)])
@@ -611,6 +680,11 @@ def main() -> None:
         default=Path("data/janulon.db"),
         help="SQLite database for dedup and judged image index. Default: data/janulon.db",
     )
+    run_parser.add_argument(
+        "--post_summary",
+        action="store_true",
+        help="Post an artefacts summary to Mastodon after judging (requires config with [mastodon]).",
+    )
 
     import_parser = subparsers.add_parser(
         "import-data",
@@ -690,6 +764,17 @@ def main() -> None:
         type=Path,
         default=None,
         help="Optional SQLite DB path for engagement-weighted retrain (faves +0.5*replies +2*reblogs).",
+    )
+    train_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(_CONFIG_DEFAULT),
+        help="Config file for --post_summary (Mastodon). Default: config.toml",
+    )
+    train_parser.add_argument(
+        "--post_summary",
+        action="store_true",
+        help="Post a retrain notice to Mastodon after training (requires config with [mastodon]).",
     )
 
     schedule_parser = subparsers.add_parser(
@@ -791,6 +876,8 @@ def main() -> None:
             weights_path=args.weights,
             db_path=args.db,
         )
+        if args.post_summary:
+            _post_retrain_summary(Path(args.config))
         return
 
     if args.command == "schedule":
@@ -900,6 +987,15 @@ def main() -> None:
             )
             for dest_path, location in moved:
                 _insert_judged_image(dest_path, location, data_root=output_folder)
+
+            if args.post_summary and moved:
+                unposted = db.count_unposted_corpus_images(args.data_dir)
+                _post_run_summary(
+                    config_path=Path(args.config),
+                    corpus_count=sum(1 for _, loc in moved if loc == "corpus"),
+                    void_count=sum(1 for _, loc in moved if loc == "void"),
+                    unposted_count=unposted,
+                )
 
 
 if __name__ == "__main__":

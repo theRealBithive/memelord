@@ -172,6 +172,26 @@ def get_random_unposted_corpus_image(data_root: Path | str):  # noqa: ANN201
     return None
 
 
+def count_unposted_corpus_images(data_root: Path | str) -> int:
+    """
+    Return the number of corpus images not yet posted (and with file on disk).
+
+    Same eligibility as get_random_unposted_corpus_image: location corpus,
+    posted_at null, file_deleted false, file exists. Call init_db first.
+    """
+    root = Path(data_root)
+    candidates = list(
+        Image.select().where(
+            Image.location == "corpus",
+            Image.posted_at.is_null(),
+            Image.file_deleted == False,
+        )
+    )
+    return sum(
+        1 for row in candidates if resolve_file_path(root, row.file_path).exists()
+    )
+
+
 def get_posted_images_with_status():  # noqa: ANN201
     """
     Return all Image rows that have been posted and have a Mastodon status ID.

@@ -308,6 +308,51 @@ def test_get_random_unposted_corpus_image_returns_one_when_file_exists(
         assert db.resolve_file_path(tmp_path, row.file_path).exists()
 
 
+def test_count_unposted_corpus_images_counts_only_unposted_corpus_with_existing_file(
+    database: SqliteDatabase,
+) -> None:
+    """count_unposted_corpus_images returns count of corpus rows with posted_at null and file on disk."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "corpus").mkdir()
+        a = root / "corpus" / "a.png"
+        b = root / "corpus" / "b.png"
+        a.write_bytes(minimal_png_bytes())
+        b.write_bytes(minimal_png_bytes())
+        db.Image.create(
+            content_hash="h1",
+            file_path="corpus/a.png",
+            source_label="wg",
+            location="corpus",
+        )
+        db.Image.create(
+            content_hash="h2",
+            file_path="corpus/b.png",
+            source_label="wg",
+            location="corpus",
+        )
+        assert db.count_unposted_corpus_images(root) == 2
+        row = db.Image.get(db.Image.content_hash == "h1")
+        row.posted_at = datetime.now(timezone.utc)
+        row.save()
+        assert db.count_unposted_corpus_images(root) == 1
+        # void and missing file are not counted
+        db.Image.create(
+            content_hash="h3",
+            file_path="corpus/c.png",
+            source_label="wg",
+            location="corpus",
+        )
+        assert db.count_unposted_corpus_images(root) == 1  # c.png does not exist
+        db.Image.create(
+            content_hash="h4",
+            file_path="void/d.png",
+            source_label="wg",
+            location="void",
+        )
+        assert db.count_unposted_corpus_images(root) == 1
+
+
 def test_cleanup_void_files_removes_void_only_keeps_posted_corpus() -> None:
     """cleanup_void_files deletes void files only; posted and unposted corpus files are kept."""
     with tempfile.TemporaryDirectory() as tmp:
