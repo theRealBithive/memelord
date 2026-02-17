@@ -17,10 +17,10 @@ base_url = "https://mastodon.social/"
 # access_token can be set here or via env MASTODON_ACCESS_TOKEN
 access_token = " REDACTED "
 
-# Schedule: for "schedule" command (run scrape/post/cleanup/retrain on intervals).
+# Schedule: for "schedule" command (run scrape/post/retrain on intervals).
+# Cleanup is not scheduled; run `python -m main cleanup` manually when needed.
 # Values are in hours; fractional allowed (e.g. post_every_hours = 0.5 for 30 min).
 [schedule]
 scrape_every_hours = 6
 post_every_hours = 0.333
-cleanup_every_hours = 24
 retrain_every_hours = 168
