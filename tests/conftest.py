@@ -1,10 +1,33 @@
-"""Pytest configuration: make loguru output visible to caplog."""
+"""Pytest configuration: loguru routing and integration-test gating."""
 
 import io
 
 import pytest
 from loguru import logger
 from PIL import Image
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Add --run-integration CLI flag."""
+    parser.addoption(
+        "--run-integration",
+        action="store_true",
+        default=False,
+        help="Run slow integration tests (model download, network).",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Skip tests marked ``integration`` unless --run-integration is given."""
+    if config.getoption("--run-integration"):
+        return
+    skip = pytest.mark.skip(reason="needs --run-integration flag")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip)
 
 
 def minimal_png_bytes() -> bytes:

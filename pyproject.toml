@@ -13,13 +13,18 @@ dependencies = [
     "playwright>=1.40",
     "peewee>=3.19.0",
     "mastodon-py>=2.1.4",
-    "accelerate>=1.0.0",
+    "num2words>=0.5.0",
     "transformers>=4.45.0",
     "schedule>=1.2.2",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: slow tests that load real models or need network access",
+]
 
 [build-system]
 requires = ["setuptools>=61"]
