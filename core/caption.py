@@ -1,13 +1,12 @@
-"""Local image captioning for alt text using Moondream2."""
+"""Local image captioning for alt text using SmolVLM2."""
 
 import os
 from pathlib import Path
 
 import torch
-from PIL import Image
 
-MOONDREAM_MODEL_ID = "vikhyatk/moondream2"
-MOONDREAM_REVISION = "2025-06-21"
+MODEL_ID = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+ALT_TEXT_PROMPT = "Describe this image in one sentence for alt text."
 
 
 def _detect_device() -> str:
@@ -18,36 +17,40 @@ def _detect_device() -> str:
 
 
 def _get_model():
-    """Lazy-load Moondream2 model (singleton). Uses cache when available."""
+    """Lazy-load SmolVLM2 model and processor (singleton). Uses cache when available."""
     import logging
 
-    from transformers import AutoModelForCausalLM
+    from transformers import AutoModelForImageTextToText, AutoProcessor
     from transformers.utils import logging as tf_logging
 
     tf_logging.set_verbosity_error()
     prev = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     device = _detect_device()
-    dtype = torch.float16 if device == "cuda" else torch.float32
+    dtype = torch.float32
+    attn = "eager"
     try:
         try:
-            model = AutoModelForCausalLM.from_pretrained(
-                MOONDREAM_MODEL_ID,
-                revision=MOONDREAM_REVISION,
+            processor = AutoProcessor.from_pretrained(
+                MODEL_ID,
                 local_files_only=True,
-                trust_remote_code=True,
+            )
+            model = AutoModelForImageTextToText.from_pretrained(
+                MODEL_ID,
                 torch_dtype=dtype,
+                _attn_implementation=attn,
+                local_files_only=True,
             )
         except (OSError, ValueError):
-            model = AutoModelForCausalLM.from_pretrained(
-                MOONDREAM_MODEL_ID,
-                revision=MOONDREAM_REVISION,
-                trust_remote_code=True,
+            processor = AutoProcessor.from_pretrained(MODEL_ID)
+            model = AutoModelForImageTextToText.from_pretrained(
+                MODEL_ID,
                 torch_dtype=dtype,
+                _attn_implementation=attn,
             )
         model = model.to(device)
         model.eval()
-        return model
+        return model, processor
     finally:
         if prev is None:
             os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
@@ -57,6 +60,7 @@ def _get_model():
 
 
 _model = None
+_processor = None
 
 
 def describe_for_alt(
@@ -66,8 +70,8 @@ def describe_for_alt(
     """
     Generate a short description of the image for use as alt text.
 
-    Uses Moondream2 (vikhyatk/moondream2) locally. Output is trimmed to
-    max_length characters to suit Mastodon's alt field.
+    Uses SmolVLM2 (HuggingFaceTB/SmolVLM2-500M-Video-Instruct) locally.
+    Output is trimmed to max_length characters to suit Mastodon's alt field.
 
     Args:
         image_path: Path to the image file.
@@ -76,15 +80,41 @@ def describe_for_alt(
     Returns:
         A single-sentence description, truncated to max_length.
     """
-    global _model
+    global _model, _processor
     if _model is None:
-        _model = _get_model()
+        _model, _processor = _get_model()
 
     path = Path(image_path)
-    img = Image.open(path).convert("RGB")
+    # Ensure path is absolute so the processor can load the image
+    path = path.resolve()
 
-    result = _model.caption(img, length="short")
-    caption = (result.get("caption") or "").strip()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "path": str(path)},
+                {"type": "text", "text": ALT_TEXT_PROMPT},
+            ],
+        },
+    ]
+    inputs = _processor.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(_model.device, dtype=torch.float32)
+
+    generated_ids = _model.generate(
+        **inputs,
+        do_sample=False,
+        max_new_tokens=128,
+    )
+    generated_texts = _processor.batch_decode(
+        generated_ids,
+        skip_special_tokens=True,
+    )
+    caption = (generated_texts[0] or "").strip()
     if len(caption) > max_length:
         caption = caption[: max_length - 3].rsplit(" ", 1)[0] + "..."
     return caption or "Image"
