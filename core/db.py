@@ -242,10 +242,14 @@ def get_posted_engagement_weights():  # noqa: ANN201
     """
     Return dict mapping file_path (normalized) -> engagement weight for training.
 
-    Only includes posted images that have engagement data. Call init_db first.
+    Only includes posted corpus images (void images are not weighted). Call init_db first.
     Keys use forward slashes for portability.
     """
-    rows = get_posted_images_with_status()
+    rows = [
+        r
+        for r in get_posted_images_with_status()
+        if (r.location or "").strip() == "corpus"
+    ]
     out: dict[str, float] = {}
     for row in rows:
         f = row.engagement_favourites or 0
@@ -371,3 +375,64 @@ def cleanup_void_files(db_path: Path | str, data_root: Path | str) -> int:
             except OSError:
                 continue
     return removed
+
+
+def sync_db_to_filesystem(
+    data_root: Path | str, db_path: Path | str
+) -> tuple[int, int]:
+    """
+    Align the DB with the filesystem: mark rows as file_deleted when the file
+    is missing; update file_path and location when files were moved between
+    corpus and void. When the same content exists in both dirs, corpus wins.
+
+    Returns:
+        (marked_deleted_count, updated_count).
+    """
+    from core import brain as brain_module
+
+    init_db(db_path)
+    root = Path(data_root)
+    marked_deleted = 0
+    updated = 0
+
+    for row in Image.select().where(Image.file_deleted == False):
+        path = resolve_file_path(root, row.file_path)
+        if not path.is_file():
+            row.file_deleted = True
+            row.save()
+            marked_deleted += 1
+
+    corpus_dir = root / "corpus"
+    void_dir = root / "void"
+    corpus_hashes: set[str] = set()
+
+    for dir_path, location in [(corpus_dir, "corpus"), (void_dir, "void")]:
+        if not dir_path.is_dir():
+            continue
+        for path in sorted(dir_path.iterdir()):
+            if not path.is_file() or not brain_module.is_image_path(path):
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            content_hash = hashlib.sha256(raw).hexdigest()
+            if location == "corpus":
+                corpus_hashes.add(content_hash)
+            elif content_hash in corpus_hashes:
+                continue
+            row = Image.get_or_none(Image.content_hash == content_hash)
+            if row is None:
+                continue
+            try:
+                file_path_str = str(path.relative_to(root)).replace("\\", "/")
+            except ValueError:
+                file_path_str = path.as_posix()
+            if row.file_path != file_path_str or row.location != location:
+                row.file_path = file_path_str
+                row.location = location
+                row.file_deleted = False
+                row.save()
+                updated += 1
+
+    return marked_deleted, updated

@@ -1,5 +1,6 @@
 """Tests for core.db: database init and Image model."""
 
+import hashlib
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -520,6 +521,107 @@ def test_get_posted_engagement_weights_returns_map(database: SqliteDatabase) -> 
     )
     weights = db.get_posted_engagement_weights()
     assert weights == {"corpus/one.jpg": 4.0, "corpus/two.jpg": 5.0}  # 2+2*1; 2*2+0.5*2
+
+
+def test_get_posted_engagement_weights_excludes_void(database: SqliteDatabase) -> None:
+    """get_posted_engagement_weights only includes corpus images; void are not weighted."""
+    now = datetime.now(timezone.utc)
+    db.Image.create(
+        content_hash="corpus_posted",
+        file_path="corpus/keep.jpg",
+        source_label="wg",
+        location="corpus",
+        posted_at=now,
+        mastodon_status_id="1",
+        engagement_favourites=1,
+    )
+    db.Image.create(
+        content_hash="void_posted",
+        file_path="void/drop.jpg",
+        source_label="wg",
+        location="void",
+        posted_at=now,
+        mastodon_status_id="2",
+        engagement_favourites=5,
+    )
+    weights = db.get_posted_engagement_weights()
+    assert list(weights.keys()) == ["corpus/keep.jpg"]
+    assert weights["corpus/keep.jpg"] == 1.0
+
+
+def test_sync_marks_missing_file_as_deleted() -> None:
+    """sync_db_to_filesystem sets file_deleted=True when the file is missing."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir(parents=True)
+        (data_dir / "void").mkdir(parents=True)
+        db_path = data_dir / "sync.db"
+        db.init_db(db_path)
+        db.Image.create(
+            content_hash="missing123",
+            file_path="corpus/nonexistent.jpg",
+            source_label="wg",
+            location="corpus",
+            file_deleted=False,
+        )
+        marked, updated = db.sync_db_to_filesystem(data_dir, db_path)
+    assert marked == 1
+    assert updated == 0
+    row = db.Image.get_by_id("missing123")
+    assert row.file_deleted is True
+
+
+def test_sync_updates_path_and_location_when_moved() -> None:
+    """sync_db_to_filesystem updates file_path and location when file is in void."""
+    png = minimal_png_bytes()
+    content_hash = hashlib.sha256(png).hexdigest()
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir(parents=True)
+        (data_dir / "void").mkdir(parents=True)
+        (data_dir / "void" / "moved.png").write_bytes(png)
+        db_path = data_dir / "sync2.db"
+        db.init_db(db_path)
+        db.Image.create(
+            content_hash=content_hash,
+            file_path="corpus/was_here.png",
+            source_label="wg",
+            location="corpus",
+            file_deleted=False,
+        )
+        marked, updated = db.sync_db_to_filesystem(data_dir, db_path)
+    assert marked == 1
+    assert updated == 1
+    row = db.Image.get_by_id(content_hash)
+    assert row.file_path == "void/moved.png"
+    assert row.location == "void"
+    assert row.file_deleted is False
+
+
+def test_sync_same_hash_in_corpus_and_void_stays_corpus() -> None:
+    """When the same file exists in both corpus and void, sync keeps location corpus."""
+    png = minimal_png_bytes()
+    content_hash = hashlib.sha256(png).hexdigest()
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir(parents=True)
+        (data_dir / "void").mkdir(parents=True)
+        (data_dir / "corpus" / "a.png").write_bytes(png)
+        (data_dir / "void" / "b.png").write_bytes(png)
+        db_path = data_dir / "sync3.db"
+        db.init_db(db_path)
+        db.Image.create(
+            content_hash=content_hash,
+            file_path="corpus/a.png",
+            source_label="wg",
+            location="corpus",
+            file_deleted=False,
+        )
+        marked, _ = db.sync_db_to_filesystem(data_dir, db_path)
+    assert marked == 0
+    row = db.Image.get_by_id(content_hash)
+    assert row.location == "corpus"
+    assert "corpus" in row.file_path
 
 
 def test_get_top_posted_by_engagement_returns_sorted_by_faves_plus_reblogs(

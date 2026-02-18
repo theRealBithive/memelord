@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import torch
 
 from core import caption
 from tests.conftest import minimal_png_bytes
@@ -77,6 +78,33 @@ def test_describe_for_alt_truncates_long_caption(tmp_path: Path) -> None:
             result = caption.describe_for_alt(img, max_length=30)
     assert result.endswith("...")
     assert len(result) <= 30
+
+
+def test_describe_for_alt_decodes_only_new_tokens(tmp_path: Path) -> None:
+    """batch_decode is called with only the newly generated tokens, not the full prompt."""
+    img = tmp_path / "tiny.png"
+    img.write_bytes(minimal_png_bytes())
+    input_length = 100
+    num_new_tokens = 20
+    mock_model = MagicMock()
+    mock_processor = MagicMock()
+    mock_inputs = MagicMock()
+    mock_inputs["input_ids"].shape = (1, input_length)
+    mock_processor.apply_chat_template.return_value.to.return_value = mock_inputs
+    mock_model.generate.return_value = torch.zeros(
+        1, input_length + num_new_tokens, dtype=torch.long
+    )
+    mock_processor.batch_decode.return_value = ["A scenic landscape."]
+    with (
+        patch.object(caption, "_model", None),
+        patch.object(caption, "_processor", None),
+    ):
+        with patch("core.caption._get_model") as mock_get:
+            mock_get.return_value = (mock_model, mock_processor)
+            caption.describe_for_alt(img, max_length=125)
+    mock_processor.batch_decode.assert_called_once()
+    (decode_arg,) = mock_processor.batch_decode.call_args[0]
+    assert decode_arg.shape == (1, num_new_tokens)
 
 
 # ---------------------------------------------------------------------------

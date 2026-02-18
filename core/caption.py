@@ -110,8 +110,10 @@ def describe_for_alt(
         do_sample=False,
         max_new_tokens=128,
     )
+    input_length = inputs["input_ids"].shape[1]
+    new_token_ids = generated_ids[:, input_length:]
     generated_texts = _processor.batch_decode(
-        generated_ids,
+        new_token_ids,
         skip_special_tokens=True,
     )
     caption = (generated_texts[0] or "").strip()

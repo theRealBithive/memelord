@@ -67,15 +67,15 @@ def _load_config(config_path: Path) -> dict:
 def _get_schedule_from_config(config_path: Path) -> dict:
     """
     Load [schedule] from config.toml. Reads scrape_every_hours, post_every_hours,
-    retrain_every_hours (floats supported, e.g. 0.5 for 30 min).
-    Returns scrape_every_minutes, post_every_minutes, retrain_every_minutes
-    (defaults 360, 1440, 10080 if section missing). Cleanup is not scheduled;
-    run `main cleanup` manually when needed.
+    retrain_every_hours, sync_every_hours (floats supported, e.g. 0.5 for 30 min).
+    Returns *_every_minutes for each (defaults 360, 1440, 10080, 2880 if missing).
+    Cleanup is not scheduled; run `main cleanup` manually when needed.
     """
     defaults_h = {
         "scrape_every_hours": 6.0,
         "post_every_hours": 24.0,
         "retrain_every_hours": 168.0,  # weekly
+        "sync_every_hours": 48.0,
     }
     if not config_path.exists():
         return {
@@ -119,6 +119,15 @@ def _get_schedule_from_config(config_path: Path) -> dict:
                             defaults_h["retrain_every_hours"],
                         )
                     )
+                    * 60
+                )
+            ),
+        ),
+        "sync_every_minutes": max(
+            1,
+            int(
+                round(
+                    float(s.get("sync_every_hours", defaults_h["sync_every_hours"]))
                     * 60
                 )
             ),
@@ -248,6 +257,29 @@ def _post_retrain_summary(config_path: Path) -> None:
         logger.info("Posted retrain summary to Mastodon: {}", status_text)
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to post retrain summary to Mastodon: {}", e)
+
+
+def _post_sync_summary(config_path: Path) -> None:
+    """Post an ominous sync notice to Mastodon (text-only status)."""
+    if not config_path.exists():
+        logger.warning("Config {} not found; skipping sync summary post.", config_path)
+        return
+    cfg = _load_config(config_path)
+    base_url = cfg["mastodon"]["base_url"]
+    access_token = cfg["mastodon"]["access_token"]
+    if not base_url or not access_token:
+        logger.warning(
+            "Mastodon config missing in {}; skipping sync summary post.",
+            config_path,
+        )
+        return
+    status_text = "Alignment with reality restored."
+    try:
+        client = mastodon_module.create_client(base_url, access_token)
+        mastodon_module.post_status(client, status_text)
+        logger.info("Posted sync summary to Mastodon: {}", status_text)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to post sync summary to Mastodon: {}", e)
 
 
 def _skip_dirs(data_dir: Path | None, output_folder: Path) -> list[Path]:
@@ -477,11 +509,13 @@ def _run_schedule(
     scrape_m = intervals["scrape_every_minutes"]
     post_m = intervals["post_every_minutes"]
     retrain_m = intervals["retrain_every_minutes"]
+    sync_m = intervals["sync_every_minutes"]
     logger.info(
-        "Schedule: scrape every {}m, post every {}m, retrain every {}m",
+        "Schedule: scrape every {}m, post every {}m, retrain every {}m, sync every {}m",
         scrape_m,
         post_m,
         retrain_m,
+        sync_m,
     )
 
     if not weights_path.exists():
@@ -547,6 +581,20 @@ def _run_schedule(
     if db_path.exists():
         base_train.extend(["--db", str(db_path)])
 
+    base_sync = [
+        sys.executable,
+        "-m",
+        "main",
+        "sync",
+        "--db",
+        str(db_path),
+        "--data_dir",
+        str(data_dir),
+        "--config",
+        str(config_path),
+        "--post_summary",
+    ]
+
     shutdown = False
 
     def on_signal(_signum: int, _frame: object) -> None:
@@ -568,9 +616,14 @@ def _run_schedule(
         logger.info("Scheduled retrain")
         subprocess.run(base_train, check=False)
 
+    def job_sync() -> None:
+        logger.info("Scheduled sync")
+        subprocess.run(base_sync, check=False)
+
     schedule.every(scrape_m).minutes.do(job_run)
     schedule.every(post_m).minutes.do(job_post)
     schedule.every(retrain_m).minutes.do(job_retrain)
+    schedule.every(sync_m).minutes.do(job_sync)
 
     job_run()  # initial scrape at startup so there is something to post
 
@@ -743,6 +796,34 @@ def main() -> None:
         help="Data root (corpus/void live here). Default: data",
     )
 
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Align DB with filesystem: mark missing files, update path/location if moved.",
+    )
+    sync_parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("data/janulon.db"),
+        help="SQLite database path. Default: data/janulon.db",
+    )
+    sync_parser.add_argument(
+        "--data_dir",
+        type=Path,
+        default=Path("data"),
+        help="Data root (corpus/void live here). Default: data",
+    )
+    sync_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(_CONFIG_DEFAULT),
+        help="Config for --post_summary (Mastodon). Default: config.toml",
+    )
+    sync_parser.add_argument(
+        "--post_summary",
+        action="store_true",
+        help="Post a sync notice to Mastodon after syncing (requires [mastodon]).",
+    )
+
     train_parser = subparsers.add_parser(
         "train",
         help="Train or retrain the classifier on data_dir/corpus and data_dir/void (optional --db for engagement weights).",
@@ -866,6 +947,17 @@ def main() -> None:
     if args.command == "cleanup":
         removed = db.cleanup_void_files(args.db, args.data_dir)
         logger.info("Cleanup removed {} void file(s) from disk.", removed)
+        return
+
+    if args.command == "sync":
+        marked, updated = db.sync_db_to_filesystem(args.data_dir, args.db)
+        logger.info(
+            "Sync: {} entries marked missing, {} entries updated path/location.",
+            marked,
+            updated,
+        )
+        if args.post_summary:
+            _post_sync_summary(Path(args.config))
         return
 
     if args.command == "train":
