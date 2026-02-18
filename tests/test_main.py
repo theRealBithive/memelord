@@ -239,6 +239,20 @@ def test_post_retrain_summary_skips_when_mastodon_config_missing() -> None:
     post_mock.assert_not_called()
 
 
+def test_post_sync_summary_skips_when_mastodon_config_missing() -> None:
+    """_post_sync_summary does not call post_status when mastodon config is empty."""
+    from main import _post_sync_summary
+
+    config_path = Path("/nonexistent/config.toml")
+    with patch(
+        "main._load_config",
+        return_value={"mastodon": {"base_url": "https://x.com", "access_token": ""}},
+    ):
+        with patch("main.mastodon_module.post_status") as post_mock:
+            _post_sync_summary(config_path)
+    post_mock.assert_not_called()
+
+
 def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
     """_get_schedule_from_config returns default intervals (in minutes) when file or [schedule] missing."""
     from main import _get_schedule_from_config
@@ -249,6 +263,7 @@ def test_get_schedule_from_config_returns_defaults_when_missing() -> None:
     assert out["scrape_every_minutes"] == 360
     assert out["post_every_minutes"] == 1440
     assert out["retrain_every_minutes"] == 10080  # 168h default
+    assert out["sync_every_minutes"] == 2880  # 48h default
 
 
 def test_get_schedule_from_config_returns_values_from_file() -> None:
@@ -268,6 +283,7 @@ def test_get_schedule_from_config_returns_values_from_file() -> None:
         assert out["scrape_every_minutes"] == 120
         assert out["post_every_minutes"] == 720
         assert out["retrain_every_minutes"] == 1440
+        assert out["sync_every_minutes"] == 2880
     finally:
         path.unlink(missing_ok=True)
 
@@ -284,6 +300,7 @@ def test_get_schedule_from_config_accepts_fractional_hours() -> None:
         assert out["scrape_every_minutes"] == 360
         assert out["post_every_minutes"] == 30
         assert out["retrain_every_minutes"] == 10080
+        assert out["sync_every_minutes"] == 2880
     finally:
         path.unlink(missing_ok=True)
 
