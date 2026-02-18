@@ -150,3 +150,47 @@ def fetch_status_engagement(client: Mastodon, status_id: str | int) -> dict[str,
     sid = int(status_id) if isinstance(status_id, str) else status_id
     status = client.status(sid)
     return engagement_from_status(status)
+
+
+def resolve_remote_url(client: Mastodon, url: str) -> str | None:
+    """
+    Resolve a remote post URL (e.g. Pixelfed or Mastodon) to a status ID on this instance.
+
+    Uses the search API with resolve=True so the instance fetches the remote object
+    and returns a local status id that can be used for reblog, etc.
+    Requires authenticated client with read:search scope.
+
+    Args:
+        client: Authenticated Mastodon client.
+        url: Full URL of the remote post (e.g. https://pixelfed.social/p/user/123).
+
+    Returns:
+        The status id (string) of the resolved status, or None if not found.
+    """
+    result = client.search_v2(q=url, resolve=True)
+    statuses = (
+        result.get("statuses")
+        if isinstance(result, dict)
+        else getattr(result, "statuses", None)
+    )
+    if not statuses:
+        return None
+    first = statuses[0]
+    return str(first.get("id") if isinstance(first, dict) else getattr(first, "id", ""))
+
+
+def boost_status(client: Mastodon, status_id: str | int) -> dict:
+    """
+    Boost (reblog) a status. Use after resolve_remote_url to repost a remote post.
+
+    Args:
+        client: Authenticated Mastodon client.
+        status_id: The status ID (string or int) to boost.
+
+    Returns:
+        The Status dict or object returned by the API (usable with engagement_from_status).
+
+    Raises:
+        MastodonAPIError: On reblog failure.
+    """
+    return client.status_reblog(status_id)

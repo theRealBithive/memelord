@@ -1,5 +1,6 @@
 """Tests for main CLI."""
 
+import hashlib
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -93,20 +94,21 @@ def test_main_post_saves_status_id_and_engagement_then_refreshes_others(
                                 with patch(
                                     "main._refresh_posted_engagement",
                                 ) as refresh_mock:
-                                    with patch(
-                                        "sys.argv",
-                                        [
-                                            "main.py",
-                                            "post",
-                                            "--config",
-                                            str(config_path),
-                                            "--db",
-                                            str(db_path),
-                                            "--data_dir",
-                                            str(data_dir),
-                                        ],
-                                    ):
-                                        main()
+                                    with patch("main._log_top_posts_by_engagement"):
+                                        with patch(
+                                            "sys.argv",
+                                            [
+                                                "main.py",
+                                                "post",
+                                                "--config",
+                                                str(config_path),
+                                                "--db",
+                                                str(db_path),
+                                                "--data_dir",
+                                                str(data_dir),
+                                            ],
+                                        ):
+                                            main()
         update_eng.assert_called_once()
         assert update_eng.call_args[0][1] == 1  # favourites_count
         assert update_eng.call_args[0][2] == 0  # reblogs_count
@@ -114,6 +116,77 @@ def test_main_post_saves_status_id_and_engagement_then_refreshes_others(
         refresh_mock.assert_called_once()
         assert refresh_mock.call_args[1]["exclude_content_hash"] == "abc123"
     assert "Posted" in caplog.text
+
+
+def test_main_post_boosts_when_source_label_is_pixelfed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When chosen corpus image has source_label pixelfed and source_url, post resolves URL and boosts instead of uploading."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "corpus").mkdir()
+        db_path = data_dir / "janulon.db"
+        config_path = data_dir / "config.toml"
+        config_path.write_text(
+            '[mastodon]\nbase_url = "https://example.com"\naccess_token = "token"\n'
+        )
+        mock_row = MagicMock()
+        mock_row.content_hash = "pix123"
+        mock_row.file_path = "corpus/pixelfed_0_photo.jpg"
+        mock_row.source_label = "pixelfed"
+        mock_row.source_url = "https://pixelfed.social/p/user/42"
+        status_response = {
+            "id": 111222,
+            "favourites_count": 0,
+            "reblogs_count": 1,
+            "replies_count": 0,
+        }
+        with patch("main.db.init_db"):
+            with patch(
+                "main.db.get_random_unposted_corpus_image",
+                return_value=mock_row,
+            ):
+                with patch(
+                    "main.db.resolve_file_path",
+                    return_value=data_dir / "corpus" / "pixelfed_0_photo.jpg",
+                ):
+                    with patch(
+                        "main.mastodon_module.resolve_remote_url",
+                        return_value="98765",
+                    ) as resolve_mock:
+                        with patch(
+                            "main.mastodon_module.boost_status",
+                            return_value=status_response,
+                        ) as boost_mock:
+                            with patch(
+                                "main.mastodon_module.post_image"
+                            ) as post_image_mock:
+                                with patch(
+                                    "main.db.update_image_engagement"
+                                ) as update_eng:
+                                    with patch("main._refresh_posted_engagement"):
+                                        with patch("main._log_top_posts_by_engagement"):
+                                            with patch(
+                                                "sys.argv",
+                                                [
+                                                    "main.py",
+                                                    "post",
+                                                    "--config",
+                                                    str(config_path),
+                                                    "--db",
+                                                    str(db_path),
+                                                    "--data_dir",
+                                                    str(data_dir),
+                                                ],
+                                            ):
+                                                main()
+        resolve_mock.assert_called_once()
+        assert resolve_mock.call_args[0][1] == "https://pixelfed.social/p/user/42"
+        boost_mock.assert_called_once()
+        assert boost_mock.call_args[0][1] == "98765"
+        post_image_mock.assert_not_called()
+        update_eng.assert_called_once()
+        assert "Posted" in caplog.text
 
 
 def test_post_run_summary_posts_artefacts_message_when_mastodon_configured() -> None:
@@ -610,6 +683,56 @@ topics = ["funny"]
         assert run_imgur.call_args[1]["topic"] == "funny"
         assert run_tumblr.call_count == 1
         assert run_tumblr.call_args[1]["blog"] == "staff"
+
+
+def test_remove_inbox_duplicates_by_hash_keeps_inbox_when_only_row_is_inbox() -> None:
+    """Inbox files are not removed when the only matching row is location=inbox (grace period)."""
+    from main import _remove_inbox_duplicates_by_hash
+
+    from core import db
+    from tests.conftest import minimal_png_bytes
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out"
+        inbox = out / "inbox"
+        inbox.mkdir(parents=True)
+        img = inbox / "photo.png"
+        img.write_bytes(minimal_png_bytes())
+        db.init_db(out / "janulon.db")
+        db.insert_inbox_image(out, img, "https://example.com/1.png", "pixelfed")
+        _remove_inbox_duplicates_by_hash(inbox)
+        assert img.exists(), "Inbox file must not be removed when only row is inbox"
+
+
+def test_remove_inbox_duplicates_by_hash_removes_when_content_in_corpus() -> None:
+    """Inbox files are removed when same content already exists in corpus."""
+    from main import _remove_inbox_duplicates_by_hash
+
+    from core import db
+    from tests.conftest import minimal_png_bytes
+
+    png = minimal_png_bytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out"
+        inbox = out / "inbox"
+        corpus = out / "corpus"
+        inbox.mkdir(parents=True)
+        corpus.mkdir(parents=True)
+        db.init_db(out / "janulon.db")
+        corpus_file = corpus / "existing.png"
+        corpus_file.write_bytes(png)
+        db.Image.create(
+            content_hash=hashlib.sha256(png).hexdigest(),
+            file_path="corpus/existing.png",
+            source_url=None,
+            source_label="wg",
+            location="corpus",
+            file_deleted=False,
+        )
+        dup = inbox / "duplicate.png"
+        dup.write_bytes(png)
+        _remove_inbox_duplicates_by_hash(inbox)
+        assert not dup.exists(), "Inbox duplicate of corpus content must be removed"
 
 
 def test_main_judge_and_sort_moves_to_corpus_and_void(
