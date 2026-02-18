@@ -145,12 +145,14 @@ def test_download_images_writes_files_with_blog_prefix() -> None:
         with patch("retina.tumblr.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
             mock_resp.read.return_value = content
-            paths = tumblr.download_images([url], out, "myblog", rate_limit_sec=0)
-        assert len(paths) == 1
-        assert paths[0].read_bytes() == content
-        assert paths[0].parent == out
-        assert paths[0].name.startswith("myblog_")
-        assert paths[0].suffix == ".jpg"
+            result = tumblr.download_images([url], out, "myblog", rate_limit_sec=0)
+        assert len(result) == 1
+        path, source_url, source_label = result[0]
+        assert path.read_bytes() == content
+        assert path.parent == out
+        assert path.name.startswith("myblog_")
+        assert path.suffix == ".jpg"
+        assert source_label == "myblog"
 
 
 def test_download_images_creates_directory() -> None:

@@ -297,7 +297,7 @@ def _run_4chan(
     index_pages: int,
     skip_dirs: list[Path],
     skip_paths: set[str] | None = None,
-) -> None:
+) -> list[tuple[Path, str, str]]:
     logger.info(
         "Starting 4chan scrape: board=/{}/, inbox={}, index_pages={}",
         board,
@@ -310,7 +310,7 @@ def _run_4chan(
     )
     if not urls:
         logger.warning("No image URLs found.")
-        return
+        return []
     paths = fourchan.download_images(
         urls,
         inbox_dir,
@@ -319,6 +319,7 @@ def _run_4chan(
         skip_paths=skip_paths,
     )
     logger.success("Done. Downloaded {} images to {}", len(paths), inbox_dir.resolve())
+    return paths
 
 
 def _run_tumblr(
@@ -327,7 +328,7 @@ def _run_tumblr(
     num_posts: int,
     skip_dirs: list[Path],
     skip_paths: set[str] | None = None,
-) -> None:
+) -> list[tuple[Path, str, str]]:
     logger.info(
         "Starting Tumblr scrape: blog={}, inbox={}, num_posts={}",
         blog,
@@ -337,7 +338,7 @@ def _run_tumblr(
     urls = tumblr.iter_image_urls(blog=blog, num_posts=num_posts)
     if not urls:
         logger.warning("No image URLs found.")
-        return
+        return []
     paths = tumblr.download_images(
         urls,
         inbox_dir,
@@ -346,6 +347,7 @@ def _run_tumblr(
         skip_paths=skip_paths,
     )
     logger.success("Done. Downloaded {} images to {}", len(paths), inbox_dir.resolve())
+    return paths
 
 
 def _run_imgur(
@@ -355,7 +357,7 @@ def _run_imgur(
     client_id: str,
     skip_dirs: list[Path],
     skip_paths: set[str] | None = None,
-) -> None:
+) -> list[tuple[Path, str, str]]:
     logger.info(
         "Starting Imgur scrape: topic={}, inbox={}, max_items={}",
         topic,
@@ -365,7 +367,7 @@ def _run_imgur(
     urls = imgur.iter_image_urls(topic=topic, client_id=client_id, max_items=max_items)
     if not urls:
         logger.warning("No image URLs found.")
-        return
+        return []
     paths = imgur.download_images(
         urls,
         inbox_dir,
@@ -374,6 +376,7 @@ def _run_imgur(
         skip_paths=skip_paths,
     )
     logger.success("Done. Downloaded {} images to {}", len(paths), inbox_dir.resolve())
+    return paths
 
 
 def _unique_dest(parent: Path, name: str) -> Path:
@@ -411,35 +414,16 @@ def _remove_inbox_duplicates_by_hash(inbox_dir: Path) -> None:
         )
 
 
-def _insert_judged_image(
-    dest_path: Path, location: str, data_root: Path | None = None
-) -> None:
-    """Insert a judged image (moved to corpus/void) into the database.
-
-    file_path is stored relative to data_root when given (portable for Docker).
-    """
-    try:
-        raw = dest_path.read_bytes()
-    except OSError:
-        return
-    content_hash = hashlib.sha256(raw).hexdigest()
-    if db.Image.get_or_none(db.Image.content_hash == content_hash) is not None:
-        return
-    if data_root is not None:
-        try:
-            file_path_str = str(dest_path.relative_to(data_root))
-        except ValueError:
-            file_path_str = str(dest_path.resolve())
-    else:
-        file_path_str = str(dest_path.resolve())
-    db.Image.create(
-        content_hash=content_hash,
-        file_path=file_path_str,
-        source_url=None,
-        source_label=db._source_label_from_filename(dest_path),
-        location=location,
-        file_deleted=False,
-    )
+def _insert_inbox_downloads(
+    downloaded: list[tuple[Path, str, str]],
+    output_folder: Path,
+) -> int:
+    """Insert a DB row for each downloaded image (location='inbox'). Returns count inserted."""
+    inserted = 0
+    for path, source_url, source_label in downloaded:
+        if db.insert_inbox_image(output_folder, path, source_url, source_label):
+            inserted += 1
+    return inserted
 
 
 def _judge_and_sort(
@@ -990,19 +974,21 @@ def main() -> None:
 
     db.init_db(args.db)
     data_root = Path(args.data_dir)
+    output_folder_resolved = output_folder.resolve()
     skip_paths = {
-        str(db.resolve_file_path(data_root, r.file_path))
+        str(db.resolve_file_path(output_folder_resolved, r.file_path))
         for r in db.Image.select(db.Image.file_path).iterator()
     }
 
     if args.source == "4chan":
-        _run_4chan(
+        downloaded = _run_4chan(
             board=args.board,
             inbox_dir=inbox_dir,
             index_pages=args.index_pages,
             skip_dirs=skip_dirs,
             skip_paths=skip_paths,
         )
+        _insert_inbox_downloads(downloaded, output_folder)
     elif args.source == "imgur":
         if not args.topic:
             logger.error("Imgur requires --topic (e.g. funny for imgur.com/t/funny).")
@@ -1010,7 +996,7 @@ def main() -> None:
         client_id = (args.imgur_client_id or "").strip()
         if not client_id:
             logger.info("No Imgur Client ID; scraping topic pages only.")
-        _run_imgur(
+        downloaded = _run_imgur(
             topic=args.topic.strip(),
             inbox_dir=inbox_dir,
             max_items=args.max_items,
@@ -1018,32 +1004,35 @@ def main() -> None:
             skip_dirs=skip_dirs,
             skip_paths=skip_paths,
         )
+        _insert_inbox_downloads(downloaded, output_folder)
     elif args.source == "tumblr":
         if not args.blog:
             logger.error("Tumblr requires --blog (e.g. staff or blogname.tumblr.com).")
             raise SystemExit(1)
-        _run_tumblr(
+        downloaded = _run_tumblr(
             blog=args.blog.strip(),
             inbox_dir=inbox_dir,
             num_posts=args.num_posts,
             skip_dirs=skip_dirs,
             skip_paths=skip_paths,
         )
+        _insert_inbox_downloads(downloaded, output_folder)
     elif args.source == "all":
         cfg = _load_config(Path(args.config))
         client_id = (args.imgur_client_id or "").strip()
         for board in cfg["4chan"]["boards"]:
             if board:
-                _run_4chan(
+                downloaded = _run_4chan(
                     board=board,
                     inbox_dir=inbox_dir,
                     index_pages=args.index_pages,
                     skip_dirs=skip_dirs,
                     skip_paths=skip_paths,
                 )
+                _insert_inbox_downloads(downloaded, output_folder)
         for topic in cfg["imgur"]["topics"]:
             if topic:
-                _run_imgur(
+                downloaded = _run_imgur(
                     topic=topic,
                     inbox_dir=inbox_dir,
                     max_items=args.max_items,
@@ -1051,15 +1040,17 @@ def main() -> None:
                     skip_dirs=skip_dirs,
                     skip_paths=skip_paths,
                 )
+                _insert_inbox_downloads(downloaded, output_folder)
         for blog in cfg["tumblr"]["blogs"]:
             if blog:
-                _run_tumblr(
+                downloaded = _run_tumblr(
                     blog=blog,
                     inbox_dir=inbox_dir,
                     num_posts=args.num_posts,
                     skip_dirs=skip_dirs,
                     skip_paths=skip_paths,
                 )
+                _insert_inbox_downloads(downloaded, output_folder)
     elif args.source == "reddit":
         logger.error("Reddit source is not implemented (API key required).")
         raise SystemExit(1)
@@ -1078,10 +1069,10 @@ def main() -> None:
                 threshold=args.threshold,
             )
             for dest_path, location in moved:
-                _insert_judged_image(dest_path, location, data_root=output_folder)
+                db.record_judged_image(dest_path, location, data_root=output_folder)
 
             if args.post_summary and moved:
-                unposted = db.count_unposted_corpus_images(args.data_dir)
+                unposted = db.count_unposted_corpus_images(output_folder)
                 _post_run_summary(
                     config_path=Path(args.config),
                     corpus_count=sum(1 for _, loc in moved if loc == "corpus"),

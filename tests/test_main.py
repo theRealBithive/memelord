@@ -382,7 +382,10 @@ def test_main_4chan_downloads_to_output_folder(
             return_value=["https://i.4cdn.org/wg/1.jpg"],
         ):
             with patch(
-                "main.fourchan.download_images", return_value=[out / "inbox" / "1.jpg"]
+                "main.fourchan.download_images",
+                return_value=[
+                    (out / "inbox" / "1.jpg", "https://i.4cdn.org/wg/1.jpg", "wg")
+                ],
             ) as dl:
                 with patch(
                     "sys.argv",
@@ -447,7 +450,13 @@ def test_main_tumblr_downloads_to_output_folder(
         ):
             with patch(
                 "main.tumblr.download_images",
-                return_value=[out / "inbox" / "blog_abc.jpg"],
+                return_value=[
+                    (
+                        out / "inbox" / "blog_abc.jpg",
+                        "https://64.media.tumblr.com/abc/photo.jpg",
+                        "staff",
+                    )
+                ],
             ) as dl:
                 with patch(
                     "sys.argv",
@@ -496,7 +505,13 @@ def test_main_imgur_downloads_to_output_folder(
         ):
             with patch(
                 "main.imgur.download_images",
-                return_value=[out / "inbox" / "funny_abc.jpg"],
+                return_value=[
+                    (
+                        out / "inbox" / "funny_abc.jpg",
+                        "https://i.imgur.com/abc.jpg",
+                        "funny",
+                    )
+                ],
             ) as dl:
                 with patch(
                     "sys.argv",
@@ -654,3 +669,56 @@ def test_main_judge_and_sort_moves_to_corpus_and_void(
         assert len(rows) == 1
         assert rows[0].location in ("corpus", "void")
         assert "test.png" in rows[0].file_path
+
+
+def test_main_judge_preserves_source_from_inbox_row(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When inbox row has source_url/source_label, record_judged_image preserves them."""
+    import numpy as np
+
+    from core import brain, db
+    from tests.conftest import minimal_png_bytes
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out"
+        inbox = out / "inbox"
+        inbox.mkdir(parents=True)
+        img_path = inbox / "wg_42.png"
+        img_path.write_bytes(minimal_png_bytes())
+        db.init_db(out / "janulon.db")
+        db.insert_inbox_image(out, img_path, "https://i.4cdn.org/wg/42.png", "wg")
+        weights = out / "weights.pkl"
+        clf = __import__(
+            "sklearn.linear_model", fromlist=["LogisticRegression"]
+        ).LogisticRegression(max_iter=100, random_state=42)
+        clf.fit(np.random.randn(2, 768), [0, 1])
+        brain.save_classifier(clf, weights)
+
+        with patch("main.brain.get_encoder"):
+            with patch(
+                "main.brain.encode", return_value=np.zeros((1, 768), dtype=np.float32)
+            ):
+                with patch("main.fourchan.iter_image_urls", return_value=[]):
+                    with patch(
+                        "sys.argv",
+                        [
+                            "main.py",
+                            "run",
+                            "--source",
+                            "4chan",
+                            "--output_folder",
+                            str(out),
+                            "--weights",
+                            str(weights),
+                            "--db",
+                            str(out / "janulon.db"),
+                            "--index_pages",
+                            "1",
+                        ],
+                    ):
+                        main()
+        rows = list(db.Image.select())
+        assert len(rows) == 1
+        assert rows[0].source_url == "https://i.4cdn.org/wg/42.png"
+        assert rows[0].source_label == "wg"

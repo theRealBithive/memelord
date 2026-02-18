@@ -89,7 +89,7 @@ def test_iter_image_urls_deduplicates() -> None:
 
 
 def test_download_images_writes_files_with_board_prefix() -> None:
-    """download_images writes files named {board}_{tim}{ext} with correct content."""
+    """download_images writes files named {board}_{tim}{ext} and returns (path, url, label)."""
     content = minimal_png_bytes()
     url = "https://i.4cdn.org/wg/999.png"
 
@@ -98,10 +98,13 @@ def test_download_images_writes_files_with_board_prefix() -> None:
         with patch("retina.fourchan.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
             mock_resp.read.return_value = content
-            paths = fourchan.download_images([url], out, "wg", rate_limit_sec=0)
-        assert len(paths) == 1
-        assert paths[0] == out / "wg_999.png"
-        assert paths[0].read_bytes() == content
+            result = fourchan.download_images([url], out, "wg", rate_limit_sec=0)
+        assert len(result) == 1
+        path, source_url, source_label = result[0]
+        assert path == out / "wg_999.png"
+        assert path.read_bytes() == content
+        assert source_url == url
+        assert source_label == "wg"
 
 
 def test_download_images_creates_directory() -> None:
