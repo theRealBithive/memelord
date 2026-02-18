@@ -19,7 +19,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "python-semantic-release>=10.5.3",
+]
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+tag_format = "v{version}"
+allow_zero_version = true
+major_on_zero = true
 
 [tool.pytest.ini_options]
 markers = [

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import schedule
 from loguru import logger
-from retina import fourchan, image_validation, imgur, tumblr
+from retina import fourchan, image_validation, imgur, pixelfed, tumblr
 
 from core import brain, caption, db, mastodon as mastodon_module
 
@@ -40,6 +40,7 @@ def _load_config(config_path: Path) -> dict:
         "4chan": {"boards": []},
         "tumblr": {"blogs": []},
         "imgur": {"topics": []},
+        "pixelfed": {"instance_base": "", "limit": 40, "access_token": ""},
         "mastodon": {"base_url": "", "access_token": ""},
     }
     for key in ("4chan", "tumblr", "imgur"):
@@ -55,6 +56,15 @@ def _load_config(config_path: Path) -> dict:
         elif key == "imgur" and "topics" in section:
             raw = section["topics"]
             out[key]["topics"] = [str(x).strip() for x in raw if isinstance(x, str)]
+    if "pixelfed" in data and isinstance(data["pixelfed"], dict):
+        p = data["pixelfed"]
+        out["pixelfed"]["instance_base"] = str(p.get("instance_base", "")).strip()
+        out["pixelfed"]["limit"] = (
+            int(p.get("limit", 40)) if p.get("limit") is not None else 40
+        )
+        out["pixelfed"]["access_token"] = str(
+            p.get("access_token") or os.environ.get("PIXELFED_ACCESS_TOKEN", "")
+        ).strip()
     if "mastodon" in data and isinstance(data["mastodon"], dict):
         m = data["mastodon"]
         out["mastodon"]["base_url"] = str(m.get("base_url", "")).strip()
@@ -379,6 +389,36 @@ def _run_imgur(
     return paths
 
 
+def _run_pixelfed(
+    instance_base: str,
+    limit: int,
+    inbox_dir: Path,
+    skip_dirs: list[Path],
+    skip_paths: set[str] | None = None,
+    access_token: str | None = None,
+) -> list[tuple[Path, str, str]]:
+    logger.info(
+        "Starting Pixelfed scrape: instance={}, limit={}, inbox={}",
+        instance_base,
+        limit,
+        inbox_dir.resolve(),
+    )
+    items = pixelfed.iter_image_items(
+        instance_base, limit=limit, access_token=access_token
+    )
+    if not items:
+        logger.warning("No image items found from Pixelfed timeline.")
+        return []
+    paths = pixelfed.download_images(
+        items,
+        inbox_dir,
+        skip_dirs=skip_dirs or None,
+        skip_paths=skip_paths,
+    )
+    logger.success("Done. Downloaded {} images to {}", len(paths), inbox_dir.resolve())
+    return paths
+
+
 def _unique_dest(parent: Path, name: str) -> Path:
     """Return parent/name, or parent/name_2, name_3, ... if name exists."""
     p = parent / name
@@ -393,7 +433,13 @@ def _unique_dest(parent: Path, name: str) -> Path:
 
 
 def _remove_inbox_duplicates_by_hash(inbox_dir: Path) -> None:
-    """Delete inbox files whose content hash is already in the database."""
+    """
+    Delete inbox files whose content is already in corpus or void.
+
+    Only removes when the existing row has location in ('corpus', 'void'), so we
+    don't delete files that were just inserted as inbox (which would remove
+    everything before the judge runs).
+    """
     paths = sorted(
         p for p in inbox_dir.iterdir() if p.is_file() and brain.is_image_path(p)
     )
@@ -405,12 +451,14 @@ def _remove_inbox_duplicates_by_hash(inbox_dir: Path) -> None:
         except OSError:
             continue
         h = hashlib.sha256(raw).hexdigest()
-        if db.Image.get_or_none(db.Image.content_hash == h) is not None:
+        row = db.Image.get_or_none(db.Image.content_hash == h)
+        if row is not None and row.location in ("corpus", "void"):
             path.unlink(missing_ok=True)
             removed += 1
     if removed:
         logger.info(
-            "Removed {} inbox duplicates (content already in database).", removed
+            "Removed {} inbox duplicates (content already in corpus/void).",
+            removed,
         )
 
 
@@ -629,7 +677,7 @@ def main() -> None:
     )
     run_parser.add_argument(
         "--source",
-        choices=["4chan", "all", "imgur", "reddit", "tumblr"],
+        choices=["4chan", "all", "imgur", "pixelfed", "reddit", "tumblr"],
         required=True,
         help="Source. 'all' = load config and run all listed boards/blogs/topics.",
     )
@@ -897,9 +945,21 @@ def main() -> None:
             return
         path = db.resolve_file_path(args.data_dir, row.file_path)
         logger.info("Posting {} (source: {})", path.name, row.source_label)
-        alt_text = caption.describe_for_alt(path)
         client = mastodon_module.create_client(base_url, access_token)
-        status = mastodon_module.post_image(client, path, alt_text)
+        if row.source_label == "pixelfed" and (row.source_url or "").strip():
+            status_id = mastodon_module.resolve_remote_url(
+                client, row.source_url.strip()
+            )
+            if status_id is None:
+                logger.error(
+                    "Could not resolve Pixelfed post URL on Mastodon: {}",
+                    row.source_url,
+                )
+                raise SystemExit(1)
+            status = mastodon_module.boost_status(client, status_id)
+        else:
+            alt_text = caption.describe_for_alt(path)
+            status = mastodon_module.post_image(client, path, alt_text)
         status_id = (
             status.get("id")
             if isinstance(status, dict)
@@ -1051,6 +1111,40 @@ def main() -> None:
                     skip_paths=skip_paths,
                 )
                 _insert_inbox_downloads(downloaded, output_folder)
+        p_cfg = cfg.get("pixelfed") or {}
+        base = p_cfg.get("instance_base", "").strip()
+        if base:
+            limit = p_cfg.get("limit", 40)
+            token = p_cfg.get("access_token", "").strip() or None
+            downloaded = _run_pixelfed(
+                instance_base=base,
+                limit=limit,
+                inbox_dir=inbox_dir,
+                skip_dirs=skip_dirs,
+                skip_paths=skip_paths,
+                access_token=token,
+            )
+            _insert_inbox_downloads(downloaded, output_folder)
+    elif args.source == "pixelfed":
+        cfg = _load_config(Path(args.config))
+        p_cfg = cfg.get("pixelfed") or {}
+        base = p_cfg.get("instance_base", "").strip()
+        limit = p_cfg.get("limit", 40)
+        if not base:
+            logger.error(
+                "Pixelfed requires [pixelfed] instance_base in config (e.g. https://pixelfed.social)."
+            )
+            raise SystemExit(1)
+        token = p_cfg.get("access_token", "").strip() or None
+        downloaded = _run_pixelfed(
+            instance_base=base,
+            limit=limit,
+            inbox_dir=inbox_dir,
+            skip_dirs=skip_dirs,
+            skip_paths=skip_paths,
+            access_token=token,
+        )
+        _insert_inbox_downloads(downloaded, output_folder)
     elif args.source == "reddit":
         logger.error("Reddit source is not implemented (API key required).")
         raise SystemExit(1)

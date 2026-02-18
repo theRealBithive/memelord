@@ -6,9 +6,11 @@ import pytest
 
 from core.mastodon import (
     _wait_for_media_ready,
+    boost_status,
     engagement_from_status,
     fetch_status_engagement,
     post_status,
+    resolve_remote_url,
 )
 
 
@@ -89,5 +91,54 @@ def test_post_status_posts_text_only() -> None:
     client = Mock()
     client.status_post.return_value = {"id": "99", "content": "Pondering."}
     result = post_status(client, "Pondering the means of discernment anew.")
-    client.status_post.assert_called_once_with(status="Pondering the means of discernment anew.")
+    client.status_post.assert_called_once_with(
+        status="Pondering the means of discernment anew."
+    )
     assert result == {"id": "99", "content": "Pondering."}
+
+
+def test_resolve_remote_url_returns_first_status_id() -> None:
+    """resolve_remote_url calls search_v2 with resolve=True and returns first status id."""
+    client = Mock()
+    client.search_v2.return_value = {
+        "statuses": [
+            {"id": "123456", "url": "https://pixelfed.social/p/user/1"},
+        ],
+    }
+    result = resolve_remote_url(client, "https://pixelfed.social/p/user/1")
+    client.search_v2.assert_called_once_with(
+        q="https://pixelfed.social/p/user/1", resolve=True
+    )
+    assert result == "123456"
+
+
+def test_resolve_remote_url_returns_none_when_no_statuses() -> None:
+    """resolve_remote_url returns None when search returns no statuses."""
+    client = Mock()
+    client.search_v2.return_value = {"statuses": []}
+    result = resolve_remote_url(client, "https://example.com/post/99")
+    assert result is None
+
+
+def test_resolve_remote_url_handles_object_response() -> None:
+    """resolve_remote_url handles search result with object-style status (e.g. named tuple)."""
+    client = Mock()
+    status = Mock(id=999, url="https://example.com/status/999")
+    client.search_v2.return_value = Mock(statuses=[status])
+    result = resolve_remote_url(client, "https://example.com/status/999")
+    assert result == "999"
+
+
+def test_boost_status_calls_status_reblog_and_returns_result() -> None:
+    """boost_status calls status_reblog with the status id and returns the API response."""
+    client = Mock()
+    client.status_reblog.return_value = {
+        "id": "111",
+        "reblog": {"id": "123456"},
+        "favourites_count": 0,
+        "reblogs_count": 1,
+        "replies_count": 0,
+    }
+    result = boost_status(client, "123456")
+    client.status_reblog.assert_called_once_with("123456")
+    assert result["id"] == "111"

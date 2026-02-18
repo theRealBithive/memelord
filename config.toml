@@ -10,6 +10,13 @@ blogs = []
 [imgur]
 topics = ["funny", "warhammer40k", "architecture"]
 
+# Pixelfed: public timeline; images are judged like other sources; when posted, the original is boosted on Mastodon.
+# If the instance returns a login page instead of JSON, add access_token (create app on instance, then OAuth or env PIXELFED_ACCESS_TOKEN).
+[pixelfed]
+instance_base = "https://pixelfed.social"
+# limit = 40
+# access_token = ""
+
 # Mastodon: for "post" command (post random corpus image).
 # Create an app and get access_token from your instance (Settings → Development).
 [mastodon]
