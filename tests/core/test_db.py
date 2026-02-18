@@ -191,6 +191,78 @@ def test_source_label_from_filename() -> None:
     assert db._source_label_from_filename(Path("a_b_c.webp")) == "a"
 
 
+def test_insert_inbox_image_creates_row_with_location_inbox(
+    database: SqliteDatabase, tmp_path: Path
+) -> None:
+    """insert_inbox_image creates a row with location=inbox and source_url/source_label."""
+    root = tmp_path / "out"
+    root.mkdir()
+    (root / "inbox").mkdir()
+    path = root / "inbox" / "wg_99.png"
+    path.write_bytes(minimal_png_bytes())
+    inserted = db.insert_inbox_image(root, path, "https://i.4cdn.org/wg/99.png", "wg")
+    assert inserted is True
+    row = db.Image.get_or_none(db.Image.location == "inbox")
+    assert row is not None
+    assert row.source_url == "https://i.4cdn.org/wg/99.png"
+    assert row.source_label == "wg"
+    assert "inbox" in row.file_path
+
+
+def test_insert_inbox_image_skips_duplicate_hash(
+    database: SqliteDatabase, tmp_path: Path
+) -> None:
+    """insert_inbox_image returns False when content_hash already exists."""
+    root = tmp_path / "out"
+    root.mkdir()
+    (root / "inbox").mkdir()
+    path = root / "inbox" / "wg_99.png"
+    path.write_bytes(minimal_png_bytes())
+    assert db.insert_inbox_image(root, path, "https://example.com/1.png", "wg") is True
+    assert db.insert_inbox_image(root, path, "https://example.com/2.png", "wg") is False
+    assert db.Image.select().where(db.Image.location == "inbox").count() == 1
+
+
+def test_record_judged_image_updates_inbox_row(
+    database: SqliteDatabase, tmp_path: Path
+) -> None:
+    """record_judged_image updates file_path and location when row has location=inbox."""
+    root = tmp_path / "out"
+    (root / "corpus").mkdir(parents=True)
+    path = root / "corpus" / "wg_42.png"
+    path.write_bytes(minimal_png_bytes())
+    content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    db.Image.create(
+        content_hash=content_hash,
+        file_path="inbox/wg_42.png",
+        source_url="https://i.4cdn.org/wg/42.png",
+        source_label="wg",
+        location="inbox",
+        file_deleted=False,
+    )
+    db.record_judged_image(path, "corpus", data_root=root)
+    row = db.Image.get_by_id(content_hash)
+    assert row.file_path == "corpus/wg_42.png"
+    assert row.location == "corpus"
+    assert row.source_url == "https://i.4cdn.org/wg/42.png"
+    assert row.source_label == "wg"
+
+
+def test_record_judged_image_creates_row_when_no_inbox_row(
+    database: SqliteDatabase, tmp_path: Path
+) -> None:
+    """record_judged_image creates a row with source from filename when no existing row."""
+    root = tmp_path / "out"
+    (root / "corpus").mkdir(parents=True)
+    path = root / "corpus" / "wg_99.png"
+    path.write_bytes(minimal_png_bytes())
+    db.record_judged_image(path, "corpus", data_root=root)
+    row = db.Image.select().where(db.Image.location == "corpus").first()
+    assert row is not None
+    assert row.source_url is None
+    assert row.source_label == "wg"
+
+
 def test_import_data_inserts_corpus_and_void(
     database: SqliteDatabase,
 ) -> None:

@@ -123,7 +123,7 @@ class Image(BaseModel):
     One row per distinct image content, keyed by content hash.
 
     Used for content deduplication and for the bot to track what has been posted.
-    location: "corpus" (positive) or "void" (negative).
+    location: "inbox" (pending judge), "corpus" (positive), or "void" (negative).
     file_deleted: True if the file on disk was removed; row kept for reference.
     mastodon_status_id: ID of the Mastodon status after posting (for engagement).
     engagement_*: Fetched from Mastodon API; updated when we post or refresh.
@@ -133,7 +133,7 @@ class Image(BaseModel):
     file_path = CharField(max_length=2048)
     source_url = CharField(null=True, max_length=2048)
     source_label = CharField(max_length=255)
-    location = CharField(max_length=32, default="corpus")  # "corpus" | "void"
+    location = CharField(max_length=32, default="corpus")  # "inbox" | "corpus" | "void"
     downloaded_at = DateTimeField(default=lambda: datetime.now(timezone.utc))
     posted_at = DateTimeField(null=True)
     file_deleted = BooleanField(default=False)
@@ -285,6 +285,83 @@ def _source_label_from_filename(path: Path) -> str:
     return stem or "unknown"
 
 
+def insert_inbox_image(
+    data_root: Path | str,
+    path: Path,
+    source_url: str | None,
+    source_label: str,
+) -> bool:
+    """
+    Insert a row for a newly downloaded image (location='inbox').
+
+    Hashes the file; if content_hash already exists, returns False (skip).
+    Otherwise creates a row with file_path relative to data_root.
+    Returns True if inserted.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return False
+    content_hash = hashlib.sha256(raw).hexdigest()
+    if Image.get_or_none(Image.content_hash == content_hash) is not None:
+        return False
+    root = Path(data_root)
+    try:
+        file_path_str = str(path.relative_to(root)).replace("\\", "/")
+    except ValueError:
+        file_path_str = path.as_posix()
+    Image.create(
+        content_hash=content_hash,
+        file_path=file_path_str,
+        source_url=source_url,
+        source_label=source_label,
+        location="inbox",
+        file_deleted=False,
+    )
+    return True
+
+
+def record_judged_image(
+    dest_path: Path,
+    location: str,
+    data_root: Path | None = None,
+) -> None:
+    """
+    Record an image that was moved to corpus or void by the judge.
+
+    If a row exists with this content_hash and location='inbox', updates file_path
+    and location. Otherwise creates a new row (e.g. legacy inbox file without a row).
+    """
+    try:
+        raw = dest_path.read_bytes()
+    except OSError:
+        return
+    content_hash = hashlib.sha256(raw).hexdigest()
+    row = Image.get_or_none(Image.content_hash == content_hash)
+    if data_root is not None:
+        try:
+            file_path_str = str(dest_path.relative_to(data_root)).replace("\\", "/")
+        except ValueError:
+            file_path_str = dest_path.as_posix()
+    else:
+        file_path_str = dest_path.as_posix()
+    if row is not None and row.location == "inbox":
+        row.file_path = file_path_str
+        row.location = location
+        row.save()
+        return
+    if row is not None:
+        return
+    Image.create(
+        content_hash=content_hash,
+        file_path=file_path_str,
+        source_url=None,
+        source_label=_source_label_from_filename(dest_path),
+        location=location,
+        file_deleted=False,
+    )
+
+
 def import_data(
     data_dir: Path | str,
     db_path: Path | str,
@@ -334,9 +411,9 @@ def import_data(
                 skipped += 1
                 continue
             try:
-                file_path_str = str(path.relative_to(data_dir))
+                file_path_str = str(path.relative_to(data_dir)).replace("\\", "/")
             except ValueError:
-                file_path_str = str(path.resolve())
+                file_path_str = path.as_posix()
             Image.create(
                 content_hash=content_hash,
                 file_path=file_path_str,

@@ -440,18 +440,18 @@ def download_images(
     rate_limit_sec: float = 0.5,
     skip_dirs: list[Path] | None = None,
     skip_paths: set[str] | None = None,
-) -> list[Path]:
+) -> list[tuple[Path, str, str]]:
     """
     Download each URL into output_dir as {topic}_{hash}{ext}.
     Skips if file exists in output_dir, in skip_dirs, or path is in skip_paths (DB).
-    Returns paths written.
+    Returns list of (path, source_url, source_label) for each file written.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     skip_dirs = [Path(d) for d in (skip_dirs or [])]
     total = len(urls)
     logger.info("Downloading {} images to {}", total, output_dir.resolve())
-    written: list[Path] = []
+    written: list[tuple[Path, str, str]] = []
     skipped_output = 0
     skipped_sets = 0
     skipped_db = 0
@@ -484,7 +484,7 @@ def download_images(
                 path.unlink(missing_ok=True)
                 logger.warning("Removed corrupted download: {}", filename)
                 continue
-            written.append(path)
+            written.append((path, url, topic))
             logger.info("Downloaded {}/{}: {}", len(written), total, filename)
         except (HTTPError, URLError, OSError) as e:
             logger.warning("Failed to download {}: {}", filename, e)

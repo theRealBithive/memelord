@@ -109,11 +109,13 @@ def test_download_images_writes_files_with_topic_prefix() -> None:
         with patch("retina.imgur.urlopen") as mock_urlopen:
             mock_resp = mock_urlopen.return_value.__enter__.return_value
             mock_resp.read.return_value = content
-            paths = imgur.download_images([url], out, "funny", rate_limit_sec=0)
-        assert len(paths) == 1
-        assert paths[0].read_bytes() == content
-        assert paths[0].name.startswith("funny_")
-        assert paths[0].suffix == ".jpg"
+            result = imgur.download_images([url], out, "funny", rate_limit_sec=0)
+        assert len(result) == 1
+        path, _, source_label = result[0]
+        assert path.read_bytes() == content
+        assert path.name.startswith("funny_")
+        assert path.suffix == ".jpg"
+        assert source_label == "funny"
 
 
 def test_download_images_skips_if_already_in_output() -> None:
