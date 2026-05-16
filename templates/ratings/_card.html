@@ -145,6 +145,46 @@
       <span class="btn-icon">✅</span><span class="btn-label">SAFE</span>
     </button>
 
+  {% elif mode == "fav" %}
+    <button class="btn btn-bad" data-action="bad"
+            hx-post="{% url 'submit_rating' image.content_hash 'bad' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "fav"}'>
+      <span class="btn-icon">🗑</span><span class="btn-label">TRASH</span>
+    </button>
+    <button class="btn btn-skip" data-action="skip"
+            hx-post="{% url 'submit_rating' image.content_hash 'skip' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "fav"}'>
+      <span class="btn-icon">→</span><span class="btn-label">SKIP</span>
+    </button>
+    <button class="btn btn-fav" data-action="unfav"
+            hx-post="{% url 'submit_rating' image.content_hash 'unfav' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "fav"}'>
+      <span class="btn-icon">★</span><span class="btn-label">UNFAV</span>
+    </button>
+
+  {% elif mode == "nsfw_fav" %}
+    <button class="btn btn-bad" data-action="bad"
+            hx-post="{% url 'submit_rating' image.content_hash 'bad' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "nsfw_fav"}'>
+      <span class="btn-icon">🗑</span><span class="btn-label">TRASH</span>
+    </button>
+    <button class="btn btn-skip" data-action="skip"
+            hx-post="{% url 'submit_rating' image.content_hash 'skip' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "nsfw_fav"}'>
+      <span class="btn-icon">→</span><span class="btn-label">SKIP</span>
+    </button>
+    <button class="btn btn-fav" data-action="unfav"
+            hx-post="{% url 'submit_rating' image.content_hash 'unfav' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "nsfw_fav"}'>
+      <span class="btn-icon">★</span><span class="btn-label">UNFAV</span>
+    </button>
+
   {% else %}{# nsfw_void #}
     <button class="btn btn-skip" data-action="skip"
             hx-post="{% url 'submit_rating' image.content_hash 'skip' %}"

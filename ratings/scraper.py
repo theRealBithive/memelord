@@ -78,7 +78,43 @@ def _insert(path: Path, source_url: str, source_label: str, data_dir: Path, exis
     return True
 
 
-def run(config_path: Path, data_dir: Path) -> dict[str, int]:
+def classify_inbox(data_dir: Path, weights_path: Path) -> None:
+    """Run the trained classifier on all inbox images; move high-confidence ones to corpus/void."""
+    from core import brain
+    from ratings.utils import move_image
+
+    if not weights_path.exists():
+        return
+
+    images = list(Image.objects.filter(location=Image.INBOX, file_deleted=False))
+    if not images:
+        return
+
+    logger.info("Auto-classifying {} inbox images.", len(images))
+    classifier = brain.load_classifier(weights_path)
+    encoder = brain.get_encoder()
+    transform = brain.get_transform()
+
+    paths = [data_dir / img.file_path for img in images]
+    embeddings = brain.encode(encoder, paths, transform=transform)
+
+    to_corpus = to_void = 0
+    for img, emb in zip(images, embeddings):
+        prob = float(brain.predict_proba(classifier, emb))
+        if prob >= 0.75:
+            move_image(img, Image.CORPUS, data_dir)
+            img.save(update_fields=["file_path", "location"])
+            to_corpus += 1
+        elif prob <= 0.25:
+            move_image(img, Image.VOID, data_dir)
+            img.save(update_fields=["file_path", "location"])
+            to_void += 1
+
+    remaining = len(images) - to_corpus - to_void
+    logger.info("Classified: {} → corpus, {} → void, {} remain in inbox.", to_corpus, to_void, remaining)
+
+
+def run(config_path: Path, data_dir: Path, weights_path: Path | None = None) -> dict[str, int]:
     """Scrape all enabled sources into data_dir/inbox/. Returns per-source new-image counts."""
     sources = _load_sources(config_path)
     inbox_dir = data_dir / "inbox"
@@ -112,5 +148,8 @@ def run(config_path: Path, data_dir: Path) -> dict[str, int]:
         downloaded = pixelfed.download_images(items, inbox_dir, skip_dirs=skip_dirs)
         pf_name = sources["pixelfed"]
         counts["pixelfed"] = sum(_insert(p, u, l, data_dir, existing, pf_name in nsfw_names) for p, u, l in downloaded)
+
+    if weights_path:
+        classify_inbox(data_dir, weights_path)
 
     return counts

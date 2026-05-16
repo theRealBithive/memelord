@@ -82,6 +82,18 @@ html, body {
 }
 .nav-logout:hover { color: var(--text); }
 
+.nav-nsfw-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.35rem 0.4rem;
+  font-size: 1rem;
+  opacity: 0.3;
+  transition: opacity 150ms;
+  flex-shrink: 0;
+}
+.nav-nsfw-toggle:hover, .nav-nsfw-toggle.nsfw-on { opacity: 1; }
+
 /* ── Card ── */
 #card {
   display: flex;

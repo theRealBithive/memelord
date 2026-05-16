@@ -47,10 +47,15 @@
   <nav class="nav">
     <a href="{% url 'rate_inbox' %}" class="nav-tab">Mix<span class="badge">{{ inbox_count }}</span></a>
     <a href="{% url 'rate_corpus' %}" class="nav-tab">Corpus<span class="badge">{{ corpus_count }}</span></a>
+    <a href="{% url 'rate_fav' %}" class="nav-tab">Fav<span class="badge">{{ fav_count }}</span></a>
     <a href="{% url 'rate_void' %}" class="nav-tab">Trash<span class="badge">{{ void_count }}</span></a>
-    <a href="{% url 'rate_nsfw_inbox' %}" class="nav-tab">NSFW<span class="badge">{{ nsfw_inbox_count }}</span></a>
+    {% if not show_nsfw %}<a href="{% url 'rate_nsfw_inbox' %}" class="nav-tab">NSFW<span class="badge">{{ nsfw_inbox_count }}</span></a>{% endif %}
     <a href="{% url 'stats' %}" class="nav-tab active">Stats</a>
     <a href="{% url 'config' %}" class="nav-tab">Config</a>
+    <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
+      {% csrf_token %}
+      <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="{% if show_nsfw %}Hide NSFW (currently merged){% else %}Show NSFW in normal modes{% endif %}">🔞</button>
+    </form>
     <a href="{% url 'logout' %}" class="nav-logout">out</a>
   </nav>
 
