@@ -48,6 +48,7 @@
     <a href="{% url 'rate_inbox' %}" class="nav-tab">Mix<span class="badge">{{ inbox_count }}</span></a>
     <a href="{% url 'rate_corpus' %}" class="nav-tab">Corpus<span class="badge">{{ corpus_count }}</span></a>
     <a href="{% url 'rate_void' %}" class="nav-tab">Trash<span class="badge">{{ void_count }}</span></a>
+    <a href="{% url 'rate_nsfw_inbox' %}" class="nav-tab">NSFW<span class="badge">{{ nsfw_inbox_count }}</span></a>
     <a href="{% url 'stats' %}" class="nav-tab active">Stats</a>
     <a href="{% url 'config' %}" class="nav-tab">Config</a>
     <a href="{% url 'logout' %}" class="nav-logout">out</a>

@@ -10,6 +10,7 @@
   --green: #22c55e;
   --amber: #f59e0b;
   --gray: #52525b;
+  --purple: #a855f7;
   --nav-h: 52px;
   --btn-h: 76px;
   --meta-h: 32px;
@@ -156,16 +157,19 @@ html, body {
 .btn-good  { --accent: var(--green); }
 .btn-fav   { --accent: var(--amber); }
 .btn-skip  { --accent: var(--gray); }
+.btn-nsfw  { --accent: var(--purple); }
 
 .btn-bad:hover,   .btn-bad:active   { background: color-mix(in srgb, var(--red) 15%, var(--surface)); }
 .btn-good:hover,  .btn-good:active  { background: color-mix(in srgb, var(--green) 15%, var(--surface)); }
 .btn-fav:hover,   .btn-fav:active   { background: color-mix(in srgb, var(--amber) 15%, var(--surface)); }
 .btn-skip:hover,  .btn-skip:active  { background: color-mix(in srgb, var(--gray) 20%, var(--surface)); }
+.btn-nsfw:hover,  .btn-nsfw:active  { background: color-mix(in srgb, var(--purple) 15%, var(--surface)); }
 
 .btn-bad .btn-icon   { color: var(--red); }
 .btn-good .btn-icon  { color: var(--green); }
 .btn-fav .btn-icon   { color: var(--amber); }
 .btn-skip .btn-icon  { color: var(--gray); }
+.btn-nsfw .btn-icon  { color: var(--purple); }
 
 /* ── HTMX transition ── */
 #card.htmx-swapping { opacity: 0; transition: opacity 120ms ease; }

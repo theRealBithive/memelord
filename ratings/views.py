@@ -22,20 +22,26 @@ def index(request):
 
 def _counts() -> dict:
     return Image.objects.filter(file_deleted=False).aggregate(
-        inbox_count=Count("pk", filter=Q(location=Image.INBOX)),
-        corpus_count=Count("pk", filter=Q(location=Image.CORPUS)),
-        void_count=Count("pk", filter=Q(location=Image.VOID)),
+        inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=False)),
+        corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=False)),
+        void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=False)),
+        nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
+        nsfw_corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=True)),
+        nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
     )
 
 
 def _get_next(mode: str, exclude_hash: str | None = None) -> Image | None:
     qs = Image.objects.filter(file_deleted=False)
-    if mode == "inbox":
-        qs = qs.filter(location=Image.INBOX).order_by("downloaded_at")
-    elif mode == "corpus":
-        qs = qs.filter(location=Image.CORPUS).order_by("?")
+    if mode.startswith("nsfw_"):
+        location = mode[5:]
+        qs = qs.filter(is_nsfw=True, location=location)
     else:
-        qs = qs.filter(location=Image.VOID).order_by("?")
+        qs = qs.filter(is_nsfw=False, location=mode)
+    if mode in ("inbox", "nsfw_inbox"):
+        qs = qs.order_by("downloaded_at")
+    else:
+        qs = qs.order_by("?")
     if exclude_hash:
         qs = qs.exclude(content_hash=exclude_hash)
     return qs.first()
@@ -63,6 +69,21 @@ def rate_corpus(request):
 @login_required
 def rate_void(request):
     return _mode_view(request, "void")
+
+
+@login_required
+def rate_nsfw_inbox(request):
+    return _mode_view(request, "nsfw_inbox")
+
+
+@login_required
+def rate_nsfw_corpus(request):
+    return _mode_view(request, "nsfw_corpus")
+
+
+@login_required
+def rate_nsfw_void(request):
+    return _mode_view(request, "nsfw_void")
 
 
 def _unique_dest(directory: Path, name: str) -> Path:
@@ -110,6 +131,12 @@ def submit_rating(request, content_hash: str, action: str):
         image.is_favourite = False
         image.rated_at = now
         image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+    elif action == "mark_nsfw":
+        image.is_nsfw = True
+        image.save(update_fields=["is_nsfw"])
+    elif action == "mark_safe":
+        image.is_nsfw = False
+        image.save(update_fields=["is_nsfw"])
 
     next_image = _get_next(mode, exclude_hash=content_hash)
     ctx = _build_ctx(mode, next_image)
@@ -217,6 +244,15 @@ def source_toggle(request, pk):
 def source_delete(request, pk):
     get_object_or_404(Source, pk=pk).delete()
     return HttpResponse("")
+
+
+@login_required
+@require_POST
+def source_nsfw_toggle(request, pk):
+    source = get_object_or_404(Source, pk=pk)
+    source.is_nsfw = not source.is_nsfw
+    source.save(update_fields=["is_nsfw"])
+    return render(request, "ratings/_source_row.html", {"source": source})
 
 
 @login_required
