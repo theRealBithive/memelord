@@ -225,21 +225,27 @@ def trigger_scrape(request):
 @login_required
 @require_POST
 def trigger_train(request):
-    from core import trainer
+    from django_q.tasks import async_task
+    task_id = async_task("ratings.tasks.run_train")
+    return render(request, "ratings/_train_pending.html", {"task_id": task_id})
 
+
+@login_required
+def train_status(request, task_id: str):
+    from django_q.tasks import fetch
+    task = fetch(task_id)
+    if task is None or task.stopped is None:
+        return render(request, "ratings/_train_pending.html", {"task_id": task_id})
+
+    result = task.result or {}
     show_nsfw = request.session.get("show_nsfw", False)
     counts = _counts(show_nsfw)
-    try:
-        trainer.run(data_dir=DATA_DIR, weights_path=WEIGHTS_PATH)
-        ctx = {"ok": True, "corpus_n": counts["corpus_count"], "void_n": counts["void_count"]}
-    except SystemExit:
-        ctx = {
-            "ok": False,
-            "corpus_n": counts["corpus_count"],
-            "void_n": counts["void_count"],
-            "error": "Need both corpus and void images to train.",
-        }
-    return render(request, "ratings/_train_result.html", ctx)
+    return render(request, "ratings/_train_result.html", {
+        "ok": result.get("ok", False),
+        "error": result.get("error", "Unknown error."),
+        "corpus_n": counts["corpus_count"],
+        "void_n": counts["void_count"],
+    })
 
 
 @login_required

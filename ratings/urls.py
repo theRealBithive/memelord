@@ -23,4 +23,5 @@ urlpatterns = [
     path("config/<int:pk>/delete/", views.source_delete, name="source_delete"),
     path("scrape/", views.trigger_scrape, name="trigger_scrape"),
     path("train/", views.trigger_train, name="trigger_train"),
+    path("train/<str:task_id>/status/", views.train_status, name="train_status"),
 ]

@@ -92,13 +92,11 @@
                   hx-indicator="#scrape-spinner">Scrape more</button>
           <button class="done-btn done-btn-train"
                   hx-post="{% url 'trigger_train' %}"
-                  hx-target="#train-result" hx-swap="outerHTML"
-                  hx-indicator="#train-spinner">Train model</button>
+                  hx-target="#train-result" hx-swap="outerHTML">Train model</button>
         </div>
       </div>
       <span id="scrape-spinner" class="train-spinner htmx-indicator">scraping…</span>
       <div id="scrape-result"></div>
-      <span id="train-spinner" class="train-spinner htmx-indicator">training…</span>
       <div id="train-result"></div>
     </div>
 
