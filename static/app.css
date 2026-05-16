@@ -282,9 +282,13 @@ kbd {
   font-size: 0.85rem;
   border: 1px solid var(--border);
 }
-.train-ok  { border-color: var(--green); color: var(--green); }
-.train-err { border-color: var(--red);   color: var(--red); }
+.train-ok      { border-color: var(--green);  color: var(--green); }
+.train-err     { border-color: var(--red);    color: var(--red); }
+.train-pending { border-color: var(--amber);  color: var(--amber); }
 .train-icon { font-size: 1rem; }
+.train-spin { display: inline-block; animation: spin 1s linear infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

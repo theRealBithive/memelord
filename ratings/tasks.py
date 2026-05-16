@@ -11,3 +11,17 @@ def run_scrape():
         data_dir=Path(settings.DATA_DIR),
         weights_path=Path(settings.WEIGHTS_PATH),
     )
+
+
+def run_train():
+    from core import trainer
+    try:
+        trainer.run(
+            data_dir=Path(settings.DATA_DIR),
+            weights_path=Path(settings.WEIGHTS_PATH),
+        )
+        return {"ok": True}
+    except SystemExit:
+        return {"ok": False, "error": "Need both corpus and void images to train."}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
