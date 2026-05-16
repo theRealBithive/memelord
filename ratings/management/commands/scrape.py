@@ -20,6 +20,7 @@ class Command(BaseCommand):
         counts = scraper.run(
             config_path=Path(options["config"]),
             data_dir=Path(settings.DATA_DIR),
+            weights_path=Path(settings.WEIGHTS_PATH),
         )
         total = sum(counts.values())
         self.stdout.write(f"Done. {total} new images added to inbox.")

@@ -1,4 +1,3 @@
-import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from ratings.models import Image, Source
+from ratings.utils import move_image as _move_image_util
 
 WEIGHTS_PATH = Path(settings.WEIGHTS_PATH)
 DATA_DIR = Path(settings.DATA_DIR)
@@ -20,40 +20,75 @@ def index(request):
     return redirect("rate_inbox")
 
 
-def _counts() -> dict:
-    return Image.objects.filter(file_deleted=False).aggregate(
+def _counts(show_nsfw: bool = False) -> dict:
+    qs = Image.objects.filter(file_deleted=False)
+    if show_nsfw:
+        return qs.aggregate(
+            inbox_count=Count("pk", filter=Q(location=Image.INBOX)),
+            corpus_count=Count("pk", filter=Q(location=Image.CORPUS)),
+            void_count=Count("pk", filter=Q(location=Image.VOID)),
+            fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True)),
+            nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
+            nsfw_corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=True)),
+            nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
+            nsfw_fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)),
+        )
+    return qs.aggregate(
         inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=False)),
         corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=False)),
         void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=False)),
+        fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=False)),
         nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
         nsfw_corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=True)),
         nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
+        nsfw_fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)),
     )
 
 
-def _get_next(mode: str, exclude_hash: str | None = None) -> Image | None:
+def _get_next(mode: str, exclude_hash: str | None = None, show_nsfw: bool = False) -> Image | None:
     qs = Image.objects.filter(file_deleted=False)
-    if mode.startswith("nsfw_"):
-        location = mode[5:]
-        qs = qs.filter(is_nsfw=True, location=location)
+
+    if mode == "nsfw_fav":
+        qs = qs.filter(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
+    elif mode.startswith("nsfw_"):
+        qs = qs.filter(location=mode[5:], is_nsfw=True)
+    elif mode == "fav":
+        qs = qs.filter(location=Image.CORPUS, is_favourite=True)
+        if not show_nsfw:
+            qs = qs.filter(is_nsfw=False)
     else:
-        qs = qs.filter(is_nsfw=False, location=mode)
+        qs = qs.filter(location=mode)
+        if not show_nsfw:
+            qs = qs.filter(is_nsfw=False)
+
     if mode in ("inbox", "nsfw_inbox"):
         qs = qs.order_by("downloaded_at")
     else:
         qs = qs.order_by("?")
+
     if exclude_hash:
         qs = qs.exclude(content_hash=exclude_hash)
     return qs.first()
 
 
-def _build_ctx(mode: str, image: Image | None) -> dict:
-    counts = _counts()
-    return {"mode": mode, "image": image, "queue_count": counts[f"{mode}_count"], **counts}
+def _build_ctx(mode: str, image: Image | None, show_nsfw: bool = False) -> dict:
+    counts = _counts(show_nsfw)
+    return {
+        "mode": mode,
+        "image": image,
+        "queue_count": counts[f"{mode}_count"],
+        "show_nsfw": show_nsfw,
+        **counts,
+    }
 
 
 def _mode_view(request, mode: str):
-    return render(request, "ratings/rate.html", _build_ctx(mode, _get_next(mode)))
+    show_nsfw = request.session.get("show_nsfw", False)
+    return render(request, "ratings/rate.html", _build_ctx(mode, _get_next(mode, show_nsfw=show_nsfw), show_nsfw))
+
+
+def _move_image(image: Image, new_location: str) -> None:
+    _move_image_util(image, new_location, DATA_DIR)
 
 
 @login_required
@@ -72,6 +107,11 @@ def rate_void(request):
 
 
 @login_required
+def rate_fav(request):
+    return _mode_view(request, "fav")
+
+
+@login_required
 def rate_nsfw_inbox(request):
     return _mode_view(request, "nsfw_inbox")
 
@@ -86,36 +126,16 @@ def rate_nsfw_void(request):
     return _mode_view(request, "nsfw_void")
 
 
-def _unique_dest(directory: Path, name: str) -> Path:
-    dest = directory / name
-    if not dest.exists():
-        return dest
-    stem, suffix = Path(name).stem, Path(name).suffix
-    i = 1
-    while True:
-        candidate = directory / f"{stem}_{i}{suffix}"
-        if not candidate.exists():
-            return candidate
-        i += 1
-
-
-def _move_image(image: Image, new_location: str) -> None:
-    src = DATA_DIR / image.file_path
-    dest_dir = DATA_DIR / new_location
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = _unique_dest(dest_dir, src.name)
-    try:
-        shutil.move(str(src), str(dest))
-    except FileNotFoundError:
-        pass
-    image.file_path = str(dest.relative_to(DATA_DIR))
-    image.location = new_location
+@login_required
+def rate_nsfw_fav(request):
+    return _mode_view(request, "nsfw_fav")
 
 
 @login_required
 @require_POST
 def submit_rating(request, content_hash: str, action: str):
     mode = request.POST.get("mode", "inbox")
+    show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
     now = timezone.now()
 
@@ -131,6 +151,9 @@ def submit_rating(request, content_hash: str, action: str):
         image.is_favourite = False
         image.rated_at = now
         image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+    elif action == "unfav":
+        image.is_favourite = False
+        image.save(update_fields=["is_favourite"])
     elif action == "mark_nsfw":
         image.is_nsfw = True
         image.save(update_fields=["is_nsfw"])
@@ -138,15 +161,23 @@ def submit_rating(request, content_hash: str, action: str):
         image.is_nsfw = False
         image.save(update_fields=["is_nsfw"])
 
-    next_image = _get_next(mode, exclude_hash=content_hash)
-    ctx = _build_ctx(mode, next_image)
+    next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
+    ctx = _build_ctx(mode, next_image, show_nsfw)
     template = "ratings/_card.html" if request.htmx else "ratings/rate.html"
     return render(request, template, ctx)
 
 
 @login_required
+@require_POST
+def nsfw_toggle(request):
+    request.session["show_nsfw"] = not request.session.get("show_nsfw", False)
+    return redirect(request.META.get("HTTP_REFERER") or "index")
+
+
+@login_required
 def stats(request):
-    counts = _counts()
+    show_nsfw = request.session.get("show_nsfw", False)
+    counts = _counts(show_nsfw)
 
     last_trained = None
     try:
@@ -167,6 +198,7 @@ def stats(request):
 
     return render(request, "ratings/stats.html", {
         **counts,
+        "show_nsfw": show_nsfw,
         "last_trained": last_trained,
         "source_breakdown": source_breakdown,
         "favs": favs,
@@ -179,7 +211,11 @@ def trigger_scrape(request):
     from ratings import scraper
 
     try:
-        counts = scraper.run(config_path=Path(settings.CONFIG_PATH), data_dir=DATA_DIR)
+        counts = scraper.run(
+            config_path=Path(settings.CONFIG_PATH),
+            data_dir=DATA_DIR,
+            weights_path=WEIGHTS_PATH,
+        )
         ctx = {"ok": True, "total": sum(counts.values()), "counts": counts}
     except Exception as exc:
         ctx = {"ok": False, "error": str(exc)}
@@ -191,7 +227,8 @@ def trigger_scrape(request):
 def trigger_train(request):
     from core import trainer
 
-    counts = _counts()
+    show_nsfw = request.session.get("show_nsfw", False)
+    counts = _counts(show_nsfw)
     try:
         trainer.run(data_dir=DATA_DIR, weights_path=WEIGHTS_PATH)
         ctx = {"ok": True, "corpus_n": counts["corpus_count"], "void_n": counts["void_count"]}
@@ -207,7 +244,13 @@ def trigger_train(request):
 
 @login_required
 def config_view(request):
-    return render(request, "ratings/config.html", {"sources": Source.objects.all()})
+    show_nsfw = request.session.get("show_nsfw", False)
+    counts = _counts(show_nsfw)
+    return render(request, "ratings/config.html", {
+        "sources": Source.objects.all(),
+        "show_nsfw": show_nsfw,
+        **counts,
+    })
 
 
 @login_required
