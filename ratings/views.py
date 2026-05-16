@@ -237,8 +237,13 @@ def stats(request):
 @login_required
 @require_POST
 def trigger_scrape(request):
-    from ratings import scraper
+    from loguru import logger
 
+    from ratings import scraper
+    from ratings.tasks import _db_sink, _trim_logs
+
+    _trim_logs()
+    sink_id = logger.add(_db_sink("scrape"), format="{message}")
     try:
         counts = scraper.run(
             config_path=Path(settings.CONFIG_PATH),
@@ -247,7 +252,10 @@ def trigger_scrape(request):
         )
         ctx = {"ok": True, "total": sum(counts.values()), "counts": counts}
     except Exception as exc:
+        logger.error("Scrape failed: {}", exc)
         ctx = {"ok": False, "error": str(exc)}
+    finally:
+        logger.remove(sink_id)
     return render(request, "ratings/_scrape_result.html", ctx)
 
 
