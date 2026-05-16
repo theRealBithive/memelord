@@ -29,6 +29,9 @@ scrape:
 train:
 	uv run python manage.py train
 
+qcluster:
+	uv run python manage.py qcluster
+
 # === docker
 build:
 	docker compose build

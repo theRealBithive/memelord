@@ -14,3 +14,18 @@ services:
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
     command: web
     restart: unless-stopped
+
+  qcluster:
+    image: memelord:latest
+    volumes:
+      - ./data:/data
+    environment:
+      - DATA_DIR=/data
+      - CONFIG_PATH=/data/config.toml
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-changeme-set-a-real-secret-in-production}
+      - DJANGO_DEBUG=false
+    command: qcluster
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      - memelord
