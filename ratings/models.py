@@ -22,3 +22,28 @@ class Image(models.Model):
 
     def __str__(self) -> str:
         return f"{self.location} {self.content_hash[:8]} ({self.source_label})"
+
+
+class Source(models.Model):
+    FOURCHAN = "4chan"
+    IMGUR = "imgur"
+    TUMBLR = "tumblr"
+    PIXELFED = "pixelfed"
+    TYPE_CHOICES = [
+        (FOURCHAN, "4chan"),
+        (IMGUR, "Imgur"),
+        (TUMBLR, "Tumblr"),
+        (PIXELFED, "Pixelfed"),
+    ]
+
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    name = models.CharField(max_length=255)  # board / topic / blog / instance URL
+    enabled = models.BooleanField(default=True)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("type", "name")]
+        ordering = ["type", "name"]
+
+    def __str__(self) -> str:
+        return f"{self.type}/{self.name}"

@@ -6,7 +6,11 @@
   </div>
 
   <div class="meta">
-    <span class="source">{{ image.source_label }}</span>
+    {% if image.source_url %}
+      <a href="{{ image.source_url }}" target="_blank" rel="noopener" class="source source-link">{{ image.source_label }} ↗</a>
+    {% else %}
+      <span class="source">{{ image.source_label }}</span>
+    {% endif %}
     <span class="count">{{ queue_count }} left</span>
   </div>
 

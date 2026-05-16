@@ -1,16 +1,18 @@
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
+from django.db.models import Count, Q
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings.models import Image
+from ratings.models import Image, Source
 
 WEIGHTS_PATH = Path(settings.WEIGHTS_PATH)
-
 DATA_DIR = Path(settings.DATA_DIR)
 
 
@@ -19,11 +21,11 @@ def index(request):
 
 
 def _counts() -> dict:
-    return {
-        "inbox_count": Image.objects.filter(location=Image.INBOX, file_deleted=False).count(),
-        "corpus_count": Image.objects.filter(location=Image.CORPUS, file_deleted=False).count(),
-        "void_count": Image.objects.filter(location=Image.VOID, file_deleted=False).count(),
-    }
+    return Image.objects.filter(file_deleted=False).aggregate(
+        inbox_count=Count("pk", filter=Q(location=Image.INBOX)),
+        corpus_count=Count("pk", filter=Q(location=Image.CORPUS)),
+        void_count=Count("pk", filter=Q(location=Image.VOID)),
+    )
 
 
 def _get_next(mode: str, exclude_hash: str | None = None) -> Image | None:
@@ -41,13 +43,11 @@ def _get_next(mode: str, exclude_hash: str | None = None) -> Image | None:
 
 def _build_ctx(mode: str, image: Image | None) -> dict:
     counts = _counts()
-    queue_count = counts[f"{mode}_count"]
-    return {"mode": mode, "image": image, "queue_count": queue_count, **counts}
+    return {"mode": mode, "image": image, "queue_count": counts[f"{mode}_count"], **counts}
 
 
 def _mode_view(request, mode: str):
-    image = _get_next(mode)
-    return render(request, "ratings/rate.html", _build_ctx(mode, image))
+    return render(request, "ratings/rate.html", _build_ctx(mode, _get_next(mode)))
 
 
 @login_required
@@ -69,11 +69,10 @@ def _unique_dest(directory: Path, name: str) -> Path:
     dest = directory / name
     if not dest.exists():
         return dest
-    parts = name.rsplit(".", 1)
-    stem, suffix = (parts[0], parts[1]) if len(parts) == 2 else (name, "")
+    stem, suffix = Path(name).stem, Path(name).suffix
     i = 1
     while True:
-        candidate = directory / (f"{stem}_{i}.{suffix}" if suffix else f"{stem}_{i}")
+        candidate = directory / f"{stem}_{i}{suffix}"
         if not candidate.exists():
             return candidate
         i += 1
@@ -84,8 +83,10 @@ def _move_image(image: Image, new_location: str) -> None:
     dest_dir = DATA_DIR / new_location
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = _unique_dest(dest_dir, src.name)
-    if src.exists():
+    try:
         shutil.move(str(src), str(dest))
+    except FileNotFoundError:
+        pass
     image.file_path = str(dest.relative_to(DATA_DIR))
     image.location = new_location
 
@@ -97,25 +98,18 @@ def submit_rating(request, content_hash: str, action: str):
     image = get_object_or_404(Image, content_hash=content_hash)
     now = timezone.now()
 
-    if action == "good":
+    if action in ("good", "fav"):
         if image.location != Image.CORPUS:
             _move_image(image, Image.CORPUS)
-        image.is_favourite = False
+        image.is_favourite = action == "fav"
         image.rated_at = now
-        image.save()
-    elif action == "fav":
-        if image.location != Image.CORPUS:
-            _move_image(image, Image.CORPUS)
-        image.is_favourite = True
-        image.rated_at = now
-        image.save()
+        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
     elif action == "bad":
         if image.location != Image.VOID:
             _move_image(image, Image.VOID)
         image.is_favourite = False
         image.rated_at = now
-        image.save()
-    # skip: no change
+        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
 
     next_image = _get_next(mode, exclude_hash=content_hash)
     ctx = _build_ctx(mode, next_image)
@@ -125,16 +119,14 @@ def submit_rating(request, content_hash: str, action: str):
 
 @login_required
 def stats(request):
-    from datetime import datetime, timezone
-    from django.db.models import Count
-
     counts = _counts()
 
-    weights_path = WEIGHTS_PATH
     last_trained = None
-    if weights_path.exists():
-        mtime = weights_path.stat().st_mtime
+    try:
+        mtime = WEIGHTS_PATH.stat().st_mtime
         last_trained = datetime.fromtimestamp(mtime, tz=timezone.utc)
+    except FileNotFoundError:
+        pass
 
     source_breakdown = (
         Image.objects.filter(location=Image.CORPUS, file_deleted=False)
@@ -142,18 +134,16 @@ def stats(request):
         .annotate(n=Count("content_hash"))
         .order_by("-n")
     )
-
     favs = Image.objects.filter(
         location=Image.CORPUS, is_favourite=True, file_deleted=False
     ).order_by("-rated_at")[:24]
 
-    ctx = {
+    return render(request, "ratings/stats.html", {
         **counts,
         "last_trained": last_trained,
         "source_breakdown": source_breakdown,
         "favs": favs,
-    }
-    return render(request, "ratings/stats.html", ctx)
+    })
 
 
 @login_required
@@ -162,15 +152,10 @@ def trigger_scrape(request):
     from ratings import scraper
 
     try:
-        counts = scraper.run(
-            config_path=Path(settings.CONFIG_PATH),
-            data_dir=DATA_DIR,
-        )
-        total = sum(counts.values())
-        ctx = {"ok": True, "total": total, "counts": counts}
+        counts = scraper.run(config_path=Path(settings.CONFIG_PATH), data_dir=DATA_DIR)
+        ctx = {"ok": True, "total": sum(counts.values()), "counts": counts}
     except Exception as exc:
         ctx = {"ok": False, "error": str(exc)}
-
     return render(request, "ratings/_scrape_result.html", ctx)
 
 
@@ -180,26 +165,63 @@ def trigger_train(request):
     from core import trainer
 
     counts = _counts()
-    corpus_n = counts["corpus_count"]
-    void_n = counts["void_count"]
-
     try:
         trainer.run(data_dir=DATA_DIR, weights_path=WEIGHTS_PATH)
-        weights_mtime = (
-            WEIGHTS_PATH.stat().st_mtime if WEIGHTS_PATH.exists() else None
-        )
-        ctx = {
-            "ok": True,
-            "corpus_n": corpus_n,
-            "void_n": void_n,
-            "weights_path": str(WEIGHTS_PATH),
-        }
+        ctx = {"ok": True, "corpus_n": counts["corpus_count"], "void_n": counts["void_count"]}
     except SystemExit:
         ctx = {
             "ok": False,
-            "corpus_n": corpus_n,
-            "void_n": void_n,
+            "corpus_n": counts["corpus_count"],
+            "void_n": counts["void_count"],
             "error": "Need both corpus and void images to train.",
         }
-
     return render(request, "ratings/_train_result.html", ctx)
+
+
+@login_required
+def config_view(request):
+    return render(request, "ratings/config.html", {"sources": Source.objects.all()})
+
+
+@login_required
+@require_POST
+def source_add(request):
+    stype = request.POST.get("type", "").strip()
+    name = request.POST.get("name", "").strip()
+
+    if stype not in dict(Source.TYPE_CHOICES):
+        return render(request, "ratings/_source_error.html", {"error": "Invalid source type."})
+    if not name:
+        return render(request, "ratings/_source_error.html", {"error": "Name is required."})
+    if stype == Source.PIXELFED and not name.startswith("http"):
+        return render(request, "ratings/_source_error.html", {"error": "Pixelfed value must be a URL (https://…)."})
+
+    source, created = Source.objects.get_or_create(type=stype, name=name)
+    if not created:
+        source.enabled = True
+        source.save(update_fields=["enabled"])
+    return render(request, "ratings/_source_row.html", {"source": source})
+
+
+@login_required
+@require_POST
+def source_toggle(request, pk):
+    source = get_object_or_404(Source, pk=pk)
+    source.enabled = not source.enabled
+    source.save(update_fields=["enabled"])
+    return render(request, "ratings/_source_row.html", {"source": source})
+
+
+@login_required
+@require_POST
+def source_delete(request, pk):
+    get_object_or_404(Source, pk=pk).delete()
+    return HttpResponse("")
+
+
+@login_required
+@require_POST
+def source_import(request):
+    from ratings.scraper import import_from_config
+    n = import_from_config(Path(settings.CONFIG_PATH))
+    return render(request, "ratings/_source_list.html", {"sources": Source.objects.all(), "imported": n})

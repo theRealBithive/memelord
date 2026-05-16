@@ -1,0 +1,19 @@
+<div class="source-row {% if not source.enabled %}source-disabled{% endif %}" id="source-{{ source.pk }}">
+  <span class="source-type-badge source-type-{{ source.type }}">{{ source.type }}</span>
+  <span class="source-name">{{ source.name }}</span>
+  <div class="source-actions">
+    <button class="src-btn src-toggle"
+            hx-post="{% url 'source_toggle' source.pk %}"
+            hx-target="#source-{{ source.pk }}"
+            hx-swap="outerHTML"
+            title="{% if source.enabled %}Disable{% else %}Enable{% endif %}">
+      {% if source.enabled %}●{% else %}○{% endif %}
+    </button>
+    <button class="src-btn src-delete"
+            hx-post="{% url 'source_delete' source.pk %}"
+            hx-target="#source-{{ source.pk }}"
+            hx-swap="outerHTML"
+            hx-confirm="Delete {{ source.type }}/{{ source.name }}?"
+            title="Delete">✕</button>
+  </div>
+</div>
