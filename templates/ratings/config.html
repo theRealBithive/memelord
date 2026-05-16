@@ -1,0 +1,142 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>memelord — config</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  <style>
+    .config-page { padding: calc(var(--nav-h) + 1.5rem) 1.25rem 3rem; max-width: 560px; margin: 0 auto; }
+    .config-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+    .config-title { font-size: 1rem; font-weight: 600; }
+
+    #source-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.5rem; min-height: 2rem; }
+
+    .source-row {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.6rem 0.75rem; border-radius: 6px;
+      background: var(--surface); border: 1px solid var(--border);
+      transition: opacity 150ms;
+    }
+    .source-disabled { opacity: 0.45; }
+
+    .source-type-badge {
+      font-size: 0.65rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; padding: 0.2rem 0.45rem; border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .source-type-4chan    { background: #16a34a22; color: #4ade80; border: 1px solid #16a34a55; }
+    .source-type-imgur    { background: #15803d22; color: #86efac; border: 1px solid #15803d55; }
+    .source-type-tumblr   { background: #1d4ed822; color: #93c5fd; border: 1px solid #1d4ed855; }
+    .source-type-pixelfed { background: #7c3aed22; color: #c4b5fd; border: 1px solid #7c3aed55; }
+
+    .source-name { flex: 1; font-size: 0.875rem; font-family: monospace; word-break: break-all; }
+    .source-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+    .src-btn {
+      padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); cursor: pointer; font-size: 0.8rem;
+      transition: color 100ms, border-color 100ms;
+    }
+    .src-toggle:hover { color: var(--green); border-color: var(--green); }
+    .src-delete:hover { color: var(--red); border-color: var(--red); }
+
+    .section-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+                     letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.75rem; }
+
+    .add-form { display: flex; gap: 0.5rem; align-items: flex-start; flex-wrap: wrap; }
+    .add-form select, .add-form input {
+      padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--surface); color: var(--text); font-size: 0.875rem; outline: none;
+    }
+    .add-form select:focus, .add-form input:focus { border-color: #555; }
+    .add-form select { flex-shrink: 0; }
+    .add-form input { flex: 1; min-width: 160px; }
+    .add-form button {
+      padding: 0.6rem 1rem; border: none; border-radius: 6px;
+      background: #fff; color: #000; font-size: 0.875rem; font-weight: 600; cursor: pointer;
+    }
+
+    .add-error { color: var(--red); font-size: 0.8rem; margin-top: 0.5rem; }
+    .empty-hint { color: var(--muted); font-size: 0.875rem; padding: 0.5rem 0; }
+    .import-notice { color: var(--green); font-size: 0.8rem; margin-bottom: 0.5rem; }
+
+    .hint { color: var(--muted); font-size: 0.75rem; margin-top: 0.4rem; }
+
+    .import-btn {
+      padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-size: 0.75rem; cursor: pointer;
+    }
+    .import-btn:hover { border-color: #555; color: var(--text); }
+  </style>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+
+  <nav class="nav">
+    <a href="{% url 'rate_inbox' %}" class="nav-tab">Mix</a>
+    <a href="{% url 'rate_corpus' %}" class="nav-tab">Corpus</a>
+    <a href="{% url 'rate_void' %}" class="nav-tab">Trash</a>
+    <a href="{% url 'stats' %}" class="nav-tab">Stats</a>
+    <a href="{% url 'config' %}" class="nav-tab active">Config</a>
+    <a href="{% url 'logout' %}" class="nav-logout">out</a>
+  </nav>
+
+  <div class="config-page">
+
+    <div class="config-header">
+      <span class="config-title">Scrape sources</span>
+      <button class="import-btn"
+              hx-post="{% url 'source_import' %}"
+              hx-target="#source-list"
+              hx-swap="outerHTML">
+        Import from config.toml
+      </button>
+    </div>
+
+    {% include "ratings/_source_list.html" %}
+
+    <div>
+      <div class="section-title">Add source</div>
+      <form class="add-form"
+            hx-post="{% url 'source_add' %}"
+            hx-target="#source-list"
+            hx-swap="afterbegin"
+            hx-on::after-request="this.querySelector('input').value=''">>
+        <select name="type" id="src-type" onchange="updateHint(this)">
+          <option value="4chan">4chan</option>
+          <option value="imgur">Imgur</option>
+          <option value="tumblr">Tumblr</option>
+          <option value="pixelfed">Pixelfed</option>
+        </select>
+        <input type="text" name="name" id="src-name" placeholder="board (e.g. wg)" required autocomplete="off">
+        <button type="submit">Add</button>
+      </form>
+      <p class="hint" id="src-hint">4chan board name, e.g. <code>wg</code></p>
+      <div id="add-error"></div>
+    </div>
+
+  </div>
+
+  <script>
+    const hints = {
+      "4chan":    '4chan board name, e.g. <code>wg</code>',
+      "imgur":    'Imgur topic slug, e.g. <code>warhammer40k</code>',
+      "tumblr":   'Tumblr blog name, e.g. <code>myblog</code>',
+      "pixelfed": 'Pixelfed instance URL, e.g. <code>https://pixelfed.social</code>',
+    };
+    const placeholders = {
+      "4chan": "board (e.g. wg)",
+      "imgur": "topic (e.g. funny)",
+      "tumblr": "blog name",
+      "pixelfed": "https://pixelfed.social",
+    };
+    function updateHint(sel) {
+      document.getElementById("src-hint").innerHTML = hints[sel.value] || "";
+      document.getElementById("src-name").placeholder = placeholders[sel.value] || "";
+    }
+  </script>
+</body>
+</html>

@@ -36,8 +36,11 @@ html, body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   z-index: 10;
-  safe-area-inset-top: env(safe-area-inset-top);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
+.nav::-webkit-scrollbar { display: none; }
 
 .nav-tab {
   display: flex;
@@ -117,6 +120,8 @@ html, body {
   font-size: 0.75rem;
 }
 .source { color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.source-link { text-decoration: none; transition: color 150ms; }
+.source-link:hover { color: var(--text); }
 .count { color: var(--muted); }
 
 /* ── Buttons ── */

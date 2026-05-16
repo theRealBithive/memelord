@@ -2,7 +2,14 @@ from django.conf import settings
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import Image
+from .models import Image, Source
+
+
+@admin.register(Source)
+class SourceAdmin(admin.ModelAdmin):
+    list_display = ("type", "name", "enabled", "added_at")
+    list_filter = ("type", "enabled")
+    list_editable = ("enabled",)
 
 
 @admin.register(Image)
