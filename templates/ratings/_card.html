@@ -1,0 +1,111 @@
+<div id="card">
+{% if image %}
+
+  <div class="image-wrap">
+    <img src="{{ MEDIA_URL }}{{ image.file_path }}" alt="" loading="eager">
+  </div>
+
+  <div class="meta">
+    <span class="source">{{ image.source_label }}</span>
+    <span class="count">{{ queue_count }} left</span>
+  </div>
+
+  <div class="btn-row">
+  {% if mode == "inbox" %}
+    <button class="btn btn-bad" data-action="bad"
+            hx-post="{% url 'submit_rating' image.content_hash 'bad' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "inbox"}'>
+      <span class="btn-icon">✕</span><span class="btn-label">BAD</span>
+    </button>
+    <button class="btn btn-fav" data-action="fav"
+            hx-post="{% url 'submit_rating' image.content_hash 'fav' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "inbox"}'>
+      <span class="btn-icon">★</span><span class="btn-label">FAV</span>
+    </button>
+    <button class="btn btn-good" data-action="good"
+            hx-post="{% url 'submit_rating' image.content_hash 'good' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "inbox"}'>
+      <span class="btn-icon">✓</span><span class="btn-label">GOOD</span>
+    </button>
+
+  {% elif mode == "corpus" %}
+    <button class="btn btn-bad" data-action="bad"
+            hx-post="{% url 'submit_rating' image.content_hash 'bad' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "corpus"}'>
+      <span class="btn-icon">🗑</span><span class="btn-label">REMOVE</span>
+    </button>
+    <button class="btn btn-fav" data-action="fav"
+            hx-post="{% url 'submit_rating' image.content_hash 'fav' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "corpus"}'>
+      <span class="btn-icon">★</span><span class="btn-label">{% if image.is_favourite %}UNFAV{% else %}FAV{% endif %}</span>
+    </button>
+    <button class="btn btn-skip" data-action="skip"
+            hx-post="{% url 'submit_rating' image.content_hash 'skip' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "corpus"}'>
+      <span class="btn-icon">→</span><span class="btn-label">KEEP</span>
+    </button>
+
+  {% else %}{# void #}
+    <button class="btn btn-skip" data-action="skip"
+            hx-post="{% url 'submit_rating' image.content_hash 'skip' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "void"}'>
+      <span class="btn-icon">→</span><span class="btn-label">SKIP</span>
+    </button>
+    <button class="btn btn-fav" data-action="fav"
+            hx-post="{% url 'submit_rating' image.content_hash 'fav' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "void"}'>
+      <span class="btn-icon">★</span><span class="btn-label">RESCUE★</span>
+    </button>
+    <button class="btn btn-good" data-action="good"
+            hx-post="{% url 'submit_rating' image.content_hash 'good' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "void"}'>
+      <span class="btn-icon">✓</span><span class="btn-label">RESCUE</span>
+    </button>
+  {% endif %}
+  </div>
+
+{% else %}
+
+  <div class="done">
+    <p class="done-title">Queue empty</p>
+    {% if mode == "inbox" %}
+      <p class="done-hint">Scrape more images, then train the model.</p>
+    {% else %}
+      <p class="done-hint">Nothing more to review here.</p>
+    {% endif %}
+
+    <div class="done-actions">
+      <a href="{% url 'rate_inbox' %}" class="done-btn">← Inbox</a>
+      <button class="done-btn done-btn-scrape"
+              hx-post="{% url 'trigger_scrape' %}"
+              hx-target="#scrape-result"
+              hx-swap="outerHTML"
+              hx-indicator="#scrape-spinner">
+        Scrape more
+      </button>
+      <button class="done-btn done-btn-train"
+              hx-post="{% url 'trigger_train' %}"
+              hx-target="#train-result"
+              hx-swap="outerHTML"
+              hx-indicator="#train-spinner">
+        Train model
+      </button>
+    </div>
+
+    <span id="scrape-spinner" class="train-spinner htmx-indicator">scraping…</span>
+    <div id="scrape-result"></div>
+    <span id="train-spinner" class="train-spinner htmx-indicator">training…</span>
+    <div id="train-result"></div>
+  </div>
+
+{% endif %}
+</div>

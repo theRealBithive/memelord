@@ -1,0 +1,31 @@
+(function () {
+  let startX = 0, startY = 0;
+  const THRESHOLD = 55;
+
+  function trigger(action) {
+    const btn = document.querySelector(`[data-action="${action}"]`);
+    if (btn) btn.click();
+  }
+
+  document.addEventListener("touchstart", (e) => {
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+
+  document.addEventListener("touchend", (e) => {
+    const dx = e.changedTouches[0].clientX - startX;
+    const dy = e.changedTouches[0].clientY - startY;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (dx < -THRESHOLD) trigger("bad");
+      else if (dx > THRESHOLD) trigger("good");
+    } else {
+      if (dy < -THRESHOLD) trigger("fav");
+      else if (dy > THRESHOLD) trigger("skip");
+    }
+  }, { passive: true });
+
+  document.addEventListener("keydown", (e) => {
+    const map = { ArrowLeft: "bad", ArrowRight: "good", ArrowUp: "fav", ArrowDown: "skip" };
+    if (map[e.key]) { e.preventDefault(); trigger(map[e.key]); }
+  });
+})();

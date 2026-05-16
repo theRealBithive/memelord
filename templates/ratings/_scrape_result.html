@@ -1,0 +1,11 @@
+<div id="scrape-result" class="train-result {% if ok %}train-ok{% else %}train-err{% endif %}">
+{% if ok %}
+  <span class="train-icon">✓</span>
+  <span>{{ total }} new image{{ total|pluralize }} added to inbox.
+    {% for source, n in counts.items %}{{ source }}: {{ n }}{% if not forloop.last %} · {% endif %}{% endfor %}
+  </span>
+{% else %}
+  <span class="train-icon">✕</span>
+  <span>{{ error }}</span>
+{% endif %}
+</div>

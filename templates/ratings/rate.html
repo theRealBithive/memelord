@@ -1,0 +1,37 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>memelord</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+
+  <nav class="nav">
+    <a href="{% url 'rate_inbox' %}"
+       class="nav-tab {% if mode == 'inbox' %}active{% endif %}">
+      Mixed<span class="badge">{{ inbox_count }}</span>
+    </a>
+    <a href="{% url 'rate_corpus' %}"
+       class="nav-tab {% if mode == 'corpus' %}active{% endif %}">
+      Corpus<span class="badge">{{ corpus_count }}</span>
+    </a>
+    <a href="{% url 'rate_void' %}"
+       class="nav-tab {% if mode == 'void' %}active{% endif %}">
+      Trash<span class="badge">{{ void_count }}</span>
+    </a>
+    <a href="{% url 'stats' %}" class="nav-tab">Stats</a>
+    <a href="{% url 'logout' %}" class="nav-logout">out</a>
+  </nav>
+
+  {% include "ratings/_card.html" %}
+
+  <script src="{% static 'swipe.js' %}" defer></script>
+</body>
+</html>
