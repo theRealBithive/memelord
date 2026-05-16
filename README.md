@@ -1,81 +1,63 @@
-# JANULON
+# MEMELORD
 
-> "The machine does not need to see. It only needs to feel."
+A private torment nexus for the discerning image hoarder.
 
-Janulon is a subjective aesthetic engine. Unlike generative AI (which creates new noise), Janulon is a curatorial AI designed to filter the digital ocean for specific visual frequencies.
+Memelord scrapes the cursed corners of the internet, makes you swipe through the results like a deranged sommelier, and uses your judgement to train a neural network that learns your specific, unjustifiable taste. It then starts pre-sorting new scrapes automatically so you only have to touch the ambiguous ones.
 
-It uses Meta's DINOv2 (self-supervised vision transformer) to map images into high-dimensional vector space, then applies a custom-trained linear probe to determine if a new image aligns with the operator's specific taste. Unlike language-supervised models, DINOv2 learns pure visual structure — texture, composition, light — which is exactly what aesthetic judgement demands.
-
-It is a mirror. You teach it what you love; it finds more of it.
+It is a machine that watches you suffer, learns from it, and tries to suffer more efficiently on your behalf.
 
 ---
 
-## How it works
+## The loop
 
-Three phases, running in a loop:
+1. **Scrape** — pull images from 4chan, Tumblr, Imgur, Pixelfed into an inbox
+2. **Rate** — swipe left/right/up through the inbox: bad / good / fav
+3. **Train** — DINOv2 encodes your rated images; a logistic regression learns your damage
 
-1. **Scrape** — pull images from configured sources (4chan, Tumblr, Imgur, Pixelfed) into an inbox
-2. **Rate** — swipe through the inbox in the mobile-first web UI: good / fav / bad
-3. **Train** — DINOv2 encodes your rated images; a logistic regression learns your taste
-
-After training, the classifier auto-sorts new scrapes before they even reach the rating queue.
+After enough ratings, the classifier starts auto-sorting new scrapes before they reach your queue. High-confidence matches go straight to corpus or void. You only see the confusing middle ground.
 
 ---
 
-## Docker setup (recommended)
+## Docker setup
 
-### 1. Copy and fill in the env file
+### 1. Configure
 
 ```bash
 cp .env.example .env
+# set DJANGO_SECRET_KEY (generation hint is inside the file)
+# set ALLOWED_HOSTS to your server hostname if not running locally
 ```
 
-Edit `.env` — at minimum set a real `DJANGO_SECRET_KEY`:
+Drop a `config.toml` in the `data/` directory with your sources (see below).
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(50))"
-```
-
-Also set `ALLOWED_HOSTS` to your server's hostname or IP if running remotely.
-
-### 2. Create the data directory and drop in a config
-
-```bash
-mkdir -p data
-```
-
-Create `data/config.toml` with your sources (see [Sources](#sources) below). This file is required for scraping; the app starts fine without it.
-
-### 3. Start everything
+### 2. Run
 
 ```bash
 docker compose up -d
 ```
 
-This starts two containers from the same image:
-- **memelord** — gunicorn web server on port 8000; runs migrations on first start
-- **qcluster** — django-q worker for background scrape/train jobs; starts only after the web service is healthy
+Two containers start from the same image:
+- **memelord** — web UI on port 8000, runs migrations on first start
+- **qcluster** — background worker for scrape/train jobs; waits for the web service to be healthy before starting
 
-### 4. Create an admin user
+### 3. Create a user
 
 ```bash
 docker compose run --rm memelord createsuperuser
 ```
 
-Then open `http://localhost:8000` and log in.
+Open `http://localhost:8000` and begin your torment.
 
 ### One-off commands
 
 ```bash
-docker compose run --rm memelord scrape   # scrape now (outside the UI)
-docker compose run --rm memelord train    # train now (outside the UI)
+docker compose run --rm memelord scrape   # scrape now
+docker compose run --rm memelord train    # train now
 ```
 
 ---
 
-## Sources
-
-Create `data/config.toml` (or manage sources from the Config page in the UI):
+## Sources (`data/config.toml`)
 
 ```toml
 [4chan]
@@ -91,58 +73,53 @@ topics = ["pics"]
 instance_base = "https://pixelfed.social"
 ```
 
-Sources can be marked NSFW individually in the UI. NSFW images are kept in a separate rating mode and hidden from the main queue unless toggled.
+Sources can also be managed from the Config page in the UI. Mark a source NSFW and its images are quarantined to a separate rating mode.
 
 ---
 
 ## Rating modes
 
-| Mode | Queue | Left swipe / Bad | Up swipe / Fav | Right swipe / Good |
+| Mode | Queue | Bad | Fav | Good |
 |---|---|---|---|---|
-| **Inbox** | newly scraped | → void | → corpus ★ | → corpus |
-| **Corpus** | rated good/fav | → void | toggle ★ | — |
-| **Fav** | favourites only | → void | toggle ★ | — |
+| **Inbox** | new scrapes | → void | → corpus ★ | → corpus |
+| **Corpus** | approved | → void | toggle ★ | — |
+| **Fav** | favourites | → void | toggle ★ | — |
 | **Trash** | void | — | → corpus ★ | → corpus |
 
-Arrow keys and keyboard shortcuts work on desktop. Press `?` for the shortcut reference.
+Swipe or use arrow keys. `?` shows keyboard shortcuts.
 
 ---
 
-## Development setup
+## Releases
+
+Tagged releases are automatically built and pushed to the GitHub Container Registry:
 
 ```bash
-uv sync --extra dev      # install all deps
-make run                 # Django dev server on :8000
-make qcluster            # background worker (separate terminal — required for Train)
-make migrate             # makemigrations + migrate
-make superuser           # create admin user
-make test                # full test suite
-make test-fast           # skip @pytest.mark.integration tests
+docker pull ghcr.io/therealbiwhive/memelord:latest
+```
+
+---
+
+## Development
+
+```bash
+uv sync --extra dev
+make run        # Django dev server on :8000
+make qcluster   # background worker (separate terminal — required for Train button)
+make migrate
+make test
 ```
 
 ### Stack
 
-- **Framework:** Django 6 + django-htmx
-- **Background jobs:** django-q2 (ORM broker — no Redis needed)
-- **Vision:** PyTorch + DINOv2 ViT-B/14
-- **Classifier:** scikit-learn LogisticRegression
-- **Scrapers:** 4chan, Tumblr, Imgur, Pixelfed (Playwright for JS-rendered pages)
-- **Tooling:** [uv](https://docs.astral.sh/uv/)
-
-### Data layout
-
-```
-data/
-├── memelord.db           # SQLite (Django ORM + django-q broker)
-├── Janulon_weights.pkl   # trained classifier
-├── config.toml           # scraper sources (mount or place here)
-├── inbox/                # scraped, awaiting rating
-├── corpus/               # rated good/fav — positive training samples
-└── void/                 # rated bad — negative training samples
-```
+- Django 6 + django-htmx (mobile-first UI, swipe gestures)
+- django-q2 (background jobs, SQLite broker — no Redis)
+- PyTorch + DINOv2 ViT-B/14 (768-d image embeddings)
+- scikit-learn LogisticRegression (the taste oracle)
+- Playwright-powered scrapers for 4chan, Tumblr, Imgur, Pixelfed
 
 ---
 
 ## License
 
-MIT. This tool is a prism; use it to refract the light you want to see.
+MIT. Not responsible for what you teach it.
