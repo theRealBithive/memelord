@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 
 from django.conf import settings
@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings.models import Image, Source
+from ratings.models import Image, LogEntry, Source
 from ratings.utils import move_image as _move_image_util
 
 WEIGHTS_PATH = Path(settings.WEIGHTS_PATH)
@@ -71,20 +71,48 @@ def _get_next(mode: str, exclude_hash: str | None = None, show_nsfw: bool = Fals
     return qs.first()
 
 
-def _build_ctx(mode: str, image: Image | None, show_nsfw: bool = False) -> dict:
+def _fmt_elapsed(seconds: int | None) -> str | None:
+    if seconds is None:
+        return None
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60}m {seconds % 60}s"
+
+
+def _training_ctx(request) -> dict:
+    task_id = request.session.get("training_task_id")
+    if not task_id:
+        return {"active_task_id": None, "training_elapsed": None}
+    started_at_str = request.session.get("training_started_at")
+    elapsed = None
+    if started_at_str:
+        from datetime import timezone as tz
+        started_at = datetime.fromisoformat(started_at_str)
+        elapsed = int((datetime.now(tz.utc) - started_at).total_seconds())
+        if elapsed > 1800:
+            request.session.pop("training_task_id", None)
+            request.session.pop("training_started_at", None)
+            return {"active_task_id": None, "training_elapsed": None}
+    return {"active_task_id": task_id, "training_elapsed": _fmt_elapsed(elapsed)}
+
+
+def _build_ctx(mode: str, image: Image | None, show_nsfw: bool = False, request=None) -> dict:
     counts = _counts(show_nsfw)
-    return {
+    ctx = {
         "mode": mode,
         "image": image,
         "queue_count": counts[f"{mode}_count"],
         "show_nsfw": show_nsfw,
         **counts,
     }
+    if request is not None:
+        ctx.update(_training_ctx(request))
+    return ctx
 
 
 def _mode_view(request, mode: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    return render(request, "ratings/rate.html", _build_ctx(mode, _get_next(mode, show_nsfw=show_nsfw), show_nsfw))
+    return render(request, "ratings/rate.html", _build_ctx(mode, _get_next(mode, show_nsfw=show_nsfw), show_nsfw, request))
 
 
 def _move_image(image: Image, new_location: str) -> None:
@@ -162,7 +190,7 @@ def submit_rating(request, content_hash: str, action: str):
         image.save(update_fields=["is_nsfw"])
 
     next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
-    ctx = _build_ctx(mode, next_image, show_nsfw)
+    ctx = _build_ctx(mode, next_image, show_nsfw, request)
     template = "ratings/_card.html" if request.htmx else "ratings/rate.html"
     return render(request, template, ctx)
 
@@ -182,7 +210,7 @@ def stats(request):
     last_trained = None
     try:
         mtime = WEIGHTS_PATH.stat().st_mtime
-        last_trained = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        last_trained = datetime.fromtimestamp(mtime, tz=dt_timezone.utc)
     except FileNotFoundError:
         pass
 
@@ -198,6 +226,7 @@ def stats(request):
 
     return render(request, "ratings/stats.html", {
         **counts,
+        **_training_ctx(request),
         "show_nsfw": show_nsfw,
         "last_trained": last_trained,
         "source_breakdown": source_breakdown,
@@ -226,8 +255,16 @@ def trigger_scrape(request):
 @require_POST
 def trigger_train(request):
     from django_q.tasks import async_task
+    if request.session.get("training_task_id"):
+        ctx = _training_ctx(request)
+        return render(request, "ratings/_train_pending.html", {
+            "task_id": ctx["active_task_id"],
+            "elapsed": ctx["training_elapsed"],
+        })
     task_id = async_task("ratings.tasks.run_train")
-    return render(request, "ratings/_train_pending.html", {"task_id": task_id})
+    request.session["training_task_id"] = task_id
+    request.session["training_started_at"] = timezone.now().isoformat()
+    return render(request, "ratings/_train_pending.html", {"task_id": task_id, "elapsed": "0s"})
 
 
 @login_required
@@ -235,7 +272,19 @@ def train_status(request, task_id: str):
     from django_q.tasks import fetch
     task = fetch(task_id)
     if task is None or task.stopped is None:
-        return render(request, "ratings/_train_pending.html", {"task_id": task_id})
+        started_at_str = request.session.get("training_started_at")
+        elapsed = None
+        if started_at_str:
+            from datetime import timezone as tz
+            started_at = datetime.fromisoformat(started_at_str)
+            elapsed = int((datetime.now(tz.utc) - started_at).total_seconds())
+        return render(request, "ratings/_train_pending.html", {
+            "task_id": task_id,
+            "elapsed": _fmt_elapsed(elapsed),
+        })
+
+    request.session.pop("training_task_id", None)
+    request.session.pop("training_started_at", None)
 
     result = task.result or {}
     show_nsfw = request.session.get("show_nsfw", False)
@@ -255,6 +304,7 @@ def config_view(request):
     return render(request, "ratings/config.html", {
         "sources": Source.objects.all(),
         "show_nsfw": show_nsfw,
+        **_training_ctx(request),
         **counts,
     })
 
@@ -310,3 +360,35 @@ def source_import(request):
     from ratings.scraper import import_from_config
     n = import_from_config(Path(settings.CONFIG_PATH))
     return render(request, "ratings/_source_list.html", {"sources": Source.objects.all(), "imported": n})
+
+
+@login_required
+def logs_page(request):
+    show_nsfw = request.session.get("show_nsfw", False)
+    entries = list(LogEntry.objects.order_by("pk")[:500])
+    next_since = entries[-1].pk if entries else 0
+    return render(request, "ratings/logs.html", {
+        **_counts(show_nsfw),
+        **_training_ctx(request),
+        "show_nsfw": show_nsfw,
+        "entries": entries,
+        "next_since": next_since,
+    })
+
+
+@login_required
+def log_entries(request):
+    since_id = int(request.GET.get("since", 0))
+    entries = list(LogEntry.objects.filter(pk__gt=since_id).order_by("pk")[:100])
+    next_since = entries[-1].pk if entries else since_id
+    return render(request, "ratings/_log_entries.html", {
+        "entries": entries,
+        "next_since": next_since,
+    })
+
+
+@login_required
+@require_POST
+def log_clear(request):
+    LogEntry.objects.all().delete()
+    return redirect("logs")
