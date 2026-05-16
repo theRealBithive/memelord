@@ -8,229 +8,140 @@ It uses Meta's DINOv2 (self-supervised vision transformer) to map images into hi
 
 It is a mirror. You teach it what you love; it finds more of it.
 
-## Architecture
+---
 
-Janulon operates in a continuous loop of three phases: Acquisition, Evaluation, and Curating.
+## How it works
 
-```mermaid
-graph LR
-    A[The Web] -->|Scrapers| B(Input Buffer)
-    B -->|Pre-process| C{DINOv2 Encoder}
-    C -->|Vector 768d| D[The Taste Matrix]
-    D -->|Score > 0.90| E[Archive / Post]
-    D -->|Score < 0.90| F[The Void]
-```
+Three phases, running in a loop:
 
-### The Stack
+1. **Scrape** — pull images from configured sources (4chan, Tumblr, Imgur, Pixelfed) into an inbox
+2. **Rate** — swipe through the inbox in the mobile-first web UI: good / fav / bad
+3. **Train** — DINOv2 encodes your rated images; a logistic regression learns your taste
 
-- **Core:** Python 3.9+
-- **Tooling:** [uv](https://docs.astral.sh/uv/) (install & run)
-- **Vision:** PyTorch + DINOv2 (ViT-B/14)
-- **Logic:** Scikit-Learn (Logistic Regression / MLP)
-- **Retina (Scrapers):** 4chan, Tumblr (v1 API), Imgur (scraping; optional Playwright for JS-rendered topic pages)
+After training, the classifier auto-sorts new scrapes before they even reach the rating queue.
 
-### Directory Structure
+---
 
-```
-Janulon/
-├── core/
-│   ├── brain.py       # The neural logic (DINOv2 + Classifier)
-│   └── trainer.py     # The script that learns your taste
-├── retina/
-│   ├── fourchan.py    # Scraper for 4chan /wg/ (wallpaper)
-│   ├── tumblr.py      # Scraper for Tumblr
-│   ├── imgur.py       # Scraper for Imgur topics (e.g. /t/funny)
-│   └── reddit.py      # Scraper for Reddit
-├── data/
-│   ├── corpus/        # POSITIVE samples (Images you love)
-│   └── void/          # NEGATIVE samples (Random noise/memes)
-├── main.py            # The execution loop
-├── pyproject.toml     # Dependencies and project metadata
-└── tests/             # Tests mirroring source structure
-```
+## Docker setup (recommended)
 
-## Quick Start
-
-### 1. Installation
-
-Clone the repository and install the project (dependency management via `pyproject.toml`). Using [uv](https://docs.astral.sh/uv/) is recommended.
-
-Or with pip:
+### 1. Copy and fill in the env file
 
 ```bash
-pip install -e .
+cp .env.example .env
 ```
 
-### 2. Induction (Training Phase)
-
-Janulon creates a decision boundary based on your curation history.
-
-1. **Fill the Corpus:** Place 50–100 images that represent your target aesthetic into `data/corpus/`.
-2. **Fill the Void:** Place 50–100 random images (screenshots, text, bad photos) into `data/void/`.
-3. **Run the calibration:**
+Edit `.env` — at minimum set a real `DJANGO_SECRET_KEY`:
 
 ```bash
-python3 core/trainer.py
+python -c "import secrets; print(secrets.token_urlsafe(50))"
 ```
 
-Output: `Janulon_weights.pkl` (the mathematical representation of your taste).
+Also set `ALLOWED_HOSTS` to your server's hostname or IP if running remotely.
 
-**Retraining with engagement (Phase II):** After posting to Mastodon, you can retrain so that posted images are weighted by social feedback. You still need the original `corpus/` and `void/` folders on disk (the trainer reads and encodes them). Pass the same data dir and your DB so posted images get sample weights: faves (+1), replies (+0.5), reblogs (+2):
+### 2. Create the data directory and drop in a config
 
 ```bash
-python3 core/trainer.py --data_dir data --weights Janulon_weights.pkl --db data/janulon.db
+mkdir -p data
 ```
 
-Posted corpus images that have engagement data in the DB are weighted by that formula; all other corpus and void images use weight 1.0.
+Create `data/config.toml` with your sources (see [Sources](#sources) below). This file is required for scraping; the app starts fine without it.
 
-### 3. Observation (Inference Phase)
-
-Once calibrated, run the main loop. Janulon will scrape configured sources, judge images, and save the matches.
-
-**Simple (all sources from config):**
+### 3. Start everything
 
 ```bash
-# Edit config.toml with 4chan boards, tumblr blogs, imgur topics, then:
-python3 main.py --source all
+docker compose up -d
 ```
 
-**Single source (CLI):**
+This starts two containers from the same image:
+- **memelord** — gunicorn web server on port 8000; runs migrations on first start
+- **qcluster** — django-q worker for background scrape/train jobs; starts only after the web service is healthy
+
+### 4. Create an admin user
 
 ```bash
-# 4chan /wg/ (wallpaper general): no API key
-python3 main.py --source 4chan --board wg --output_folder ./pics --index_pages 2
-
-# Imgur topic (e.g. /t/funny): scraping only; for JS-rendered pages install optional browser support
-uv pip install 'janulon[imgur-browser]' && playwright install chromium
-python3 main.py --source imgur --topic funny --output_folder ./pics
-
-# Reddit (when implemented): requires API key
-python3 main.py --source reddit --subreddit architecture --threshold 0.85
+docker compose run --rm memelord createsuperuser
 ```
 
-### 4. Testing
+Then open `http://localhost:8000` and log in.
 
-- **Framework:** pytest
-- **Layout:** Tests live in `tests/`, mirroring the source layout (e.g. `tests/core/test_brain.py`).
-- **Naming:** Files `test_<module>.py`; functions `test_<behavior_being_tested>`.
-
-Install dev dependencies and run tests:
+### One-off commands
 
 ```bash
-uv sync --extra dev
-uv run pytest
+docker compose run --rm memelord scrape   # scrape now (outside the UI)
+docker compose run --rm memelord train    # train now (outside the UI)
 ```
 
-Every new function, class, or feature must have corresponding tests. Use one behavior per test, Arrange–Act–Assert structure, and minimal fixtures.
+---
 
-## Configuration
+## Sources
 
-### The Threshold (`--threshold`)
-
-The confidence required for Janulon to accept an image.
-
-| Value | Description |
-|-------|-------------|
-| 0.50 | Permissive. Will let in anything remotely similar. |
-| 0.85 | Strict. High quality, distinct style match. **(Recommended)** |
-| 0.98 | The God Tier. Only images mathematically nearly identical to your corpus. |
-
-### Config (for `--source all`)
-
-With `--source all`, Janulon reads **`config.toml`** (or `--config <path>`) and scrapes every listed 4chan board, Tumblr blog, and Imgur topic. No need to pass `--board`, `--blog`, or `--topic` on the CLI.
-
-Example **`config.toml`**:
+Create `data/config.toml` (or manage sources from the Config page in the UI):
 
 ```toml
 [4chan]
 boards = ["wg", "a"]
 
 [tumblr]
-blogs = ["staff", "someblog"]
+blogs = ["someblog"]
 
 [imgur]
-topics = ["funny", "pics"]
+topics = ["pics"]
+
+[pixelfed]
+instance_base = "https://pixelfed.social"
 ```
 
-Run: `python main.py --source all` (optionally `--output_folder ./out`, `--weights Janulon_weights.pkl`).
+Sources can be marked NSFW individually in the UI. NSFW images are kept in a separate rating mode and hidden from the main queue unless toggled.
 
-### Sources (API usage)
+---
 
-- **4chan /wg/ (wallpaper general):** Public JSON API, no API key. Use the `retina.fourchan` scraper:
+## Rating modes
 
-  ```python
-  from retina.fourchan import iter_image_urls, get_index, get_thread, image_url_from_post
+| Mode | Queue | Left swipe / Bad | Up swipe / Fav | Right swipe / Good |
+|---|---|---|---|---|
+| **Inbox** | newly scraped | → void | → corpus ★ | → corpus |
+| **Corpus** | rated good/fav | → void | toggle ★ | — |
+| **Fav** | favourites only | → void | toggle ★ | — |
+| **Trash** | void | — | → corpus ★ | → corpus |
 
-  # Collect image URLs from the first 2 index pages (rate-limited to 1 req/s)
-  urls = iter_image_urls(board="wg", index_pages=2)
+Arrow keys and keyboard shortcuts work on desktop. Press `?` for the shortcut reference.
 
-  # Or fetch a single index page or full thread
-  page = get_index("wg", page=1)
-  thread = get_thread("wg", thread_no=12345)
-  for post in thread.get("posts", []):
-      url = image_url_from_post(post, "wg")
-      if url:
-          ...
-  ```
+---
 
-- **Reddit:** Subreddits like /r/Brutalism, /r/LiminalSpace, /r/Cyberpunk
-- **Tumblr:** Specific aesthetic blogs to traverse reblog trees
-- **Local:** A folder of unsorted images to filter
-
-## Docker
-
-Build and run with a single persistent folder for config, weights, database, and images. The entrypoint sets `JANULON_DATA` so that `output_folder` and `data_dir` both point at the same directory; judged corpus images are then found by the post job.
+## Development setup
 
 ```bash
-docker compose build
-docker compose run --rm janulon run --source all   # scrape + judge
-docker compose run --rm janulon post               # post one to Mastodon
-docker compose run --rm janulon import-data       # import corpus/ + void/ into DB
-docker compose up -d                               # or: run janulon schedule (scrape/post/cleanup on intervals)
+uv sync --extra dev      # install all deps
+make run                 # Django dev server on :8000
+make qcluster            # background worker (separate terminal — required for Train)
+make migrate             # makemigrations + migrate
+make superuser           # create admin user
+make test                # full test suite
+make test-fast           # skip @pytest.mark.integration tests
 ```
 
-**Schedule (recommended):** The default command is `schedule`. Run the container long-lived so it periodically scrapes, judges, posts, cleans up, and retrains:
+### Stack
 
-```bash
-docker compose up -d
+- **Framework:** Django 6 + django-htmx
+- **Background jobs:** django-q2 (ORM broker — no Redis needed)
+- **Vision:** PyTorch + DINOv2 ViT-B/14
+- **Classifier:** scikit-learn LogisticRegression
+- **Scrapers:** 4chan, Tumblr, Imgur, Pixelfed (Playwright for JS-rendered pages)
+- **Tooling:** [uv](https://docs.astral.sh/uv/)
+
+### Data layout
+
+```
+data/
+├── memelord.db           # SQLite (Django ORM + django-q broker)
+├── Janulon_weights.pkl   # trained classifier
+├── config.toml           # scraper sources (mount or place here)
+├── inbox/                # scraped, awaiting rating
+├── corpus/               # rated good/fav — positive training samples
+└── void/                 # rated bad — negative training samples
 ```
 
-On first start, if no `Janulon_weights.pkl` exists, the schedule runs an initial train so the run/post jobs can use the classifier. Retrains then run on the interval from `[schedule]` (default weekly) with engagement weighting when `janulon.db` exists.
-
-The compose file mounts a volume at `/data`. Put the following in that folder (e.g. bind mount `./janulon-data:/data` and create `janulon-data/` on the host):
-
-- `config.toml` — sources, Mastodon, and optional `[schedule]` (scrape/post/cleanup/retrain intervals in hours; fractional allowed, e.g. `post_every_hours = 0.5` for 30 minutes). Defaults: scrape 6h, post 24h, cleanup 24h, retrain 168h (weekly).
-- `corpus/`, `void/` — your initial training images (required for first train). Judged images from runs are added here when `output_folder` and `data_dir` both point at `/data`.
-- `Janulon_weights.pkl` — created by initial train or retrain; omit on first deploy to trigger train at startup.
-- `janulon.db` — created automatically on first run
-- `inbox/`, … — created under the same data dir; scrape output and judged images live here. Cleanup removes only void files; posted corpus images are kept on disk.
-
-One-off train/retrain (e.g. after adding images):
-
-```bash
-docker compose run --rm janulon train
-```
-
-To use a bind mount, in `docker-compose.yml`:
-
-```yaml
-volumes:
-  - ./janulon-data:/data
-```
-
-## Development
-
-- **Tooling:** [uv](https://docs.astral.sh/uv/) for installs and running scripts (`uv run pytest`, `uv run python main.py`, etc.).
-- **Style:** PEP 8 and PEP 257 (docstrings); type hints on all function signatures.
-- **Paths:** Prefer `pathlib` over `os.path`; use f-strings for formatting.
-- **Dependencies:** Managed in `pyproject.toml` only; do not add new dependencies unless explicitly required.
-
-## Roadmap
-
-- [x] Phase I: Binary Classification (Like/Dislike)
-- [ ] Phase II: Multi-Modal Feedback (re-training based on social engagement metrics)
-- [ ] Phase III: The "Eye" (integration with Pinterest API for infinite scrolling)
-- [ ] Phase IV: Video/GIF support (extracting keyframes for aesthetic evaluation)
+---
 
 ## License
 
