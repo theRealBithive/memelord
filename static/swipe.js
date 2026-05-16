@@ -3,6 +3,11 @@
   const THRESHOLD = 55;
 
   function trigger(action) {
+    if (action === "nsfw_toggle") {
+      const btn = document.querySelector(".nav-nsfw-toggle");
+      if (btn) btn.click();
+      return;
+    }
     const btn = document.querySelector(`[data-action="${action}"]`);
     if (btn) btn.click();
   }
@@ -25,7 +30,11 @@
   }, { passive: true });
 
   document.addEventListener("keydown", (e) => {
-    const map = { ArrowLeft: "bad", ArrowRight: "good", ArrowUp: "fav", ArrowDown: "skip" };
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    const map = {
+      ArrowLeft: "bad", ArrowRight: "good", ArrowUp: "fav", ArrowDown: "skip",
+      n: "nsfw_toggle", N: "nsfw_toggle",
+    };
     if (map[e.key]) { e.preventDefault(); trigger(map[e.key]); }
   });
 })();

@@ -94,6 +94,54 @@ html, body {
 }
 .nav-nsfw-toggle:hover, .nav-nsfw-toggle.nsfw-on { opacity: 1; }
 
+.help-btn {
+  position: relative;
+  cursor: default;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.35rem 0.4rem;
+  flex-shrink: 0;
+  user-select: none;
+}
+.help-btn:hover, .help-btn:focus { color: var(--text); outline: none; }
+
+.help-tooltip {
+  display: none;
+  position: fixed;
+  top: var(--nav-h);
+  right: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.85rem;
+  min-width: 180px;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+.help-btn:hover .help-tooltip,
+.help-btn:focus .help-tooltip { display: block; }
+
+.help-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+kbd {
+  background: var(--border);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
 /* ── Card ── */
 #card {
   display: flex;

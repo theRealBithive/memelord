@@ -48,6 +48,15 @@
       {% csrf_token %}
       <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="{% if show_nsfw %}Hide NSFW (currently merged){% else %}Show NSFW in normal modes{% endif %}">🔞</button>
     </form>
+    <div class="help-btn" tabindex="0">?
+      <div class="help-tooltip">
+        <div class="help-row"><span>Bad / Trash</span><kbd>←</kbd></div>
+        <div class="help-row"><span>Good / Keep</span><kbd>→</kbd></div>
+        <div class="help-row"><span>Fav</span><kbd>↑</kbd></div>
+        <div class="help-row"><span>Skip</span><kbd>↓</kbd></div>
+        <div class="help-row"><span>Toggle NSFW</span><kbd>N</kbd></div>
+      </div>
+    </div>
     <a href="{% url 'logout' %}" class="nav-logout">out</a>
   </nav>
 
