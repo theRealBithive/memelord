@@ -24,4 +24,7 @@ urlpatterns = [
     path("scrape/", views.trigger_scrape, name="trigger_scrape"),
     path("train/", views.trigger_train, name="trigger_train"),
     path("train/<str:task_id>/status/", views.train_status, name="train_status"),
+    path("logs/", views.logs_page, name="logs"),
+    path("logs/entries/", views.log_entries, name="log_entries"),
+    path("logs/clear/", views.log_clear, name="log_clear"),
 ]

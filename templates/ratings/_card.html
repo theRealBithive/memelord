@@ -235,14 +235,19 @@
       <button class="done-btn done-btn-train"
               hx-post="{% url 'trigger_train' %}"
               hx-target="#train-result"
-              hx-swap="outerHTML">
-        Train model
+              hx-swap="outerHTML"
+              {% if active_task_id %}disabled{% endif %}>
+        {% if active_task_id %}Training…{% else %}Train model{% endif %}
       </button>
     </div>
 
     <span id="scrape-spinner" class="train-spinner htmx-indicator">scraping…</span>
     <div id="scrape-result"></div>
-    <div id="train-result"></div>
+    {% if active_task_id %}
+      {% include "ratings/_train_pending.html" with task_id=active_task_id elapsed=training_elapsed %}
+    {% else %}
+      <div id="train-result"></div>
+    {% endif %}
   </div>
 
 {% endif %}

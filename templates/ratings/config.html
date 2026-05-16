@@ -83,11 +83,13 @@
     <a href="{% url 'rate_fav' %}" class="nav-tab">Fav</a>
     <a href="{% url 'rate_void' %}" class="nav-tab">Trash</a>
     <a href="{% url 'stats' %}" class="nav-tab">Stats</a>
+    <a href="{% url 'logs' %}" class="nav-tab">Logs</a>
     <a href="{% url 'config' %}" class="nav-tab active">Config</a>
     <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
       {% csrf_token %}
       <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="Toggle NSFW">🔞</button>
     </form>
+    {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
     <a href="{% url 'logout' %}" class="nav-logout">out</a>
   </nav>
 

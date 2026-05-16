@@ -43,6 +43,7 @@
     {% endif %}
     {% endif %}
     <a href="{% url 'stats' %}" class="nav-tab">Stats</a>
+    <a href="{% url 'logs' %}" class="nav-tab">Logs</a>
     <a href="{% url 'config' %}" class="nav-tab">Config</a>
     <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
       {% csrf_token %}
@@ -57,6 +58,7 @@
         <div class="help-row"><span>Toggle NSFW</span><kbd>N</kbd></div>
       </div>
     </div>
+    {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
     <a href="{% url 'logout' %}" class="nav-logout">out</a>
   </nav>
 

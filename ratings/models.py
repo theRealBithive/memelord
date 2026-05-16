@@ -25,6 +25,16 @@ class Image(models.Model):
         return f"{self.location} {self.content_hash[:8]} ({self.source_label})"
 
 
+class LogEntry(models.Model):
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    level = models.CharField(max_length=10)
+    source = models.CharField(max_length=20)  # "scrape" or "train"
+    message = models.TextField()
+
+    class Meta:
+        ordering = ["pk"]
+
+
 class Source(models.Model):
     FOURCHAN = "4chan"
     IMGUR = "imgur"

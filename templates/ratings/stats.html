@@ -51,11 +51,13 @@
     <a href="{% url 'rate_void' %}" class="nav-tab">Trash<span class="badge">{{ void_count }}</span></a>
     {% if not show_nsfw %}<a href="{% url 'rate_nsfw_inbox' %}" class="nav-tab">NSFW<span class="badge">{{ nsfw_inbox_count }}</span></a>{% endif %}
     <a href="{% url 'stats' %}" class="nav-tab active">Stats</a>
+    <a href="{% url 'logs' %}" class="nav-tab">Logs</a>
     <a href="{% url 'config' %}" class="nav-tab">Config</a>
     <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
       {% csrf_token %}
       <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="{% if show_nsfw %}Hide NSFW (currently merged){% else %}Show NSFW in normal modes{% endif %}">🔞</button>
     </form>
+    {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
     <a href="{% url 'logout' %}" class="nav-logout">out</a>
   </nav>
 
@@ -92,12 +94,19 @@
                   hx-indicator="#scrape-spinner">Scrape more</button>
           <button class="done-btn done-btn-train"
                   hx-post="{% url 'trigger_train' %}"
-                  hx-target="#train-result" hx-swap="outerHTML">Train model</button>
+                  hx-target="#train-result" hx-swap="outerHTML"
+                  {% if active_task_id %}disabled{% endif %}>
+            {% if active_task_id %}Training…{% else %}Train model{% endif %}
+          </button>
         </div>
       </div>
       <span id="scrape-spinner" class="train-spinner htmx-indicator">scraping…</span>
       <div id="scrape-result"></div>
-      <div id="train-result"></div>
+      {% if active_task_id %}
+        {% include "ratings/_train_pending.html" with task_id=active_task_id elapsed=training_elapsed %}
+      {% else %}
+        <div id="train-result"></div>
+      {% endif %}
     </div>
 
     {% if source_breakdown %}

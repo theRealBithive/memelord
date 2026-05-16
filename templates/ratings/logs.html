@@ -1,0 +1,120 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>memelord — logs</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  <style>
+    .logs-page {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      padding-top: var(--nav-h);
+    }
+    .logs-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 1rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .logs-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .logs-clear {
+      padding: 0.3rem 0.75rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.75rem;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .logs-clear:hover { border-color: var(--red); color: var(--red); }
+
+    #log-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem 0;
+      font-family: monospace;
+      font-size: 0.8rem;
+    }
+    .log-row {
+      display: grid;
+      grid-template-columns: 5.5rem 4rem 1fr;
+      gap: 0.75rem;
+      padding: 0.18rem 1rem;
+      line-height: 1.5;
+    }
+    .log-row:hover { background: var(--surface); }
+    .log-ts  { color: var(--muted); flex-shrink: 0; }
+    .log-src { color: var(--muted); flex-shrink: 0; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; }
+    .log-msg { color: var(--text); word-break: break-word; }
+
+    .log-info    .log-msg { color: var(--text); }
+    .log-warning .log-msg { color: var(--amber); }
+    .log-error   .log-msg { color: var(--red); }
+    .log-success .log-msg { color: var(--green); }
+    .log-debug   .log-msg { color: var(--muted); }
+
+    .log-empty {
+      padding: 3rem 1rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+
+  <nav class="nav">
+    <a href="{% url 'rate_inbox' %}" class="nav-tab">Mix<span class="badge">{{ inbox_count }}</span></a>
+    <a href="{% url 'rate_corpus' %}" class="nav-tab">Corpus<span class="badge">{{ corpus_count }}</span></a>
+    <a href="{% url 'rate_fav' %}" class="nav-tab">Fav<span class="badge">{{ fav_count }}</span></a>
+    <a href="{% url 'rate_void' %}" class="nav-tab">Trash<span class="badge">{{ void_count }}</span></a>
+    {% if not show_nsfw %}<a href="{% url 'rate_nsfw_inbox' %}" class="nav-tab">NSFW<span class="badge">{{ nsfw_inbox_count }}</span></a>{% endif %}
+    <a href="{% url 'stats' %}" class="nav-tab">Stats</a>
+    <a href="{% url 'logs' %}" class="nav-tab active">Logs</a>
+    <a href="{% url 'config' %}" class="nav-tab">Config</a>
+    <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
+      {% csrf_token %}
+      <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="{% if show_nsfw %}Hide NSFW (currently merged){% else %}Show NSFW in normal modes{% endif %}">🔞</button>
+    </form>
+    {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
+    <a href="{% url 'logout' %}" class="nav-logout">out</a>
+  </nav>
+
+  <div class="logs-page">
+    <div class="logs-toolbar">
+      <span class="logs-title">Activity log</span>
+      <form method="post" action="{% url 'log_clear' %}">
+        {% csrf_token %}
+        <button type="submit" class="logs-clear">Clear</button>
+      </form>
+    </div>
+
+    <div id="log-body">
+      {% if not entries %}
+        <p class="log-empty">No log entries yet. Start a scrape or training run.</p>
+      {% endif %}
+      {% include "ratings/_log_entries.html" with entries=entries next_since=next_since %}
+    </div>
+  </div>
+
+  <script>
+    var b = document.getElementById('log-body');
+    if (b) b.scrollTop = b.scrollHeight;
+  </script>
+</body>
+</html>
