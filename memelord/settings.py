@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django_htmx",
+    "django_q",
     "ratings",
 ]
 
@@ -60,7 +61,17 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DATA_DIR / "memelord.db",
+        "OPTIONS": {"timeout": 20},
     }
+}
+
+Q_CLUSTER = {
+    "name": "memelord",
+    "workers": 1,
+    "timeout": 3600,
+    "retry": 25200,
+    "max_attempts": 1,
+    "orm": "default",
 }
 
 MEDIA_ROOT = DATA_DIR

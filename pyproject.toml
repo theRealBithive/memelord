@@ -14,6 +14,7 @@ dependencies = [
     "transformers>=4.45.0",
     "django>=5.0",
     "django-htmx>=1.21",
+    "django-q2>=1.7",
     "gunicorn>=23.0",
 ]
 
