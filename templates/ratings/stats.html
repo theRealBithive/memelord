@@ -1,0 +1,130 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>memelord — stats</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  <style>
+    .stats-page { padding: calc(var(--nav-h) + 1.5rem) 1.25rem 2rem; max-width: 640px; margin: 0 auto; }
+    .counts-row { display: flex; gap: 1rem; margin-bottom: 2rem; }
+    .count-card {
+      flex: 1; padding: 1rem; border-radius: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      text-align: center;
+    }
+    .count-card .big { font-size: 2rem; font-weight: 700; line-height: 1; }
+    .count-card .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.3rem; }
+    .count-card.inbox .big  { color: #60a5fa; }
+    .count-card.corpus .big { color: var(--green); }
+    .count-card.void .big   { color: var(--red); }
+
+    .section { margin-bottom: 2rem; }
+    .section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.75rem; }
+
+    .meta-row { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+    .meta-row:last-child { border-bottom: none; }
+    .meta-val { color: var(--muted); }
+
+    .source-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.4rem 0; }
+    .source-name { width: 120px; font-size: 0.8rem; color: var(--muted); flex-shrink: 0; }
+    .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; }
+    .bar-fill { height: 100%; background: var(--green); border-radius: 3px; transition: width 0.3s; }
+    .bar-n { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; }
+
+    .favs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.5rem; }
+    .fav-thumb { aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: var(--border); }
+    .fav-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+    .action-row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  </style>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+
+  <nav class="nav">
+    <a href="{% url 'rate_inbox' %}" class="nav-tab">Mixed<span class="badge">{{ inbox_count }}</span></a>
+    <a href="{% url 'rate_corpus' %}" class="nav-tab">Corpus<span class="badge">{{ corpus_count }}</span></a>
+    <a href="{% url 'rate_void' %}" class="nav-tab">Trash<span class="badge">{{ void_count }}</span></a>
+    <a href="{% url 'stats' %}" class="nav-tab active">Stats</a>
+    <a href="{% url 'logout' %}" class="nav-logout">out</a>
+  </nav>
+
+  <div class="stats-page">
+
+    <div class="counts-row">
+      <div class="count-card inbox">
+        <div class="big">{{ inbox_count }}</div>
+        <div class="label">Inbox</div>
+      </div>
+      <div class="count-card corpus">
+        <div class="big">{{ corpus_count }}</div>
+        <div class="label">Corpus</div>
+      </div>
+      <div class="count-card void">
+        <div class="big">{{ void_count }}</div>
+        <div class="label">Trash</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Model</div>
+      <div class="meta-row">
+        <span>Last trained</span>
+        <span class="meta-val">
+          {% if last_trained %}{{ last_trained|date:"Y-m-d H:i" }} UTC{% else %}Never{% endif %}
+        </span>
+      </div>
+      <div class="meta-row" style="border-bottom:none;padding-top:0.75rem;">
+        <div class="action-row">
+          <button class="done-btn done-btn-scrape"
+                  hx-post="{% url 'trigger_scrape' %}"
+                  hx-target="#scrape-result" hx-swap="outerHTML"
+                  hx-indicator="#scrape-spinner">Scrape more</button>
+          <button class="done-btn done-btn-train"
+                  hx-post="{% url 'trigger_train' %}"
+                  hx-target="#train-result" hx-swap="outerHTML"
+                  hx-indicator="#train-spinner">Train model</button>
+        </div>
+      </div>
+      <span id="scrape-spinner" class="train-spinner htmx-indicator">scraping…</span>
+      <div id="scrape-result"></div>
+      <span id="train-spinner" class="train-spinner htmx-indicator">training…</span>
+      <div id="train-result"></div>
+    </div>
+
+    {% if source_breakdown %}
+    <div class="section">
+      <div class="section-title">Corpus by source</div>
+      {% with max_n=source_breakdown.0.n %}
+      {% for row in source_breakdown %}
+      <div class="source-bar">
+        <span class="source-name">{{ row.source_label }}</span>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:{% widthratio row.n max_n 100 %}%"></div>
+        </div>
+        <span class="bar-n">{{ row.n }}</span>
+      </div>
+      {% endfor %}
+      {% endwith %}
+    </div>
+    {% endif %}
+
+    {% if favs %}
+    <div class="section">
+      <div class="section-title">Favourites ({{ favs|length }})</div>
+      <div class="favs-grid">
+        {% for img in favs %}
+        <div class="fav-thumb">
+          <img src="{{ MEDIA_URL }}{{ img.file_path }}" alt="" loading="lazy">
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</body>
+</html>

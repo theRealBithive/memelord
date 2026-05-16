@@ -1,16 +1,16 @@
 services:
-  janulon:
+  memelord:
     build: .
-    image: janulon:latest
+    image: memelord:latest
+    ports:
+      - "8000:8000"
     volumes:
-      # Single folder: config, weights, DB, corpus/void, output (inbox/corpus/void)
-      - ./janulon-data:/data
+      - ./data:/data
     environment:
-      - JANULON_DATA=/data
-    # Override for one-off commands, e.g.:
-    #   docker compose run --rm janulon run --source all
-    #   docker compose run --rm janulon post
-    #   docker compose run --rm janulon import-data
-    command: [ "schedule" ]
-
-
+      - DATA_DIR=/data
+      - CONFIG_PATH=/data/config.toml
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-changeme-set-a-real-secret-in-production}
+      - DJANGO_DEBUG=false
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+    command: web
+    restart: unless-stopped

@@ -1,0 +1,9 @@
+<div id="train-result" class="train-result {% if ok %}train-ok{% else %}train-err{% endif %}">
+{% if ok %}
+  <span class="train-icon">✓</span>
+  <span>Trained on {{ corpus_n }} corpus + {{ void_n }} void images. Weights saved.</span>
+{% else %}
+  <span class="train-icon">✕</span>
+  <span>{{ error }}</span>
+{% endif %}
+</div>

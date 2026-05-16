@@ -1,0 +1,259 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --border: #222;
+  --text: #e0e0e0;
+  --muted: #666;
+  --red: #ef4444;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --gray: #52525b;
+  --nav-h: 52px;
+  --btn-h: 76px;
+  --meta-h: 32px;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Nav ── */
+.nav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--nav-h);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+  safe-area-inset-top: env(safe-area-inset-top);
+}
+
+.nav-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 99px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background 150ms, color 150ms;
+}
+.nav-tab:hover { color: var(--text); }
+.nav-tab.active { background: #fff; color: #000; }
+.nav-tab.active .badge { background: #000; color: #fff; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.3rem;
+  border-radius: 99px;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.nav-logout {
+  margin-left: auto;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+}
+.nav-logout:hover { color: var(--text); }
+
+/* ── Card ── */
+#card {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding-top: var(--nav-h);
+}
+
+/* ── Image ── */
+.image-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #000;
+}
+
+.image-wrap img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* ── Meta bar ── */
+.meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: var(--meta-h);
+  padding: 0 1rem;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+}
+.source { color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.count { color: var(--muted); }
+
+/* ── Buttons ── */
+.btn-row {
+  display: flex;
+  height: var(--btn-h);
+  border-top: 1px solid var(--border);
+}
+
+.btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  border: none;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
+  transition: background 100ms, transform 80ms;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.btn:active { transform: scale(0.94); }
+.btn + .btn { border-left: 1px solid var(--border); }
+
+.btn-icon { font-size: 1.4rem; line-height: 1; }
+.btn-label { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); }
+
+.btn-bad   { --accent: var(--red); }
+.btn-good  { --accent: var(--green); }
+.btn-fav   { --accent: var(--amber); }
+.btn-skip  { --accent: var(--gray); }
+
+.btn-bad:hover,   .btn-bad:active   { background: color-mix(in srgb, var(--red) 15%, var(--surface)); }
+.btn-good:hover,  .btn-good:active  { background: color-mix(in srgb, var(--green) 15%, var(--surface)); }
+.btn-fav:hover,   .btn-fav:active   { background: color-mix(in srgb, var(--amber) 15%, var(--surface)); }
+.btn-skip:hover,  .btn-skip:active  { background: color-mix(in srgb, var(--gray) 20%, var(--surface)); }
+
+.btn-bad .btn-icon   { color: var(--red); }
+.btn-good .btn-icon  { color: var(--green); }
+.btn-fav .btn-icon   { color: var(--amber); }
+.btn-skip .btn-icon  { color: var(--gray); }
+
+/* ── HTMX transition ── */
+#card.htmx-swapping { opacity: 0; transition: opacity 120ms ease; }
+#card.htmx-settling  { opacity: 1; transition: opacity 120ms ease; }
+
+/* ── Done state ── */
+.done {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem;
+  text-align: center;
+}
+.done-title { font-size: 1.25rem; font-weight: 600; }
+.done-hint { color: var(--muted); font-size: 0.9rem; }
+.done-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; }
+.done-btn {
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+.done-btn:hover { border-color: #444; }
+.done-btn-scrape,
+.done-btn-train { cursor: pointer; font-family: inherit; }
+.done-btn-scrape:hover { border-color: #60a5fa; color: #60a5fa; }
+.done-btn-train:hover  { border-color: var(--amber); color: var(--amber); }
+
+/* ── Train result ── */
+.train-spinner {
+  display: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.train-spinner.htmx-request { display: inline; }
+
+.train-result {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+}
+.train-ok  { border-color: var(--green); color: var(--green); }
+.train-err { border-color: var(--red);   color: var(--red); }
+.train-icon { font-size: 1rem; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* ── Login page ── */
+.login-wrap {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(320px, 90vw);
+}
+.login-title { font-size: 1.5rem; font-weight: 700; text-align: center; letter-spacing: 0.05em; }
+.login-form input {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1rem;
+  outline: none;
+}
+.login-form input:focus { border-color: #555; }
+.login-form button {
+  padding: 0.75rem;
+  border: none;
+  border-radius: 6px;
+  background: #fff;
+  color: #000;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.login-error { color: var(--red); font-size: 0.875rem; text-align: center; }

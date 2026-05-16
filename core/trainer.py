@@ -9,70 +9,62 @@ from sklearn.linear_model import LogisticRegression
 from core import brain
 
 
-def _normalize_path_key(path: Path, data_dir: Path) -> str:
-    """Return path relative to data_dir with forward slashes (for engagement map lookup)."""
-    try:
-        rel = path.relative_to(data_dir)
-    except ValueError:
-        return path.as_posix()
-    return rel.as_posix()
-
-
 def collect_image_paths(data_dir: Path) -> tuple[list[Path], list[Path]]:
     """
-    Collect image paths from data_dir/corpus (positive) and data_dir/void (negative).
+    Collect image paths from data_dir/corpus and data_dir/void via the Django ORM.
 
-    Returns:
-        (corpus_paths, void_paths). Only files with supported image extensions are included.
+    Returns (corpus_paths, void_paths) as absolute paths. Only non-deleted files
+    that exist on disk are included.
     """
-    corpus_dir = data_dir / "corpus"
-    void_dir = data_dir / "void"
-    corpus_paths = sorted(
-        p for p in corpus_dir.glob("*") if p.is_file() and brain.is_image_path(p)
-    )
-    void_paths = sorted(
-        p for p in void_dir.glob("*") if p.is_file() and brain.is_image_path(p)
-    )
-    return corpus_paths, void_paths
+    from ratings.models import Image
+
+    def _resolve(img: Image) -> Path:
+        return data_dir / img.file_path
+
+    corpus_paths = [
+        _resolve(img)
+        for img in Image.objects.filter(location=Image.CORPUS, file_deleted=False)
+        if _resolve(img).exists() and brain.is_image_path(_resolve(img))
+    ]
+    void_paths = [
+        _resolve(img)
+        for img in Image.objects.filter(location=Image.VOID, file_deleted=False)
+        if _resolve(img).exists() and brain.is_image_path(_resolve(img))
+    ]
+    return sorted(corpus_paths), sorted(void_paths)
+
+
+def _get_favourite_weights(data_dir: Path) -> dict[str, float]:
+    """Return {absolute_path_str: weight} for corpus images. Favs get 3.0, others 1.0."""
+    from ratings.models import Image
+
+    return {
+        str(data_dir / img.file_path): 3.0 if img.is_favourite else 1.0
+        for img in Image.objects.filter(location=Image.CORPUS, file_deleted=False)
+    }
 
 
 def run(
     data_dir: Path = Path("data"),
     weights_path: Path = Path("Janulon_weights.pkl"),
-    db_path: Path | None = None,
 ) -> None:
     """
     Train the taste classifier on corpus (label 1) and void (label 0), then save weights.
 
-    Requires data_dir/corpus/ and data_dir/void/ to contain images. If db_path is
-    given, posted images with engagement data are weighted by: faves (+1),
-    replies (+0.5), reblogs (+2); other corpus images use weight 1.0.
+    Requires rated images in the DB with location='corpus' or 'void'. Favourite
+    corpus images are weighted 3.0; all others are weighted 1.0.
     """
-    from core import db as db_module
-
     corpus_paths, void_paths = collect_image_paths(data_dir)
     if not corpus_paths:
-        logger.warning("No images in {}/corpus/", data_dir)
+        logger.warning("No corpus images found in DB / on disk at {}", data_dir)
     if not void_paths:
-        logger.warning("No images in {}/void/", data_dir)
+        logger.warning("No void images found in DB / on disk at {}", data_dir)
     if not corpus_paths or not void_paths:
         raise SystemExit(1)
 
-    engagement_weights: dict[str, float] = {}
-    if db_path is not None and db_path.exists():
-        db_module.init_db(db_path)
-        engagement_weights = db_module.get_posted_engagement_weights()
-        if engagement_weights:
-            logger.info(
-                "Engagement weighting: {} posted images from DB (faves +0.5*replies +2*reblogs)",
-                len(engagement_weights),
-            )
-
+    favourite_weights = _get_favourite_weights(data_dir)
     corpus_weights = np.array(
-        [
-            engagement_weights.get(_normalize_path_key(p, data_dir), 1.0)
-            for p in corpus_paths
-        ],
+        [favourite_weights.get(str(p), 1.0) for p in corpus_paths],
         dtype=np.float64,
     )
     void_weights = np.ones(len(void_paths), dtype=np.float64)
@@ -90,48 +82,9 @@ def run(
     X = np.concatenate([X_corpus, X_void], axis=0)
     y = np.array([1] * len(corpus_paths) + [0] * len(void_paths), dtype=np.intp)
 
-    logger.info(
-        "Training logistic regression on {} samples (with sample weights)",
-        len(y),
-    )
+    logger.info("Training logistic regression on {} samples", len(y))
     classifier = LogisticRegression(max_iter=1000, random_state=42)
     classifier.fit(X, y, sample_weight=sample_weight)
 
     brain.save_classifier(classifier, weights_path)
     logger.success("Saved classifier to {}", weights_path.resolve())
-
-
-def main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Train Janulon taste classifier on corpus and void."
-    )
-    parser.add_argument(
-        "--data_dir",
-        type=Path,
-        default=Path("data"),
-        help="Directory containing corpus/ and void/ subdirs. Default: data",
-    )
-    parser.add_argument(
-        "--weights",
-        type=Path,
-        default=Path("Janulon_weights.pkl"),
-        help="Output path for classifier weights. Default: Janulon_weights.pkl",
-    )
-    parser.add_argument(
-        "--db",
-        type=Path,
-        default=None,
-        help="Optional SQLite DB path. If set, posted images are weighted by engagement (faves +0.5*replies +2*reblogs).",
-    )
-    args = parser.parse_args()
-    run(
-        data_dir=args.data_dir,
-        weights_path=args.weights,
-        db_path=args.db,
-    )
-
-
-if __name__ == "__main__":
-    main()
