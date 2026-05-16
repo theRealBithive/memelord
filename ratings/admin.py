@@ -7,15 +7,15 @@ from .models import Image, Source
 
 @admin.register(Source)
 class SourceAdmin(admin.ModelAdmin):
-    list_display = ("type", "name", "enabled", "added_at")
-    list_filter = ("type", "enabled")
-    list_editable = ("enabled",)
+    list_display = ("type", "name", "enabled", "is_nsfw", "added_at")
+    list_filter = ("type", "enabled", "is_nsfw")
+    list_editable = ("enabled", "is_nsfw")
 
 
 @admin.register(Image)
 class ImageAdmin(admin.ModelAdmin):
     list_display = ("thumbnail", "source_label", "location", "is_favourite", "rated_at", "downloaded_at")
-    list_filter = ("location", "is_favourite", "source_label", "file_deleted")
+    list_filter = ("location", "is_favourite", "is_nsfw", "source_label", "file_deleted")
     search_fields = ("content_hash", "file_path", "source_url")
     readonly_fields = ("content_hash", "downloaded_at", "thumbnail_large")
 

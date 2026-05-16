@@ -15,6 +15,7 @@ class Image(models.Model):
     downloaded_at = models.DateTimeField(auto_now_add=True)
     rated_at = models.DateTimeField(null=True, blank=True)
     is_favourite = models.BooleanField(default=False)
+    is_nsfw = models.BooleanField(default=False)
     file_deleted = models.BooleanField(default=False)
 
     class Meta:
@@ -39,6 +40,7 @@ class Source(models.Model):
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     name = models.CharField(max_length=255)  # board / topic / blog / instance URL
     enabled = models.BooleanField(default=True)
+    is_nsfw = models.BooleanField(default=False)
     added_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

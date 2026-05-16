@@ -57,7 +57,7 @@ def import_from_config(config_path: Path) -> int:
     return created
 
 
-def _insert(path: Path, source_url: str, source_label: str, data_dir: Path, existing: set) -> bool:
+def _insert(path: Path, source_url: str, source_label: str, data_dir: Path, existing: set, is_nsfw: bool = False) -> bool:
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -72,6 +72,7 @@ def _insert(path: Path, source_url: str, source_label: str, data_dir: Path, exis
         source_url=source_url or "",
         source_label=source_label,
         location=Image.INBOX,
+        is_nsfw=is_nsfw,
     )
     existing.add(h)
     return True
@@ -84,30 +85,32 @@ def run(config_path: Path, data_dir: Path) -> dict[str, int]:
     inbox_dir.mkdir(parents=True, exist_ok=True)
     skip_dirs = [data_dir / d for d in ("corpus", "void", "inbox") if (data_dir / d).exists()]
     existing: set[str] = set(Image.objects.values_list("content_hash", flat=True))
+    nsfw_names: set[str] = set(Source.objects.filter(is_nsfw=True).values_list("name", flat=True))
     counts: dict[str, int] = {}
 
     for board in sources["boards"]:
         logger.info("Scraping 4chan /{}/", board)
         urls = fourchan.iter_image_urls(board)
         downloaded = fourchan.download_images(urls, inbox_dir, board, skip_dirs=skip_dirs)
-        counts[f"4chan/{board}"] = sum(_insert(p, u, l, data_dir, existing) for p, u, l in downloaded)
+        counts[f"4chan/{board}"] = sum(_insert(p, u, l, data_dir, existing, board in nsfw_names) for p, u, l in downloaded)
 
     for topic in sources["topics"]:
         logger.info("Scraping Imgur: {}", topic)
         urls = imgur.iter_image_urls(topic)
         downloaded = imgur.download_images(urls, inbox_dir, topic, skip_dirs=skip_dirs)
-        counts[f"imgur/{topic}"] = sum(_insert(p, u, l, data_dir, existing) for p, u, l in downloaded)
+        counts[f"imgur/{topic}"] = sum(_insert(p, u, l, data_dir, existing, topic in nsfw_names) for p, u, l in downloaded)
 
     for blog in sources["blogs"]:
         logger.info("Scraping Tumblr: {}", blog)
         urls = tumblr.iter_image_urls(blog)
         downloaded = tumblr.download_images(urls, inbox_dir, blog, skip_dirs=skip_dirs)
-        counts[f"tumblr/{blog}"] = sum(_insert(p, u, l, data_dir, existing) for p, u, l in downloaded)
+        counts[f"tumblr/{blog}"] = sum(_insert(p, u, l, data_dir, existing, blog in nsfw_names) for p, u, l in downloaded)
 
     if sources["pixelfed"]:
         logger.info("Scraping Pixelfed: {}", sources["pixelfed"])
         items = pixelfed.iter_image_items(sources["pixelfed"])
         downloaded = pixelfed.download_images(items, inbox_dir, skip_dirs=skip_dirs)
-        counts["pixelfed"] = sum(_insert(p, u, l, data_dir, existing) for p, u, l in downloaded)
+        pf_name = sources["pixelfed"]
+        counts["pixelfed"] = sum(_insert(p, u, l, data_dir, existing, pf_name in nsfw_names) for p, u, l in downloaded)
 
     return counts
