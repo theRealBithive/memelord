@@ -6,26 +6,24 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/data
-    environment:
-      - DATA_DIR=/data
-      - CONFIG_PATH=/data/config.toml
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-changeme-set-a-real-secret-in-production}
-      - DJANGO_DEBUG=false
-      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+    env_file: .env
     command: web
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/login/\")'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   qcluster:
     image: memelord:latest
     volumes:
       - ./data:/data
-    environment:
-      - DATA_DIR=/data
-      - CONFIG_PATH=/data/config.toml
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-changeme-set-a-real-secret-in-production}
-      - DJANGO_DEBUG=false
+    env_file: .env
     command: qcluster
     restart: unless-stopped
     stop_grace_period: 30s
     depends_on:
-      - memelord
+      memelord:
+        condition: service_healthy
