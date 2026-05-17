@@ -1,51 +1,40 @@
-"""Django DB tests for DedupIndex.from_db."""
+"""Tests for DedupIndex.from_db."""
 
 import os
-import tempfile
-import uuid
-from pathlib import Path
+import unittest
+from unittest.mock import patch
 
 import django
 import numpy as np
-from django.test import TestCase, override_settings
-from PIL import Image as PilImage
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "memelord.settings")
 django.setup()
 
 from core import brain, dedup
-from ratings.models import Image
 
 
-class DedupIndexFromDbTests(TestCase):
-    def setUp(self) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.data_dir = Path(self._tmpdir.name)
-        (self.data_dir / "inbox").mkdir()
-        test_db = {
-            "default": {
-                "ENGINE": "django.db.backends.sqlite3",
-                "NAME": str(self.data_dir / "test.db"),
-            }
-        }
-        self._settings = override_settings(DATA_DIR=self.data_dir, DATABASES=test_db)
-        self._settings.enable()
-
-    def tearDown(self) -> None:
-        self._settings.disable()
-        self._tmpdir.cleanup()
-
+class DedupIndexFromDbTests(unittest.TestCase):
     def test_dedup_index_from_db(self) -> None:
-        """DedupIndex.from_db loads hashes and phashes from Image rows."""
+        """DedupIndex.from_db builds index from DB row tuples."""
         emb = np.zeros(768, dtype=np.float32)
-        Image.objects.create(
-            content_hash="h1",
-            file_path="inbox/h1.jpg",
-            source_label="t",
-            phash="0123456789abcdef",
-            embedding=brain.embedding_to_bytes(emb),
-        )
-        index = dedup.DedupIndex.from_db()
+        emb_bytes = brain.embedding_to_bytes(emb)
+
+        with patch("ratings.models.Image") as MockImage:
+            MockImage.objects.filter.return_value.values_list.return_value = [
+                ("h1", "0123456789abcdef", emb_bytes),
+            ]
+            index = dedup.DedupIndex.from_db()
+
         self.assertIn("h1", index.content_hashes)
         self.assertIn("0123456789abcdef", index.phashes)
         self.assertEqual(index.embeddings.shape, (1, 768))
+
+    def test_dedup_index_from_db_empty(self) -> None:
+        """from_db with no rows returns an empty index."""
+        with patch("ratings.models.Image") as MockImage:
+            MockImage.objects.filter.return_value.values_list.return_value = []
+            index = dedup.DedupIndex.from_db()
+
+        self.assertEqual(len(index.content_hashes), 0)
+        self.assertEqual(len(index.phashes), 0)
+        self.assertEqual(index.embeddings.shape, (0, brain.EMBEDDING_DIM))

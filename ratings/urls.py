@@ -19,6 +19,11 @@ urlpatterns = [
         name="submit_rating",
     ),
     path("nsfw-toggle/", views.nsfw_toggle, name="nsfw_toggle"),
+    # Void review — must be before the corpus wildcard routes.
+    path("review/void/", views.review_void, name="review_void"),
+    path("review/void/<str:content_hash>/", views.review_void, name="review_void_image"),
+    path("review/void/<str:content_hash>/action/", views.void_review_action, name="void_review_action"),
+    # Corpus review
     path("review/", views.review_corpus, name="review_corpus"),
     path("review/<str:content_hash>/", views.review_corpus, name="review_corpus_image"),
     path("review/<str:content_hash>/score/", views.score_corpus, name="score_corpus"),
