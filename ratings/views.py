@@ -10,9 +10,9 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from ratings.models import Image, LogEntry, ScrapeSchedule, Source
+from ratings.utils import move_image as _move_image_util
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
-from ratings.utils import move_image as _move_image_util
 
 WEIGHTS_PATH = Path(settings.WEIGHTS_PATH)
 DATA_DIR = Path(settings.DATA_DIR)
@@ -136,6 +136,26 @@ def _move_image(image: Image, new_location: str) -> None:
     _move_image_util(image, new_location, DATA_DIR)
 
 
+def _apply_rating(image: Image, target_location: str, is_fav: bool, now) -> None:
+    fields = ["is_favourite", "rated_at"]
+    if image.location != target_location:
+        _move_image(image, target_location)
+        fields += ["file_path", "location"]
+    image.is_favourite = is_fav
+    image.rated_at = now
+    image.save(update_fields=fields)
+
+
+def _neighbor_hash(all_hashes: list[str], content_hash: str) -> str | None:
+    """Next hash in list, or previous if last, or None if single item."""
+    if not all_hashes:
+        return None
+    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
+    if idx < len(all_hashes) - 1:
+        return all_hashes[idx + 1]
+    return all_hashes[idx - 1] if idx > 0 else None
+
+
 @login_required
 def rate_inbox(request):
     return _mode_view(request, "inbox")
@@ -185,25 +205,9 @@ def submit_rating(request, content_hash: str, action: str):
     now = timezone.now()
 
     if action in ("good", "fav"):
-        moved = image.location != Image.CORPUS
-        if moved:
-            _move_image(image, Image.CORPUS)
-        image.is_favourite = action == "fav"
-        image.rated_at = now
-        fields = ["is_favourite", "rated_at"]
-        if moved:
-            fields += ["file_path", "location"]
-        image.save(update_fields=fields)
+        _apply_rating(image, Image.CORPUS, action == "fav", now)
     elif action == "bad":
-        moved = image.location != Image.VOID
-        if moved:
-            _move_image(image, Image.VOID)
-        image.is_favourite = False
-        image.rated_at = now
-        fields = ["is_favourite", "rated_at"]
-        if moved:
-            fields += ["file_path", "location"]
-        image.save(update_fields=fields)
+        _apply_rating(image, Image.VOID, False, now)
     elif action == "unfav":
         image.is_favourite = False
         image.save(update_fields=["is_favourite"])
@@ -514,7 +518,6 @@ def _browse_ctx(
     request,
     extra: dict | None = None,
 ) -> dict:
-    """Build the template context for a prev/next browse view over a queryset."""
     all_hashes = list(qs.values_list("content_hash", flat=True))
     base = {"show_nsfw": show_nsfw, **_counts(show_nsfw)}
     if extra:
@@ -606,12 +609,9 @@ def trash_corpus(request, content_hash: str):
     image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
 
     # Capture neighbour before removing from corpus.
-    all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
-    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
-    next_hash = (
-        all_hashes[idx + 1]
-        if idx < len(all_hashes) - 1
-        else (all_hashes[idx - 1] if idx > 0 else None)
+    next_hash = _neighbor_hash(
+        list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
+        content_hash,
     )
 
     _move_image(image, Image.VOID)
@@ -644,12 +644,9 @@ def toggle_nsfw(request, content_hash: str):
 
     if location == Image.CORPUS:
         # Capture neighbour BEFORE saving so ordering is stable.
-        all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
-        idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
-        neighbor = (
-            all_hashes[idx + 1]
-            if idx < len(all_hashes) - 1
-            else (all_hashes[idx - 1] if idx > 0 else None)
+        neighbor = _neighbor_hash(
+            list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
+            content_hash,
         )
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
@@ -660,14 +657,9 @@ def toggle_nsfw(request, content_hash: str):
         return render(request, "ratings/_review_htmx.html", ctx)
 
     if location == Image.VOID:
-        all_hashes = list(
-            _void_review_qs(show_nsfw).values_list("content_hash", flat=True)
-        )
-        idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
-        neighbor = (
-            all_hashes[idx + 1]
-            if idx < len(all_hashes) - 1
-            else (all_hashes[idx - 1] if idx > 0 else None)
+        neighbor = _neighbor_hash(
+            list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True)),
+            content_hash,
         )
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
@@ -777,12 +769,9 @@ def void_review_action(request, content_hash: str):
     image = get_object_or_404(Image, content_hash=content_hash, location=Image.VOID)
 
     # Capture neighbour before any move changes the list.
-    all_hashes = list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True))
-    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
-    next_hash = (
-        all_hashes[idx + 1]
-        if idx < len(all_hashes) - 1
-        else (all_hashes[idx - 1] if idx > 0 else None)
+    next_hash = _neighbor_hash(
+        list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True)),
+        content_hash,
     )
 
     if action in ("rescue", "rescue_fav"):

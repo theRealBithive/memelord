@@ -49,10 +49,11 @@ class ScraperDedupUnitTests(SimpleTestCase):
     ) -> None:
         """New image passes dedup and is inserted with phash and embedding."""
         mock_image_model.INBOX = Image.INBOX
-        mock_encode.return_value = np.zeros((1, 768), dtype=np.float32)
+        emb = np.zeros((1, 768), dtype=np.float32)
 
         path = self.data_dir / "inbox" / f"{uuid.uuid4().hex}.png"
         PilImage.new("RGB", (16, 16), color=(50, 100, 150)).save(path)
+        mock_encode.return_value = (emb, [path])
 
         index = dedup.DedupIndex()
         n = scraper._process_downloads(
@@ -78,9 +79,9 @@ class ScraperDedupUnitTests(SimpleTestCase):
         self, mock_encode: MagicMock, mock_image_model: MagicMock
     ) -> None:
         """Without NSFW classifier, is_nsfw stays False."""
-        mock_encode.return_value = np.zeros((1, 768), dtype=np.float32)
         path = self.data_dir / "inbox" / f"{uuid.uuid4().hex}.png"
         PilImage.new("RGB", (16, 16)).save(path)
+        mock_encode.return_value = (np.zeros((1, 768), dtype=np.float32), [path])
         scraper._process_downloads(
             [(path, "", "b")],
             self.data_dir,

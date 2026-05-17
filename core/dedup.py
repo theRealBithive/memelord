@@ -23,7 +23,6 @@ class DedupIndex:
 
     @classmethod
     def from_db(cls) -> DedupIndex:
-        """Build index from all non-deleted Image rows."""
         from ratings.models import Image
 
         rows = list(
@@ -46,7 +45,6 @@ class DedupIndex:
         )
 
     def add(self, content_hash: str, ph: str, emb: np.ndarray | None) -> None:
-        """Register a newly inserted image in the index."""
         self.content_hashes.add(content_hash)
         if ph:
             self.phashes.append(ph)
@@ -58,7 +56,6 @@ class DedupIndex:
 
 
 def content_hash_for_file(path: Path) -> str:
-    """SHA-256 hex digest of file bytes."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 

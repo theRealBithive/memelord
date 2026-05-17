@@ -19,7 +19,6 @@ EMBEDDING_DIM = 768
 
 
 def get_transform() -> T.Compose:
-    """DINOv2 preprocessing: resize 256, center crop 224, ImageNet normalize."""
     return T.Compose(
         [
             T.Resize(256, interpolation=T.InterpolationMode.BICUBIC),
@@ -31,7 +30,6 @@ def get_transform() -> T.Compose:
 
 
 def get_encoder(device: str | torch.device | None = None) -> torch.nn.Module:
-    """Load DINOv2 ViT-B/14 from torch hub; returns model in eval mode."""
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", pretrained=True)
@@ -98,7 +96,6 @@ def encode(
 
 
 def load_classifier(path: Path) -> LogisticRegression:
-    """Load a trained classifier from a pickle file."""
     import pickle
 
     with path.open("rb") as f:
@@ -106,7 +103,6 @@ def load_classifier(path: Path) -> LogisticRegression:
 
 
 def save_classifier(classifier: LogisticRegression, path: Path) -> None:
-    """Save a trained classifier to a pickle file."""
     import pickle
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,16 +114,6 @@ def predict_proba(
     classifier: LogisticRegression,
     embedding: np.ndarray,
 ) -> np.ndarray:
-    """
-    Predict P(positive) for one or more embeddings.
-
-    Args:
-        classifier: Trained sklearn classifier (e.g. LogisticRegression).
-        embedding: Shape (768,) or (N, 768).
-
-    Returns:
-        Probability of class 1, shape () or (N,).
-    """
     if embedding.ndim == 1:
         embedding = embedding.reshape(1, -1)
     proba = classifier.predict_proba(embedding)[:, 1]
@@ -140,7 +126,6 @@ def is_image_path(path: Path) -> bool:
 
 
 def embedding_to_bytes(embedding: np.ndarray) -> bytes:
-    """Pack a 768-d float32 embedding for DB storage."""
     arr = np.asarray(embedding, dtype=np.float32).reshape(-1)
     if arr.shape[0] != EMBEDDING_DIM:
         raise ValueError(f"Expected {EMBEDDING_DIM}-d embedding, got {arr.shape[0]}")
@@ -148,7 +133,6 @@ def embedding_to_bytes(embedding: np.ndarray) -> bytes:
 
 
 def bytes_to_embedding(data: bytes) -> np.ndarray:
-    """Unpack a DB-stored embedding to shape (768,)."""
     arr = np.frombuffer(data, dtype=np.float32)
     if arr.shape[0] != EMBEDDING_DIM:
         raise ValueError(f"Expected {EMBEDDING_DIM} floats, got {arr.shape[0]}")
