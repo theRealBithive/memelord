@@ -1,8 +1,13 @@
 """Pytest configuration: loguru routing and integration-test gating."""
 
 import io
+import os
 
 import pytest
+
+# Provide a dummy key so the settings guard doesn't fire during tests.
+os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-not-for-production")
+os.environ.setdefault("DJANGO_DEBUG", "true")
 from loguru import logger
 from PIL import Image
 

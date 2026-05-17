@@ -17,7 +17,6 @@ def _dct1d(signal: np.ndarray) -> np.ndarray:
 
 
 def _dct2(block: np.ndarray) -> np.ndarray:
-    """2D DCT via separable 1D DCT."""
     temp = np.apply_along_axis(_dct1d, 1, block)
     return np.apply_along_axis(_dct1d, 1, temp.T).T
 
@@ -42,7 +41,6 @@ def compute_phash(path: Path) -> str:
 
 
 def hamming_distance(a: str, b: str) -> int:
-    """Hamming distance between two equal-length hex phash strings."""
     if len(a) != len(b):
         raise ValueError("phash strings must have equal length")
     ai = int(a, 16)
@@ -51,7 +49,6 @@ def hamming_distance(a: str, b: str) -> int:
 
 
 def is_phash_duplicate(phash: str, phashes: list[str], max_distance: int) -> bool:
-    """True if phash is within max_distance of any entry in phashes."""
     if not phash or not phashes:
         return False
     return any(
