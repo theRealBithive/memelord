@@ -16,6 +16,7 @@ dependencies = [
     "django-htmx>=1.21",
     "django-q2>=1.7",
     "gunicorn>=23.0",
+    "whitenoise>=6.8",
 ]
 
 [project.optional-dependencies]
