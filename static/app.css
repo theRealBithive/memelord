@@ -380,6 +380,21 @@ kbd {
   --accent: var(--purple);
 }
 
+.btn-nsfw--on {
+  background: color-mix(in srgb, var(--purple) 22%, var(--surface));
+  color: var(--purple);
+}
+
+.nsfw-tag {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--purple);
+  background: color-mix(in srgb, var(--purple) 15%, var(--surface));
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  letter-spacing: 0.04em;
+}
+
 .btn-bad:hover,
 .btn-bad:active {
   background: color-mix(in srgb, var(--red) 15%, var(--surface));

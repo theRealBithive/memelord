@@ -11,6 +11,7 @@
     {% else %}
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
+    {% if image.is_nsfw %}<span class="nsfw-tag">🔞 nsfw</span>{% endif %}
     <span class="count">{{ queue_count }} left</span>
   </div>
 
@@ -34,11 +35,12 @@
             hx-vals='{"mode": "inbox"}'>
       <span class="btn-icon">✓</span><span class="btn-label">GOOD</span>
     </button>
-    <button class="btn btn-nsfw" data-action="mark_nsfw"
-            hx-post="{% url 'submit_rating' image.content_hash 'mark_nsfw' %}"
+    <button class="btn btn-nsfw{% if image.is_nsfw %} btn-nsfw--on{% endif %}"
+            data-action="{% if image.is_nsfw %}mark_safe{% else %}mark_nsfw{% endif %}"
+            hx-post="{% if image.is_nsfw %}{% url 'submit_rating' image.content_hash 'mark_safe' %}{% else %}{% url 'submit_rating' image.content_hash 'mark_nsfw' %}{% endif %}"
             hx-target="#card" hx-swap="outerHTML"
             hx-vals='{"mode": "inbox"}'>
-      <span class="btn-icon">🔞</span><span class="btn-label">NSFW</span>
+      <span class="btn-icon">🔞</span><span class="btn-label">{% if image.is_nsfw %}SAFE{% else %}NSFW{% endif %}</span>
     </button>
 
   {% elif mode == "corpus" %}
@@ -60,11 +62,12 @@
             hx-vals='{"mode": "corpus"}'>
       <span class="btn-icon">→</span><span class="btn-label">KEEP</span>
     </button>
-    <button class="btn btn-nsfw" data-action="mark_nsfw"
-            hx-post="{% url 'submit_rating' image.content_hash 'mark_nsfw' %}"
+    <button class="btn btn-nsfw{% if image.is_nsfw %} btn-nsfw--on{% endif %}"
+            data-action="{% if image.is_nsfw %}mark_safe{% else %}mark_nsfw{% endif %}"
+            hx-post="{% if image.is_nsfw %}{% url 'submit_rating' image.content_hash 'mark_safe' %}{% else %}{% url 'submit_rating' image.content_hash 'mark_nsfw' %}{% endif %}"
             hx-target="#card" hx-swap="outerHTML"
             hx-vals='{"mode": "corpus"}'>
-      <span class="btn-icon">🔞</span><span class="btn-label">NSFW</span>
+      <span class="btn-icon">🔞</span><span class="btn-label">{% if image.is_nsfw %}SAFE{% else %}NSFW{% endif %}</span>
     </button>
 
   {% elif mode == "void" %}
@@ -86,11 +89,12 @@
             hx-vals='{"mode": "void"}'>
       <span class="btn-icon">✓</span><span class="btn-label">RESCUE</span>
     </button>
-    <button class="btn btn-nsfw" data-action="mark_nsfw"
-            hx-post="{% url 'submit_rating' image.content_hash 'mark_nsfw' %}"
+    <button class="btn btn-nsfw{% if image.is_nsfw %} btn-nsfw--on{% endif %}"
+            data-action="{% if image.is_nsfw %}mark_safe{% else %}mark_nsfw{% endif %}"
+            hx-post="{% if image.is_nsfw %}{% url 'submit_rating' image.content_hash 'mark_safe' %}{% else %}{% url 'submit_rating' image.content_hash 'mark_nsfw' %}{% endif %}"
             hx-target="#card" hx-swap="outerHTML"
             hx-vals='{"mode": "void"}'>
-      <span class="btn-icon">🔞</span><span class="btn-label">NSFW</span>
+      <span class="btn-icon">🔞</span><span class="btn-label">{% if image.is_nsfw %}SAFE{% else %}NSFW{% endif %}</span>
     </button>
 
   {% elif mode == "nsfw_inbox" %}

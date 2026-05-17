@@ -12,6 +12,7 @@
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
     <span class="review-position">{{ position }} / {{ total }}{% if image.score %} · <span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if image.is_favourite %} ★{% endif %}</span>
+    {% if image.is_nsfw %}<span class="nsfw-tag">🔞 nsfw</span>{% endif %}
   </div>
 
   <div class="score-row">
