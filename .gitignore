@@ -43,6 +43,7 @@ data/corpus/*
 !data/corpus/.gitkeep
 data/void/*
 !data/void/.gitkeep
+data/thumbs/
 data/*.db
 out/
 working_dir/
