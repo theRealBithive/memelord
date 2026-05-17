@@ -1,0 +1,72 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>memelord — gallery</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="{% static 'gallery.js' %}" defer></script>
+</head>
+<body>
+
+  {% include "ratings/_nav.html" %}
+
+  <div class="gallery-page">
+
+    <div class="gallery-controls">
+      <div class="gallery-control-group">
+        <span class="gallery-label">min score</span>
+        {% for s in scores %}
+        <a href="?min_score={{ s }}&sort={{ sort }}{% if fav_only %}&fav=1{% endif %}"
+           class="gallery-score-btn gallery-score-btn--{{ s }}{% if min_score == s %} gallery-score-active{% endif %}">{{ s }}</a>
+        {% endfor %}
+      </div>
+      <div class="gallery-control-group">
+        <span class="gallery-label">sort</span>
+        <a href="?min_score={{ min_score }}&sort=newest{% if fav_only %}&fav=1{% endif %}"
+           class="gallery-sort-btn{% if sort == 'newest' %} gallery-sort-active{% endif %}">newest</a>
+        <a href="?min_score={{ min_score }}&sort=oldest{% if fav_only %}&fav=1{% endif %}"
+           class="gallery-sort-btn{% if sort == 'oldest' %} gallery-sort-active{% endif %}">oldest</a>
+        <a href="?min_score={{ min_score }}&sort=random{% if fav_only %}&fav=1{% endif %}"
+           class="gallery-sort-btn{% if sort == 'random' %} gallery-sort-active{% endif %}">random</a>
+      </div>
+      <div class="gallery-control-group">
+        {% if fav_only %}
+        <a href="?min_score={{ min_score }}&sort={{ sort }}" class="gallery-sort-btn gallery-sort-active">★ fav only</a>
+        {% else %}
+        <a href="?min_score={{ min_score }}&sort={{ sort }}&fav=1" class="gallery-sort-btn">★ fav only</a>
+        {% endif %}
+      </div>
+      <span class="gallery-count">{{ total }} image{{ total|pluralize }}</span>
+    </div>
+
+    {% if images %}
+    <div class="gallery-grid">
+      {% for image in images %}
+      <a href="{% url 'review_corpus_image' image.content_hash %}"
+         class="gallery-item"
+         data-score="{{ image.score }}"
+         data-fav="{% if image.is_favourite %}1{% else %}0{% endif %}">
+        <img src="{{ MEDIA_URL }}{{ image.file_path }}" alt="" loading="lazy">
+        <div class="gallery-item-overlay">
+          <span class="gallery-item-score gallery-item-score--{{ image.score }}">{{ image.score }}</span>
+          {% if image.is_favourite %}<span class="gallery-item-fav">★</span>{% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="done">
+      <p class="done-title">No images</p>
+      <p class="done-hint">No scored images match these filters.</p>
+    </div>
+    {% endif %}
+
+  </div>
+
+</body>
+</html>

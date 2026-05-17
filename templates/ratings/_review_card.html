@@ -11,7 +11,7 @@
     {% else %}
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
-    <span class="review-position">{{ position }} / {{ total }}{% if image.is_favourite %} ★{% endif %}</span>
+    <span class="review-position">{{ position }} / {{ total }}{% if image.score %} · <span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if image.is_favourite %} ★{% endif %}</span>
   </div>
 
   <div class="score-row">
