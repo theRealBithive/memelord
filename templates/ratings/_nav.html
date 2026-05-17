@@ -46,11 +46,24 @@
   </form>
   <div class="help-btn" tabindex="0">?
     <div class="help-tooltip">
-      <div class="help-row"><span>Bad / Trash</span><kbd>←</kbd></div>
-      <div class="help-row"><span>Good / Keep</span><kbd>→</kbd></div>
+      {% if mode == "corpus" %}
+      <div class="help-row"><span>Prev / Next</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
+      <div class="help-row"><span>Score</span><kbd>1–6</kbd></div>
+      <div class="help-row"><span>Trash</span><kbd>Del</kbd></div>
+      <div class="help-row"><span>Mark NSFW</span><kbd>N</kbd></div>
+      {% elif mode == "void" %}
+      <div class="help-row"><span>Prev / Next</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
+      <div class="help-row"><span>Mark NSFW</span><kbd>N</kbd></div>
+      {% elif mode == "gallery" %}
+      <div class="help-row"><span>Prev / Next</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
+      <div class="help-row"><span>Close</span><kbd>Esc</kbd></div>
+      {% else %}
+      <div class="help-row"><span>Bad</span><kbd>←</kbd></div>
+      <div class="help-row"><span>Good</span><kbd>→</kbd></div>
       <div class="help-row"><span>Fav</span><kbd>↑</kbd></div>
       <div class="help-row"><span>Skip</span><kbd>↓</kbd></div>
-      <div class="help-row"><span>Toggle NSFW</span><kbd>N</kbd></div>
+      <div class="help-row"><span>Mark NSFW</span><kbd>N</kbd></div>
+      {% endif %}
     </div>
   </div>
   {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
