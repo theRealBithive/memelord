@@ -39,15 +39,16 @@ def test_is_image_path_false_for_non_image() -> None:
 
 
 def test_encode_empty_paths_returns_empty_array() -> None:
-    """encode with no paths returns (0, 768) float32."""
+    """encode with no paths returns (0, 768) float32 and empty path list."""
     mock_encoder = torch.nn.Linear(3, 768)  # unused, we only check shape
-    result = brain.encode(mock_encoder, [])
+    result, valid = brain.encode(mock_encoder, [])
     assert result.shape == (0, 768)
     assert result.dtype == np.float32
+    assert valid == []
 
 
 def test_encode_returns_shape_n_768(tmp_path: Path) -> None:
-    """encode with a mock encoder and one image returns (1, 768)."""
+    """encode with a mock encoder and one image returns (1, 768) and the path."""
     Image.new("RGB", (224, 224), color="blue").save(tmp_path / "img.png")
     path = tmp_path / "img.png"
 
@@ -56,9 +57,25 @@ def test_encode_returns_shape_n_768(tmp_path: Path) -> None:
             return torch.zeros(x.size(0), 768, device=x.device, dtype=x.dtype)
 
     encoder = MockEncoder()
-    result = brain.encode(encoder, [path])
+    result, valid = brain.encode(encoder, [path])
     assert result.shape == (1, 768)
     assert result.dtype == np.float32
+    assert valid == [path]
+
+
+def test_encode_skips_missing_file(tmp_path: Path) -> None:
+    """encode silently skips a path that no longer exists on disk."""
+    Image.new("RGB", (4, 4)).save(tmp_path / "real.png")
+    real = tmp_path / "real.png"
+    missing = tmp_path / "gone.png"
+
+    class MockEncoder(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.zeros(x.size(0), 768)
+
+    result, valid = brain.encode(MockEncoder(), [real, missing])
+    assert result.shape == (1, 768)
+    assert valid == [real]
 
 
 def test_save_classifier_load_classifier_roundtrip(tmp_path: Path) -> None:

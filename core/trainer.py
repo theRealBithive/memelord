@@ -132,8 +132,16 @@ def run(
     logger.info("Encoding {} unique images with DINOv2", len(all_paths))
     encoder = brain.get_encoder()
     transform = brain.get_transform()
-    X_all = brain.encode(encoder, all_paths, transform=transform)
-    path_to_emb = {str(p): X_all[i] for i, p in enumerate(all_paths)}
+    X_all, valid_all_paths = brain.encode(encoder, all_paths, transform=transform)
+    path_to_emb = {str(p): X_all[i] for i, p in enumerate(valid_all_paths)}
+
+    # Re-filter each list to paths that were actually encoded (handles files moved mid-run).
+    corpus_paths = [p for p in corpus_paths if str(p) in path_to_emb]
+    void_paths   = [p for p in void_paths   if str(p) in path_to_emb]
+    nsfw_paths   = [p for p in nsfw_paths   if str(p) in path_to_emb]
+    safe_paths   = [p for p in safe_paths   if str(p) in path_to_emb]
+    if not corpus_paths or not void_paths:
+        raise RuntimeError("Need at least one corpus and one void image to train.")
 
     _backfill_phash_embedding(path_to_emb, data_dir)
 
