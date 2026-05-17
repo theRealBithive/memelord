@@ -2,13 +2,6 @@
   <span class="source-type-badge source-type-{{ source.type }}">{{ source.type }}</span>
   <span class="source-name">{{ source.name }}</span>
   <div class="source-actions">
-    <button class="src-btn src-nsfw {% if source.is_nsfw %}src-nsfw-on{% endif %}"
-            hx-post="{% url 'source_nsfw_toggle' source.pk %}"
-            hx-target="#source-{{ source.pk }}"
-            hx-swap="outerHTML"
-            title="{% if source.is_nsfw %}Mark as safe{% else %}Mark as NSFW{% endif %}">
-      🔞
-    </button>
     <button class="src-btn src-toggle"
             hx-post="{% url 'source_toggle' source.pk %}"
             hx-target="#source-{{ source.pk }}"

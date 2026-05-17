@@ -112,6 +112,12 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
 WEIGHTS_PATH = DATA_DIR / "Janulon_weights.pkl"
+NSFW_WEIGHTS_PATH = DATA_DIR / "Janulon_nsfw_weights.pkl"
+PHASH_MAX_DISTANCE = int(os.environ.get("PHASH_MAX_DISTANCE", "5"))
+DINO_DEDUP_COSINE_THRESHOLD = float(
+    os.environ.get("DINO_DEDUP_COSINE_THRESHOLD", "0.92")
+)
+NSFW_THRESHOLD = float(os.environ.get("NSFW_THRESHOLD", "0.30"))
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", BASE_DIR / "config.toml"))
 
 LOGIN_URL = "/login/"

@@ -15,6 +15,8 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 # Supported image extensions for corpus/void
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
+EMBEDDING_DIM = 768
+
 
 def get_transform() -> T.Compose:
     """DINOv2 preprocessing: resize 256, center crop 224, ImageNet normalize."""
@@ -128,3 +130,47 @@ def predict_proba(
 def is_image_path(path: Path) -> bool:
     """True if path has a supported image extension (case-insensitive)."""
     return path.suffix.lower() in IMAGE_EXTENSIONS
+
+
+def embedding_to_bytes(embedding: np.ndarray) -> bytes:
+    """Pack a 768-d float32 embedding for DB storage."""
+    arr = np.asarray(embedding, dtype=np.float32).reshape(-1)
+    if arr.shape[0] != EMBEDDING_DIM:
+        raise ValueError(f"Expected {EMBEDDING_DIM}-d embedding, got {arr.shape[0]}")
+    return arr.tobytes()
+
+
+def bytes_to_embedding(data: bytes) -> np.ndarray:
+    """Unpack a DB-stored embedding to shape (768,)."""
+    arr = np.frombuffer(data, dtype=np.float32)
+    if arr.shape[0] != EMBEDDING_DIM:
+        raise ValueError(f"Expected {EMBEDDING_DIM} floats, got {arr.shape[0]}")
+    return arr
+
+
+def cosine_similarity_matrix(query: np.ndarray, bank: np.ndarray) -> np.ndarray:
+    """
+    Cosine similarity between query row(s) and bank rows.
+
+    Args:
+        query: Shape (768,) or (N, 768).
+        bank: Shape (M, 768). Empty bank returns empty array.
+
+    Returns:
+        Shape (N, M) or (M,) when query is 1-d.
+    """
+    if bank.size == 0:
+        if query.ndim == 1:
+            return np.array([], dtype=np.float32)
+        return np.zeros((query.shape[0], 0), dtype=np.float32)
+
+    q = np.atleast_2d(query.astype(np.float32))
+    b = bank.astype(np.float32)
+    q_norm = np.linalg.norm(q, axis=1, keepdims=True)
+    b_norm = np.linalg.norm(b, axis=1, keepdims=True)
+    q_norm = np.where(q_norm == 0, 1, q_norm)
+    b_norm = np.where(b_norm == 0, 1, b_norm)
+    sims = (q / q_norm) @ (b / b_norm).T
+    if query.ndim == 1:
+        return sims[0]
+    return sims

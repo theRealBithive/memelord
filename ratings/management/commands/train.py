@@ -13,4 +13,6 @@ class Command(BaseCommand):
         trainer.run(
             data_dir=Path(settings.DATA_DIR),
             weights_path=Path(settings.WEIGHTS_PATH),
+            nsfw_weights_path=Path(settings.NSFW_WEIGHTS_PATH),
+            nsfw_threshold=settings.NSFW_THRESHOLD,
         )
