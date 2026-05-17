@@ -51,13 +51,22 @@ def collect_nsfw_paths(data_dir: Path) -> tuple[list[Path], list[Path]]:
 
 
 def _get_favourite_weights(data_dir: Path) -> dict[str, float]:
-    """Return {absolute_path_str: weight} for corpus images. Favs get 3.0, others 1.0."""
+    """Return {absolute_path_str: weight} for corpus images.
+
+    Priority: score (1–6 mapped directly) > is_favourite (3.0) > default (1.0).
+    """
     from ratings.models import Image
 
-    return {
-        str(data_dir / img.file_path): 3.0 if img.is_favourite else 1.0
-        for img in Image.objects.filter(location=Image.CORPUS, file_deleted=False)
-    }
+    result = {}
+    for img in Image.objects.filter(location=Image.CORPUS, file_deleted=False):
+        path_str = str(data_dir / img.file_path)
+        if img.score is not None:
+            result[path_str] = float(img.score)
+        elif img.is_favourite:
+            result[path_str] = 3.0
+        else:
+            result[path_str] = 1.0
+    return result
 
 
 def _path_to_image_map(data_dir: Path) -> dict[str, object]:

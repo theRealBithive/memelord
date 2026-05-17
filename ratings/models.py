@@ -16,6 +16,7 @@ class Image(models.Model):
     rated_at = models.DateTimeField(null=True, blank=True)
     is_favourite = models.BooleanField(default=False)
     is_nsfw = models.BooleanField(default=False)
+    score = models.IntegerField(null=True, blank=True)
     file_deleted = models.BooleanField(default=False)
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
     embedding = models.BinaryField(null=True, blank=True)

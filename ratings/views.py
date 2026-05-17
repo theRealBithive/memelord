@@ -3,7 +3,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Q
+from django.db.models import Case, Count, IntegerField, Q, Value, When
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -460,3 +460,125 @@ def log_entries(request):
 def log_clear(request):
     LogEntry.objects.all().delete()
     return redirect("logs")
+
+
+# ── Corpus review ────────────────────────────────────────────────────────────
+
+def _review_qs(show_nsfw: bool = False):
+    """Corpus images in review order: unrated first, then oldest."""
+    qs = Image.objects.filter(location=Image.CORPUS, file_deleted=False)
+    if not show_nsfw:
+        qs = qs.filter(is_nsfw=False)
+    return qs.order_by(
+        Case(
+            When(score__isnull=True, then=Value(0)),
+            default=Value(1),
+            output_field=IntegerField(),
+        ),
+        "downloaded_at",
+    )
+
+
+def _review_ctx(
+    content_hash: str | None,
+    show_nsfw: bool = False,
+    request=None,
+) -> dict:
+    all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
+
+    if not all_hashes:
+        ctx: dict = {
+            "image": None,
+            "mode": "corpus",
+            "scores": range(1, 7),
+            **_counts(show_nsfw),
+        }
+        if request is not None:
+            ctx.update(_training_ctx(request))
+        return ctx
+
+    if content_hash is None or content_hash not in all_hashes:
+        idx = 0
+    else:
+        idx = all_hashes.index(content_hash)
+
+    image = Image.objects.get(content_hash=all_hashes[idx])
+    prev_hash = all_hashes[idx - 1] if idx > 0 else None
+    next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
+
+    ctx = {
+        "image": image,
+        "prev_hash": prev_hash,
+        "next_hash": next_hash,
+        "position": idx + 1,
+        "total": len(all_hashes),
+        "mode": "corpus",
+        "scores": range(1, 7),
+        **_counts(show_nsfw),
+    }
+    if request is not None:
+        ctx.update(_training_ctx(request))
+    return ctx
+
+
+@login_required
+def review_corpus(request, content_hash: str | None = None):
+    show_nsfw = request.session.get("show_nsfw", False)
+    ctx = _review_ctx(content_hash, show_nsfw, request)
+    if request.htmx:
+        return render(request, "ratings/_review_htmx.html", ctx)
+    return render(request, "ratings/review.html", ctx)
+
+
+@login_required
+@require_POST
+def score_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+
+    # Capture next position before the score changes ordering.
+    all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
+    try:
+        idx = all_hashes.index(content_hash)
+    except ValueError:
+        idx = 0
+    next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
+
+    try:
+        score_val = int(request.POST.get("score", 0))
+        if 1 <= score_val <= 6:
+            image.score = score_val
+            image.rated_at = timezone.now()
+            image.save(update_fields=["score", "rated_at"])
+    except (ValueError, TypeError):
+        pass
+
+    ctx = _review_ctx(next_hash or content_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)
+
+
+@login_required
+@require_POST
+def trash_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+
+    # Capture neighbour before removing from corpus.
+    all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
+    try:
+        idx = all_hashes.index(content_hash)
+    except ValueError:
+        idx = 0
+    next_hash = (
+        all_hashes[idx + 1]
+        if idx < len(all_hashes) - 1
+        else (all_hashes[idx - 1] if idx > 0 else None)
+    )
+
+    _move_image(image, Image.VOID)
+    image.is_favourite = False
+    image.rated_at = timezone.now()
+    image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+
+    ctx = _review_ctx(next_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)

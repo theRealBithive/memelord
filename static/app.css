@@ -20,6 +20,8 @@
   --nav-h: 52px;
   --btn-h: 76px;
   --meta-h: 32px;
+  --score-h: 64px;
+  --reviewnav-h: 40px;
 }
 
 html,
@@ -563,6 +565,142 @@ kbd {
   50% {
     opacity: 0.4;
   }
+}
+
+/* ── Corpus review ── */
+#review-card {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding-top: var(--nav-h);
+}
+
+.review-position {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.score-row {
+  display: flex;
+  height: var(--score-h);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.score-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 1.15rem;
+  font-weight: 700;
+  transition: background 100ms, color 100ms, transform 80ms;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.score-btn:active {
+  transform: scale(0.9);
+}
+
+.score-btn--1 { --sc: #71717a; }
+.score-btn--2 { --sc: #60a5fa; }
+.score-btn--3 { --sc: #4ade80; }
+.score-btn--4 { --sc: #facc15; }
+.score-btn--5 { --sc: #fb923c; }
+.score-btn--6 { --sc: #f59e0b; }
+
+.score-btn:hover {
+  background: color-mix(in srgb, var(--sc) 15%, var(--surface));
+  color: var(--sc);
+}
+
+.score-btn.score-active {
+  background: color-mix(in srgb, var(--sc) 22%, var(--surface));
+  color: var(--sc);
+}
+
+.score-num {
+  line-height: 1;
+}
+
+.trash-btn {
+  flex: 1.5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--surface);
+  transition: background 100ms, transform 80ms;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.trash-btn:hover {
+  background: color-mix(in srgb, var(--red) 15%, var(--surface));
+}
+
+.trash-btn:active {
+  transform: scale(0.94);
+}
+
+.trash-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.trash-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.review-nav {
+  display: flex;
+  height: var(--reviewnav-h);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.review-nav-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 100ms, background 100ms;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.review-nav-btn:first-child {
+  border-right: 1px solid var(--border);
+}
+
+.review-nav-btn:not(.review-nav-btn--disabled):hover {
+  color: var(--text);
+  background: color-mix(in srgb, #fff 5%, var(--surface));
+}
+
+.review-nav-btn--disabled {
+  opacity: 0.2;
+  cursor: default;
 }
 
 /* ── Login page ── */

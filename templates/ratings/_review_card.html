@@ -1,0 +1,73 @@
+<div id="review-card">
+{% if image %}
+
+  <div class="image-wrap">
+    <img src="{{ MEDIA_URL }}{{ image.file_path }}" alt="" loading="eager">
+  </div>
+
+  <div class="meta">
+    {% if image.source_url %}
+      <a href="{{ image.source_url }}" target="_blank" rel="noopener" class="source source-link">{{ image.source_label }} ↗</a>
+    {% else %}
+      <span class="source">{{ image.source_label }}</span>
+    {% endif %}
+    <span class="review-position">{{ position }} / {{ total }}{% if image.is_favourite %} ★{% endif %}</span>
+  </div>
+
+  <div class="score-row">
+    {% for s in scores %}
+    <button class="score-btn score-btn--{{ s }}{% if image.score == s %} score-active{% endif %}"
+            data-score="{{ s }}"
+            hx-post="{% url 'score_corpus' image.content_hash %}"
+            hx-target="#review-card"
+            hx-swap="outerHTML"
+            hx-vals='{"score": "{{ s }}"}'>
+      <span class="score-num">{{ s }}</span>
+    </button>
+    {% endfor %}
+    <button class="trash-btn"
+            data-action="trash"
+            hx-post="{% url 'trash_corpus' image.content_hash %}"
+            hx-target="#review-card"
+            hx-swap="outerHTML">
+      <span class="trash-icon">🗑</span>
+      <span class="trash-label">TRASH</span>
+    </button>
+  </div>
+
+  <div class="review-nav">
+    {% if prev_hash %}
+    <button class="review-nav-btn"
+            data-action="prev"
+            hx-get="{% url 'review_corpus_image' prev_hash %}"
+            hx-target="#review-card"
+            hx-swap="outerHTML"
+            hx-push-url="true">← prev</button>
+    {% else %}
+    <span class="review-nav-btn review-nav-btn--disabled">← prev</span>
+    {% endif %}
+
+    {% if next_hash %}
+    <button class="review-nav-btn"
+            data-action="next"
+            hx-get="{% url 'review_corpus_image' next_hash %}"
+            hx-target="#review-card"
+            hx-swap="outerHTML"
+            hx-push-url="true">next →</button>
+    {% else %}
+    <span class="review-nav-btn review-nav-btn--disabled">next →</span>
+    {% endif %}
+  </div>
+
+{% else %}
+
+  <div class="done">
+    <p class="done-title">Corpus empty</p>
+    <p class="done-hint">Rate images from the inbox to build your corpus.</p>
+    <div class="done-actions">
+      <a href="{% url 'rate_inbox' %}" class="done-btn">← Inbox</a>
+    </div>
+  </div>
+
+{% endif %}
+</div>
