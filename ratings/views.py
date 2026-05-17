@@ -682,11 +682,10 @@ def toggle_nsfw(request, content_hash: str):
 # ── Void review ───────────────────────────────────────────────────────────────
 
 def _void_review_qs(show_nsfw: bool = False):
-    """Void images in browse order: oldest first."""
     qs = Image.objects.filter(location=Image.VOID, file_deleted=False)
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
-    return qs.order_by("downloaded_at")
+    return qs.order_by("-rated_at")
 
 
 def _void_review_ctx(content_hash: str | None, show_nsfw: bool = False, request=None) -> dict:
