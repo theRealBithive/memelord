@@ -22,6 +22,9 @@
     } else if (key === "Backspace" || key === "Delete") {
       e.preventDefault();
       trigger("[data-action='trash']");
+    } else if (key === "f" || key === "F") {
+      e.preventDefault();
+      trigger("[data-action='fav']");
     } else if (key === "n" || key === "N") {
       e.preventDefault();
       document.querySelector(".nsfw-toggle-btn")?.click();

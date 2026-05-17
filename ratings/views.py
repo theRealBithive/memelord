@@ -3,7 +3,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -27,7 +27,7 @@ def _counts(show_nsfw: bool = False) -> dict:
     if show_nsfw:
         return qs.aggregate(
             inbox_count=Count("pk", filter=Q(location=Image.INBOX)),
-            corpus_count=Count("pk", filter=Q(location=Image.CORPUS)),
+            corpus_count=Count("pk", filter=Q(location=Image.CORPUS, score__isnull=True)),
             void_count=Count("pk", filter=Q(location=Image.VOID)),
             fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True)),
             nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
@@ -41,7 +41,7 @@ def _counts(show_nsfw: bool = False) -> dict:
         )
     return qs.aggregate(
         inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=False)),
-        corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=False)),
+        corpus_count=Count("pk", filter=Q(location=Image.CORPUS, score__isnull=True, is_nsfw=False)),
         void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=False)),
         fav_count=Count(
             "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=False)
@@ -547,18 +547,10 @@ def _browse_ctx(
 
 
 def _review_qs(show_nsfw: bool = False):
-    """Corpus images in review order: unrated first, then oldest."""
-    qs = Image.objects.filter(location=Image.CORPUS, file_deleted=False)
+    qs = Image.objects.filter(location=Image.CORPUS, score__isnull=True, file_deleted=False)
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
-    return qs.order_by(
-        Case(
-            When(score__isnull=True, then=Value(0)),
-            default=Value(1),
-            output_field=IntegerField(),
-        ),
-        "downloaded_at",
-    )
+    return qs.order_by("downloaded_at")
 
 
 def _review_ctx(
@@ -603,7 +595,7 @@ def score_corpus(request, content_hash: str):
     except (ValueError, TypeError):
         pass
 
-    ctx = _review_ctx(next_hash or content_hash, show_nsfw, request)
+    ctx = _review_ctx(next_hash, show_nsfw, request)
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -628,6 +620,17 @@ def trash_corpus(request, content_hash: str):
     image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
 
     ctx = _review_ctx(next_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)
+
+
+@login_required
+@require_POST
+def toggle_fav_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image.is_favourite = not image.is_favourite
+    image.save(update_fields=["is_favourite"])
+    ctx = _review_ctx(content_hash, show_nsfw, request)
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
