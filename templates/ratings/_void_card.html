@@ -12,6 +12,7 @@
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
     <span class="review-position">{{ position }} / {{ total }}</span>
+    {% if image.is_nsfw %}<span class="nsfw-tag">🔞 nsfw</span>{% endif %}
   </div>
 
   <div class="btn-row">
@@ -27,7 +28,7 @@
             hx-vals='{"action": "rescue"}'>
       <span class="btn-icon">✓</span><span class="btn-label">RESCUE</span>
     </button>
-    <button class="btn btn-nsfw" data-action="mark_nsfw"
+    <button class="btn btn-nsfw{% if image.is_nsfw %} btn-nsfw--on{% endif %}" data-action="mark_nsfw"
             hx-post="{% url 'void_review_action' image.content_hash %}"
             hx-target="#void-card" hx-swap="outerHTML"
             hx-vals='{"action": "mark_nsfw"}'>
