@@ -17,19 +17,28 @@
   </a>
   {% if 'nsfw' in mode %}
   <a href="{% url 'rate_nsfw_corpus' %}" class="nav-tab {% if mode == 'nsfw_corpus' %}active{% endif %}">
-    NSFW Corpus<span class="badge" id="badge-nsfw-corpus">{{ nsfw_corpus_count }}</span>
+    <span class="nav-label-long">NSFW Corpus</span><span class="nav-label-short">N.Corp</span><span class="badge" id="badge-nsfw-corpus">{{ nsfw_corpus_count }}</span>
   </a>
   <a href="{% url 'rate_nsfw_fav' %}" class="nav-tab {% if mode == 'nsfw_fav' %}active{% endif %}">
-    NSFW Fav<span class="badge" id="badge-nsfw-fav">{{ nsfw_fav_count }}</span>
+    <span class="nav-label-long">NSFW Fav</span><span class="nav-label-short">N.Fav</span><span class="badge" id="badge-nsfw-fav">{{ nsfw_fav_count }}</span>
   </a>
   <a href="{% url 'rate_nsfw_void' %}" class="nav-tab {% if mode == 'nsfw_void' %}active{% endif %}">
-    NSFW Trash<span class="badge" id="badge-nsfw-void">{{ nsfw_void_count }}</span>
+    <span class="nav-label-long">NSFW Trash</span><span class="nav-label-short">N.Trash</span><span class="badge" id="badge-nsfw-void">{{ nsfw_void_count }}</span>
   </a>
   {% endif %}
   {% endif %}
-  <a href="{% url 'stats' %}" class="nav-tab">Stats</a>
-  <a href="{% url 'logs' %}" class="nav-tab">Logs</a>
-  <a href="{% url 'config' %}" class="nav-tab">Config</a>
+  <a href="{% url 'stats' %}" class="nav-tab nav-tab--secondary">Stats</a>
+  <a href="{% url 'logs' %}" class="nav-tab nav-tab--secondary">Logs</a>
+  <a href="{% url 'config' %}" class="nav-tab nav-tab--secondary">Config</a>
+  <details class="nav-more">
+    <summary class="nav-tab nav-more-trigger" aria-label="More">⋯</summary>
+    <div class="nav-more-menu">
+      <a href="{% url 'stats' %}" class="nav-more-item">Stats</a>
+      <a href="{% url 'logs' %}" class="nav-more-item">Logs</a>
+      <a href="{% url 'config' %}" class="nav-more-item">Config</a>
+      <a href="{% url 'logout' %}" class="nav-more-item">Log out</a>
+    </div>
+  </details>
   <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
     {% csrf_token %}
     <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="{% if show_nsfw %}Hide NSFW (currently merged){% else %}Show NSFW in normal modes{% endif %}">🔞</button>
@@ -44,5 +53,5 @@
     </div>
   </div>
   {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
-  <a href="{% url 'logout' %}" class="nav-logout">out</a>
+  <a href="{% url 'logout' %}" class="nav-logout nav-tab--secondary">out</a>
 </nav>
