@@ -1,0 +1,25 @@
+<div id="schedule-status">
+  <div class="schedule-info">
+    {% if schedule and schedule.enabled %}
+      <span class="schedule-on">● every {{ schedule.interval_hours }}h</span>
+      {% if next_run %}<span class="schedule-next">next {{ next_run|date:"H:i" }}</span>{% endif %}
+    {% else %}
+      <span class="schedule-off">● off</span>
+    {% endif %}
+  </div>
+  <form class="schedule-form"
+        hx-post="{% url 'set_scrape_schedule' %}"
+        hx-target="#schedule-status"
+        hx-swap="outerHTML">
+    {% csrf_token %}
+    <select name="interval_hours" class="schedule-select">
+      {% for h in interval_choices %}
+        <option value="{{ h }}"{% if schedule and schedule.interval_hours == h %} selected{% endif %}>
+          {% if h == 168 %}weekly{% elif h >= 24 %}{{ h }}h{% else %}{{ h }}h{% endif %}
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit" name="enabled" value="1" class="src-btn src-toggle">Enable</button>
+    <button type="submit" name="enabled" value="0" class="src-btn src-delete">Disable</button>
+  </form>
+</div>

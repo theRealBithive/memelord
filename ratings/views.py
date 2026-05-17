@@ -9,7 +9,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings.models import Image, LogEntry, Source
+from ratings.models import Image, LogEntry, ScrapeSchedule, Source
+
+_INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 from ratings.utils import move_image as _move_image_util
 
 WEIGHTS_PATH = Path(settings.WEIGHTS_PATH)
@@ -349,6 +351,17 @@ def train_status(request, task_id: str):
     )
 
 
+def _schedule_ctx() -> dict:
+    from django_q.models import Schedule as QSchedule
+    schedule = ScrapeSchedule.objects.filter(pk=1).first()
+    q = QSchedule.objects.filter(name="auto_scrape").first()
+    return {
+        "schedule": schedule,
+        "next_run": q.next_run if q else None,
+        "interval_choices": _INTERVAL_CHOICES,
+    }
+
+
 @login_required
 def config_view(request):
     show_nsfw = request.session.get("show_nsfw", False)
@@ -361,8 +374,38 @@ def config_view(request):
             "show_nsfw": show_nsfw,
             **_training_ctx(request),
             **counts,
+            **_schedule_ctx(),
         },
     )
+
+
+@login_required
+@require_POST
+def set_scrape_schedule(request):
+    from django_q.models import Schedule as QSchedule
+
+    try:
+        interval_hours = max(1, min(168, int(request.POST.get("interval_hours", 6))))
+    except (ValueError, TypeError):
+        interval_hours = 6
+    enabled = request.POST.get("enabled") == "1"
+
+    ScrapeSchedule.objects.update_or_create(
+        pk=1,
+        defaults={"interval_hours": interval_hours, "enabled": enabled},
+    )
+
+    QSchedule.objects.filter(name="auto_scrape").delete()
+    if enabled:
+        QSchedule.objects.create(
+            func="ratings.tasks.run_scrape",
+            name="auto_scrape",
+            schedule_type=QSchedule.MINUTES,
+            minutes=interval_hours * 60,
+            repeats=-1,
+        )
+
+    return render(request, "ratings/_schedule_status.html", _schedule_ctx())
 
 
 @login_required

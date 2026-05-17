@@ -73,6 +73,18 @@
       background: transparent; color: var(--muted); font-size: 0.75rem; cursor: pointer;
     }
     .import-btn:hover { border-color: #555; color: var(--text); }
+
+    .schedule-section { margin-bottom: 2rem; }
+    #schedule-status { display: flex; flex-direction: column; gap: 0.5rem; }
+    .schedule-info { font-size: 0.8rem; color: var(--muted); }
+    .schedule-on { color: var(--green); }
+    .schedule-off { color: var(--muted); }
+    .schedule-next { margin-left: 0.5rem; }
+    .schedule-form { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+    .schedule-select {
+      padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: 4px;
+      background: var(--surface); color: var(--text); font-size: 0.8rem; cursor: pointer;
+    }
   </style>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
@@ -94,6 +106,11 @@
   </nav>
 
   <div class="config-page">
+
+    <div class="schedule-section">
+      <div class="section-title">Auto-scrape</div>
+      {% include "ratings/_schedule_status.html" %}
+    </div>
 
     <div class="config-header">
       <span class="config-title">Scrape sources</span>
