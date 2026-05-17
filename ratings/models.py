@@ -62,3 +62,13 @@ class Source(models.Model):
 
     def __str__(self) -> str:
         return f"{self.type}/{self.name}"
+
+
+class ScrapeSchedule(models.Model):
+    """Singleton (pk=1) storing the user-configured auto-scrape interval."""
+    interval_hours = models.PositiveSmallIntegerField(default=6)
+    enabled = models.BooleanField(default=False)
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
