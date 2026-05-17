@@ -13,54 +13,7 @@
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
-  <nav class="nav">
-    <a href="{% url 'rate_inbox' %}" class="nav-tab {% if mode == 'inbox' %}active{% endif %}">
-      Mix<span class="badge">{{ inbox_count }}</span>
-    </a>
-    <a href="{% url 'rate_corpus' %}" class="nav-tab {% if mode == 'corpus' %}active{% endif %}">
-      Corpus<span class="badge">{{ corpus_count }}</span>
-    </a>
-    <a href="{% url 'rate_fav' %}" class="nav-tab {% if mode == 'fav' %}active{% endif %}">
-      Fav<span class="badge">{{ fav_count }}</span>
-    </a>
-    <a href="{% url 'rate_void' %}" class="nav-tab {% if mode == 'void' %}active{% endif %}">
-      Trash<span class="badge">{{ void_count }}</span>
-    </a>
-    {% if not show_nsfw %}
-    <a href="{% url 'rate_nsfw_inbox' %}" class="nav-tab {% if mode == 'nsfw_inbox' %}active{% endif %}">
-      NSFW<span class="badge">{{ nsfw_inbox_count }}</span>
-    </a>
-    {% if 'nsfw' in mode %}
-    <a href="{% url 'rate_nsfw_corpus' %}" class="nav-tab {% if mode == 'nsfw_corpus' %}active{% endif %}">
-      NSFW Corpus<span class="badge">{{ nsfw_corpus_count }}</span>
-    </a>
-    <a href="{% url 'rate_nsfw_fav' %}" class="nav-tab {% if mode == 'nsfw_fav' %}active{% endif %}">
-      NSFW Fav<span class="badge">{{ nsfw_fav_count }}</span>
-    </a>
-    <a href="{% url 'rate_nsfw_void' %}" class="nav-tab {% if mode == 'nsfw_void' %}active{% endif %}">
-      NSFW Trash<span class="badge">{{ nsfw_void_count }}</span>
-    </a>
-    {% endif %}
-    {% endif %}
-    <a href="{% url 'stats' %}" class="nav-tab">Stats</a>
-    <a href="{% url 'logs' %}" class="nav-tab">Logs</a>
-    <a href="{% url 'config' %}" class="nav-tab">Config</a>
-    <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
-      {% csrf_token %}
-      <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="{% if show_nsfw %}Hide NSFW (currently merged){% else %}Show NSFW in normal modes{% endif %}">🔞</button>
-    </form>
-    <div class="help-btn" tabindex="0">?
-      <div class="help-tooltip">
-        <div class="help-row"><span>Bad / Trash</span><kbd>←</kbd></div>
-        <div class="help-row"><span>Good / Keep</span><kbd>→</kbd></div>
-        <div class="help-row"><span>Fav</span><kbd>↑</kbd></div>
-        <div class="help-row"><span>Skip</span><kbd>↓</kbd></div>
-        <div class="help-row"><span>Toggle NSFW</span><kbd>N</kbd></div>
-      </div>
-    </div>
-    {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
-    <a href="{% url 'logout' %}" class="nav-logout">out</a>
-  </nav>
+  {% include "ratings/_nav.html" %}
 
   {% include "ratings/_card.html" %}
 
