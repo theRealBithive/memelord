@@ -582,3 +582,97 @@ def trash_corpus(request, content_hash: str):
 
     ctx = _review_ctx(next_hash, show_nsfw, request)
     return render(request, "ratings/_review_htmx.html", ctx)
+
+
+# ── Void review ───────────────────────────────────────────────────────────────
+
+def _void_review_qs(show_nsfw: bool = False):
+    """Void images in browse order: oldest first."""
+    qs = Image.objects.filter(location=Image.VOID, file_deleted=False)
+    if not show_nsfw:
+        qs = qs.filter(is_nsfw=False)
+    return qs.order_by("downloaded_at")
+
+
+def _void_review_ctx(
+    content_hash: str | None,
+    show_nsfw: bool = False,
+    request=None,
+) -> dict:
+    all_hashes = list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True))
+
+    if not all_hashes:
+        ctx: dict = {"image": None, "mode": "void", **_counts(show_nsfw)}
+        if request is not None:
+            ctx.update(_training_ctx(request))
+        return ctx
+
+    if content_hash is None or content_hash not in all_hashes:
+        idx = 0
+    else:
+        idx = all_hashes.index(content_hash)
+
+    image = Image.objects.get(content_hash=all_hashes[idx])
+    prev_hash = all_hashes[idx - 1] if idx > 0 else None
+    next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
+
+    ctx = {
+        "image": image,
+        "prev_hash": prev_hash,
+        "next_hash": next_hash,
+        "position": idx + 1,
+        "total": len(all_hashes),
+        "mode": "void",
+        **_counts(show_nsfw),
+    }
+    if request is not None:
+        ctx.update(_training_ctx(request))
+    return ctx
+
+
+@login_required
+def review_void(request, content_hash: str | None = None):
+    show_nsfw = request.session.get("show_nsfw", False)
+    ctx = _void_review_ctx(content_hash, show_nsfw, request)
+    if request.htmx:
+        return render(request, "ratings/_void_htmx.html", ctx)
+    return render(request, "ratings/void_review.html", ctx)
+
+
+@login_required
+@require_POST
+def void_review_action(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    action = request.POST.get("action", "")
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.VOID)
+
+    # Capture neighbour before any move changes the list.
+    all_hashes = list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True))
+    try:
+        idx = all_hashes.index(content_hash)
+    except ValueError:
+        idx = 0
+    next_hash = (
+        all_hashes[idx + 1]
+        if idx < len(all_hashes) - 1
+        else (all_hashes[idx - 1] if idx > 0 else None)
+    )
+
+    if action in ("rescue", "rescue_fav"):
+        _move_image(image, Image.CORPUS)
+        image.is_favourite = action == "rescue_fav"
+        image.rated_at = timezone.now()
+        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+        ctx = _void_review_ctx(next_hash, show_nsfw, request)
+    elif action == "mark_nsfw":
+        image.is_nsfw = not image.is_nsfw
+        image.save(update_fields=["is_nsfw"])
+        # When hiding NSFW from the queue, advance to neighbour.
+        if not show_nsfw and image.is_nsfw:
+            ctx = _void_review_ctx(next_hash, show_nsfw, request)
+        else:
+            ctx = _void_review_ctx(content_hash, show_nsfw, request)
+    else:
+        ctx = _void_review_ctx(content_hash, show_nsfw, request)
+
+    return render(request, "ratings/_void_htmx.html", ctx)

@@ -567,8 +567,9 @@ kbd {
   }
 }
 
-/* ── Corpus review ── */
-#review-card {
+/* ── Corpus / void review ── */
+#review-card,
+#void-card {
   display: flex;
   flex-direction: column;
   height: 100dvh;

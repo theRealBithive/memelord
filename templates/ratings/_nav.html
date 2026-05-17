@@ -8,7 +8,7 @@
   <a href="{% url 'rate_fav' %}" class="nav-tab {% if mode == 'fav' %}active{% endif %}">
     Fav<span class="badge" id="badge-fav">{{ fav_count }}</span>
   </a>
-  <a href="{% url 'rate_void' %}" class="nav-tab {% if mode == 'void' %}active{% endif %}">
+  <a href="{% url 'review_void' %}" class="nav-tab {% if mode == 'void' %}active{% endif %}">
     Trash<span class="badge" id="badge-void">{{ void_count }}</span>
   </a>
   {% if not show_nsfw %}
