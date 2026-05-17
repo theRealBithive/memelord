@@ -71,9 +71,8 @@ class TrainerTests(TestCase):
             location=ImageModel.VOID,
         )
         mock_get_encoder.return_value = None
-        mock_encode.return_value = np.array(
-            [[0.1] * 768, [0.2] * 768], dtype=np.float32
-        )
+        embeddings = np.array([[0.1] * 768, [0.2] * 768], dtype=np.float32)
+        mock_encode.return_value = (embeddings, [pos, neg])
 
         weights_path = self.data_dir / "weights.pkl"
         trainer.run(data_dir=self.data_dir, weights_path=weights_path)
@@ -116,7 +115,13 @@ class TrainerTests(TestCase):
             is_nsfw=True,
         )
         mock_get_encoder.return_value = None
-        mock_encode.return_value = np.random.randn(4, 768).astype(np.float32)
+        all_paths = [
+            self.data_dir / "corpus/pos.png",
+            self.data_dir / "void/neg.png",
+            self.data_dir / "inbox/safe.png",
+            self.data_dir / "inbox/nsfw.png",
+        ]
+        mock_encode.return_value = (np.random.randn(4, 768).astype(np.float32), all_paths)
 
         taste_path = self.data_dir / "taste.pkl"
         nsfw_path = self.data_dir / "nsfw.pkl"

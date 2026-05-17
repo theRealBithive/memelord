@@ -45,22 +45,20 @@ def encode(
     transform: T.Compose | None = None,
     device: str | torch.device | None = None,
     batch_size: int = 32,
-) -> np.ndarray:
+) -> tuple[np.ndarray, list[Path]]:
     """
     Encode images to 768-d DINOv2 embeddings.
 
-    Args:
-        encoder: DINOv2 model from get_encoder().
-        image_paths: List of paths to image files.
-        transform: Preprocessing transform; uses get_transform() if None.
-        device: Device for the encoder; inferred if None.
-        batch_size: Batch size for forward passes.
-
     Returns:
-        Array of shape (N, 768), float32.
+        (embeddings, valid_paths) — embeddings shape (N, 768) float32, and the
+        subset of image_paths that were successfully read. Files that are missing
+        or unreadable at encode time are skipped with a warning so that a file
+        moved mid-training does not crash the job.
     """
+    import logging
+
     if not image_paths:
-        return np.zeros((0, 768), dtype=np.float32)
+        return np.zeros((0, 768), dtype=np.float32), []
 
     if device is None:
         try:
@@ -71,14 +69,20 @@ def encode(
         transform = get_transform()
 
     embeddings: list[np.ndarray] = []
+    valid_paths: list[Path] = []
     for start in range(0, len(image_paths), batch_size):
-        end = start + batch_size
-        batch_paths = image_paths[start:end]
+        batch_paths = image_paths[start:start + batch_size]
         tensors: list[torch.Tensor] = []
+        batch_valid: list[Path] = []
         for p in batch_paths:
-            img = Image.open(p).convert("RGB")
-            t = transform(img)
-            tensors.append(t)
+            try:
+                img = Image.open(p).convert("RGB")
+                tensors.append(transform(img))
+                batch_valid.append(p)
+            except (OSError, FileNotFoundError) as exc:
+                logging.warning("encode: skipping unreadable file %s (%s)", p, exc)
+        if not tensors:
+            continue
         batch = torch.stack(tensors, dim=0).to(device)
         with torch.no_grad():
             out = encoder(batch)
@@ -86,8 +90,11 @@ def encode(
         if out.dim() == 3:
             out = out[:, 0, :]
         embeddings.append(out.cpu().numpy().astype(np.float32))
+        valid_paths.extend(batch_valid)
 
-    return np.vstack(embeddings)
+    if not embeddings:
+        return np.zeros((0, 768), dtype=np.float32), []
+    return np.vstack(embeddings), valid_paths
 
 
 def load_classifier(path: Path) -> LogisticRegression:
