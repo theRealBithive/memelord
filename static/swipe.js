@@ -6,11 +6,11 @@
   function trigger(action) {
     if (action === "nsfw_toggle") {
       const btn = document.querySelector(".nsfw-toggle-btn");
-      if (btn) btn.click();
+      if (btn) { btn.click(); btn.blur(); }
       return;
     }
     const btn = document.querySelector(`[data-action="${action}"]`);
-    if (btn) btn.click();
+    if (btn) { btn.click(); btn.blur(); }
   }
 
   document.addEventListener("touchstart", (e) => {

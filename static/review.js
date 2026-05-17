@@ -1,7 +1,7 @@
 (function () {
   function trigger(selector) {
     const el = document.querySelector(selector);
-    if (el) el.click();
+    if (el) { el.click(); el.blur(); }
   }
 
   document.addEventListener("keydown", (e) => {
