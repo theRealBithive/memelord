@@ -96,10 +96,8 @@ def _training_ctx(request) -> dict:
     started_at_str = request.session.get("training_started_at")
     elapsed = None
     if started_at_str:
-        from datetime import timezone as tz
-
         started_at = datetime.fromisoformat(started_at_str)
-        elapsed = int((datetime.now(tz.utc) - started_at).total_seconds())
+        elapsed = int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
         if elapsed > 1800:
             request.session.pop("training_task_id", None)
             request.session.pop("training_started_at", None)
@@ -185,17 +183,25 @@ def submit_rating(request, content_hash: str, action: str):
     now = timezone.now()
 
     if action in ("good", "fav"):
-        if image.location != Image.CORPUS:
+        moved = image.location != Image.CORPUS
+        if moved:
             _move_image(image, Image.CORPUS)
         image.is_favourite = action == "fav"
         image.rated_at = now
-        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+        fields = ["is_favourite", "rated_at"]
+        if moved:
+            fields += ["file_path", "location"]
+        image.save(update_fields=fields)
     elif action == "bad":
-        if image.location != Image.VOID:
+        moved = image.location != Image.VOID
+        if moved:
             _move_image(image, Image.VOID)
         image.is_favourite = False
         image.rated_at = now
-        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+        fields = ["is_favourite", "rated_at"]
+        if moved:
+            fields += ["file_path", "location"]
+        image.save(update_fields=fields)
     elif action == "unfav":
         image.is_favourite = False
         image.save(update_fields=["is_favourite"])
@@ -270,7 +276,7 @@ def trigger_scrape(request):
         counts = scraper.run(
             config_path=Path(settings.CONFIG_PATH),
             data_dir=DATA_DIR,
-            weights_path=WEIGHTS_PATH,
+            vision=scraper.vision_config_from_settings(),
         )
         ctx = {"ok": True, "total": sum(counts.values()), "counts": counts}
     except Exception as exc:
@@ -313,10 +319,8 @@ def train_status(request, task_id: str):
         started_at_str = request.session.get("training_started_at")
         elapsed = None
         if started_at_str:
-            from datetime import timezone as tz
-
             started_at = datetime.fromisoformat(started_at_str)
-            elapsed = int((datetime.now(tz.utc) - started_at).total_seconds())
+            elapsed = int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
         return render(
             request,
             "ratings/_train_pending.html",
@@ -406,15 +410,6 @@ def source_delete(request, pk):
 
 @login_required
 @require_POST
-def source_nsfw_toggle(request, pk):
-    source = get_object_or_404(Source, pk=pk)
-    source.is_nsfw = not source.is_nsfw
-    source.save(update_fields=["is_nsfw"])
-    return render(request, "ratings/_source_row.html", {"source": source})
-
-
-@login_required
-@require_POST
 def source_import(request):
     from ratings.scraper import import_from_config
 
@@ -429,7 +424,8 @@ def source_import(request):
 @login_required
 def logs_page(request):
     show_nsfw = request.session.get("show_nsfw", False)
-    entries = list(LogEntry.objects.order_by("pk")[:500])
+    entries = list(LogEntry.objects.order_by("-pk")[:500])
+    entries.reverse()
     next_since = entries[-1].pk if entries else 0
     return render(
         request,
