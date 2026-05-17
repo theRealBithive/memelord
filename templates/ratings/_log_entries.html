@@ -1,3 +1,8 @@
+<div id="log-poll"
+     hx-get="{% url 'log_entries' %}?since={{ next_since }}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+</div>
 {% for entry in entries %}
 <div class="log-row log-{{ entry.level|lower }}">
   <span class="log-ts">{{ entry.timestamp|date:"H:i:s" }}</span>
@@ -5,9 +10,3 @@
   <span class="log-msg">{{ entry.message }}</span>
 </div>
 {% endfor %}
-<div id="log-poll"
-     hx-get="{% url 'log_entries' %}?since={{ next_since }}"
-     hx-trigger="every 2s"
-     hx-swap="outerHTML"
-     hx-on::after-request="var c=document.getElementById('log-body');if(c)c.scrollTop=c.scrollHeight;">
-</div>
