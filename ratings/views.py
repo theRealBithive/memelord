@@ -631,6 +631,55 @@ def _void_review_ctx(
 
 
 @login_required
+def gallery(request):
+    show_nsfw = request.session.get("show_nsfw", False)
+
+    try:
+        min_score = max(1, min(6, int(request.GET.get("min_score", 1))))
+    except (ValueError, TypeError):
+        min_score = 1
+
+    sort = request.GET.get("sort", "newest")
+    if sort not in ("newest", "oldest", "random"):
+        sort = "newest"
+
+    fav_only = request.GET.get("fav") == "1"
+
+    qs = Image.objects.filter(
+        location=Image.CORPUS,
+        file_deleted=False,
+        score__isnull=False,
+        score__gte=min_score,
+    )
+    if not show_nsfw:
+        qs = qs.filter(is_nsfw=False)
+    if fav_only:
+        qs = qs.filter(is_favourite=True)
+
+    if sort == "random":
+        qs = qs.order_by("?")
+    elif sort == "oldest":
+        qs = qs.order_by("downloaded_at")
+    else:
+        qs = qs.order_by("-downloaded_at")
+
+    images = list(qs[:500])
+
+    return render(request, "ratings/gallery.html", {
+        **_counts(show_nsfw),
+        **_training_ctx(request),
+        "images": images,
+        "total": len(images),
+        "min_score": min_score,
+        "sort": sort,
+        "fav_only": fav_only,
+        "scores": range(1, 7),
+        "show_nsfw": show_nsfw,
+        "mode": "gallery",
+    })
+
+
+@login_required
 def review_void(request, content_hash: str | None = None):
     show_nsfw = request.session.get("show_nsfw", False)
     ctx = _void_review_ctx(content_hash, show_nsfw, request)
