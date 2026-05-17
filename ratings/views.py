@@ -246,7 +246,9 @@ def stats(request):
         .annotate(n=Count("content_hash"))
         .order_by("-n")
     )
-    favs_qs = Image.objects.filter(location=Image.CORPUS, is_favourite=True, file_deleted=False)
+    favs_qs = Image.objects.filter(
+        location=Image.CORPUS, is_favourite=True, file_deleted=False
+    )
     if not show_nsfw:
         favs_qs = favs_qs.filter(is_nsfw=False)
     favs = favs_qs.order_by("-rated_at")[:24]
@@ -353,6 +355,7 @@ def train_status(request, task_id: str):
 
 def _schedule_ctx() -> dict:
     from django_q.models import Schedule as QSchedule
+
     schedule = ScrapeSchedule.objects.filter(pk=1).first()
     q = QSchedule.objects.filter(name="auto_scrape").first()
     return {
@@ -382,8 +385,6 @@ def config_view(request):
 @login_required
 @require_POST
 def set_scrape_schedule(request):
-    from django_q.models import Schedule as QSchedule
-
     try:
         interval_hours = max(1, min(168, int(request.POST.get("interval_hours", 6))))
     except (ValueError, TypeError):
@@ -395,15 +396,9 @@ def set_scrape_schedule(request):
         defaults={"interval_hours": interval_hours, "enabled": enabled},
     )
 
-    QSchedule.objects.filter(name="auto_scrape").delete()
-    if enabled:
-        QSchedule.objects.create(
-            func="ratings.tasks.run_scrape",
-            name="auto_scrape",
-            schedule_type=QSchedule.MINUTES,
-            minutes=interval_hours * 60,
-            repeats=-1,
-        )
+    from ratings.schedule_sync import sync_scrape_q_schedule
+
+    sync_scrape_q_schedule()
 
     return render(request, "ratings/_schedule_status.html", _schedule_ctx())
 
@@ -510,6 +505,7 @@ def log_clear(request):
 
 # ── Browse context helper ─────────────────────────────────────────────────────
 
+
 def _browse_ctx(
     qs,
     content_hash: str | None,
@@ -549,6 +545,7 @@ def _browse_ctx(
 
 # ── Corpus review ────────────────────────────────────────────────────────────
 
+
 def _review_qs(show_nsfw: bool = False):
     """Corpus images in review order: unrated first, then oldest."""
     qs = Image.objects.filter(location=Image.CORPUS, file_deleted=False)
@@ -564,9 +561,15 @@ def _review_qs(show_nsfw: bool = False):
     )
 
 
-def _review_ctx(content_hash: str | None, show_nsfw: bool = False, request=None) -> dict:
+def _review_ctx(
+    content_hash: str | None, show_nsfw: bool = False, request=None
+) -> dict:
     return _browse_ctx(
-        _review_qs(show_nsfw), content_hash, "corpus", show_nsfw, request,
+        _review_qs(show_nsfw),
+        content_hash,
+        "corpus",
+        show_nsfw,
+        request,
         extra={"scores": range(1, 7)},
     )
 
@@ -641,7 +644,8 @@ def toggle_nsfw(request, content_hash: str):
         all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
         idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
         neighbor = (
-            all_hashes[idx + 1] if idx < len(all_hashes) - 1
+            all_hashes[idx + 1]
+            if idx < len(all_hashes) - 1
             else (all_hashes[idx - 1] if idx > 0 else None)
         )
         image.is_nsfw = not image.is_nsfw
@@ -653,10 +657,13 @@ def toggle_nsfw(request, content_hash: str):
         return render(request, "ratings/_review_htmx.html", ctx)
 
     if location == Image.VOID:
-        all_hashes = list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True))
+        all_hashes = list(
+            _void_review_qs(show_nsfw).values_list("content_hash", flat=True)
+        )
         idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
         neighbor = (
-            all_hashes[idx + 1] if idx < len(all_hashes) - 1
+            all_hashes[idx + 1]
+            if idx < len(all_hashes) - 1
             else (all_hashes[idx - 1] if idx > 0 else None)
         )
         image.is_nsfw = not image.is_nsfw
@@ -681,6 +688,7 @@ def toggle_nsfw(request, content_hash: str):
 
 # ── Void review ───────────────────────────────────────────────────────────────
 
+
 def _void_review_qs(show_nsfw: bool = False):
     qs = Image.objects.filter(location=Image.VOID, file_deleted=False)
     if not show_nsfw:
@@ -688,8 +696,12 @@ def _void_review_qs(show_nsfw: bool = False):
     return qs.order_by("-rated_at")
 
 
-def _void_review_ctx(content_hash: str | None, show_nsfw: bool = False, request=None) -> dict:
-    return _browse_ctx(_void_review_qs(show_nsfw), content_hash, "void", show_nsfw, request)
+def _void_review_ctx(
+    content_hash: str | None, show_nsfw: bool = False, request=None
+) -> dict:
+    return _browse_ctx(
+        _void_review_qs(show_nsfw), content_hash, "void", show_nsfw, request
+    )
 
 
 @login_required
@@ -727,18 +739,22 @@ def gallery(request):
 
     images = list(qs[:500])
 
-    return render(request, "ratings/gallery.html", {
-        **_counts(show_nsfw),
-        **_training_ctx(request),
-        "images": images,
-        "total": len(images),
-        "min_score": min_score,
-        "sort": sort,
-        "fav_only": fav_only,
-        "scores": range(1, 7),
-        "show_nsfw": show_nsfw,
-        "mode": "gallery",
-    })
+    return render(
+        request,
+        "ratings/gallery.html",
+        {
+            **_counts(show_nsfw),
+            **_training_ctx(request),
+            "images": images,
+            "total": len(images),
+            "min_score": min_score,
+            "sort": sort,
+            "fav_only": fav_only,
+            "scores": range(1, 7),
+            "show_nsfw": show_nsfw,
+            "mode": "gallery",
+        },
+    )
 
 
 @login_required
