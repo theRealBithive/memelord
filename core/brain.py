@@ -19,6 +19,12 @@ EMBEDDING_DIM = 768
 
 
 def get_transform() -> T.Compose:
+    """
+    DINOv2 ViT-B/14 was pretrained with exactly this pipeline (256→224 bicubic
+    crop, ImageNet mean/std). Deviating produces out-of-distribution inputs and
+    degrades embedding quality, which in turn harms dedup precision and taste
+    classifier accuracy.
+    """
     return T.Compose(
         [
             T.Resize(256, interpolation=T.InterpolationMode.BICUBIC),
@@ -30,6 +36,13 @@ def get_transform() -> T.Compose:
 
 
 def get_encoder(device: str | torch.device | None = None) -> torch.nn.Module:
+    """
+    ViT-B/14 is the quality/speed sweet spot for this workload — ViT-S loses
+    too much semantic detail for taste discrimination, ViT-L is too slow for
+    scrape-time dedup on a single GPU. eval() is required for deterministic
+    outputs: stochastic layers in train mode would produce different embeddings
+    for the same image, breaking cosine-similarity dedup comparisons.
+    """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", pretrained=True)
@@ -96,6 +109,13 @@ def encode(
 
 
 def load_classifier(path: Path) -> LogisticRegression:
+    """
+    Classifiers (taste and NSFW) are trained separately in trainer.py and
+    persisted so scrape runs can auto-classify without retraining. Pickle is
+    the standard sklearn serialisation format; there is no safer alternative
+    for arbitrary estimators. The caller is responsible for checking that
+    path exists before calling — see scraper.vision_config_from_settings().
+    """
     import pickle
 
     with path.open("rb") as f:
@@ -103,6 +123,12 @@ def load_classifier(path: Path) -> LogisticRegression:
 
 
 def save_classifier(classifier: LogisticRegression, path: Path) -> None:
+    """
+    Writes the fitted estimator to DATA_DIR so the next scrape run can load it
+    via load_classifier() without requiring a retraining pass. mkdir is
+    included here so the function is safe to call before DATA_DIR is fully
+    bootstrapped (e.g. during tests with a temp directory).
+    """
     import pickle
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +140,13 @@ def predict_proba(
     classifier: LogisticRegression,
     embedding: np.ndarray,
 ) -> np.ndarray:
+    """
+    Returns P(corpus) — the probability the image belongs in the positive
+    class. Used by classify_inbox() to auto-sort inbox images: ≥0.75 goes to
+    corpus, ≤0.25 to void, anything in between stays for manual review.
+    The 1-d reshape allows callers to pass a single (768,) vector without
+    wrapping it in a batch dimension themselves.
+    """
     if embedding.ndim == 1:
         embedding = embedding.reshape(1, -1)
     proba = classifier.predict_proba(embedding)[:, 1]
@@ -126,6 +159,12 @@ def is_image_path(path: Path) -> bool:
 
 
 def embedding_to_bytes(embedding: np.ndarray) -> bytes:
+    """
+    SQLite has no native array type, so embeddings are stored as raw float32
+    blobs. The dimension check catches shape mismatches at write time rather
+    than silently storing a truncated vector that would corrupt cosine-similarity
+    comparisons when the DedupIndex is rebuilt from the DB on the next scrape.
+    """
     arr = np.asarray(embedding, dtype=np.float32).reshape(-1)
     if arr.shape[0] != EMBEDDING_DIM:
         raise ValueError(f"Expected {EMBEDDING_DIM}-d embedding, got {arr.shape[0]}")
@@ -133,6 +172,11 @@ def embedding_to_bytes(embedding: np.ndarray) -> bytes:
 
 
 def bytes_to_embedding(data: bytes) -> np.ndarray:
+    """
+    Inverse of embedding_to_bytes(). Called when building the DedupIndex from
+    the DB at scrape startup. frombuffer gives a read-only view; callers that
+    need to modify the array must copy it first.
+    """
     arr = np.frombuffer(data, dtype=np.float32)
     if arr.shape[0] != EMBEDDING_DIM:
         raise ValueError(f"Expected {EMBEDDING_DIM} floats, got {arr.shape[0]}")
@@ -141,14 +185,11 @@ def bytes_to_embedding(data: bytes) -> np.ndarray:
 
 def cosine_similarity_matrix(query: np.ndarray, bank: np.ndarray) -> np.ndarray:
     """
-    Cosine similarity between query row(s) and bank rows.
-
-    Args:
-        query: Shape (768,) or (N, 768).
-        bank: Shape (M, 768). Empty bank returns empty array.
-
-    Returns:
-        Shape (N, M) or (M,) when query is 1-d.
+    Cosine similarity is the right metric here because DINOv2 embeddings lie on
+    a hypersphere — angular distance is meaningful, Euclidean distance is not.
+    Zero-norm guard prevents division-by-zero on degenerate images (solid-colour
+    fills) that produce all-zero activations. Returns shape (M,) when query is
+    1-d so is_embedding_duplicate() can call np.max() directly without squeezing.
     """
     if bank.size == 0:
         if query.ndim == 1:
