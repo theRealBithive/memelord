@@ -426,8 +426,7 @@ def source_import(request):
 def logs_page(request):
     show_nsfw = request.session.get("show_nsfw", False)
     entries = list(LogEntry.objects.order_by("-pk")[:500])
-    entries.reverse()
-    next_since = entries[-1].pk if entries else 0
+    next_since = entries[0].pk if entries else 0
     return render(
         request,
         "ratings/logs.html",
@@ -447,7 +446,7 @@ def log_entries(request):
         since_id = int(request.GET.get("since", 0))
     except (ValueError, TypeError):
         since_id = 0
-    entries = list(LogEntry.objects.filter(pk__gt=since_id).order_by("pk")[:100])
+    entries = list(LogEntry.objects.filter(pk__gt=since_id).order_by("-pk")[:100])
     next_since = entries[-1].pk if entries else since_id
     return render(
         request,
