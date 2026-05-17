@@ -28,7 +28,16 @@ SECRET_KEY = os.environ.get(
     "django-insecure--wk7gr=8t^oipj2-dnemg0@pc1(p&=p7q2)ho@54+*x&$(9mu4",
 )
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "true").lower() != "false"
+DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
+
+if not DEBUG:
+    _placeholder_prefixes = ("django-insecure-", "change-me")
+    if any(SECRET_KEY.startswith(p) for p in _placeholder_prefixes):
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be set to a real secret before running in production. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(50))\""
+        )
 
 ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
 
