@@ -717,6 +717,37 @@ kbd {
   color: var(--muted);
 }
 
+.review-fav-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  transition: background 100ms, color 100ms, transform 80ms;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.review-fav-btn:hover {
+  background: color-mix(in srgb, #f59e0b 15%, var(--surface));
+  color: #f59e0b;
+}
+
+.review-fav-btn:active {
+  transform: scale(0.94);
+}
+
+.review-fav-btn--on {
+  color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 12%, var(--surface));
+}
+
 .review-nav {
   display: flex;
   height: var(--reviewnav-h);

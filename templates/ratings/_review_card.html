@@ -32,6 +32,14 @@
       <span class="score-num">{{ s }}</span>
     </button>
     {% endfor %}
+    <button class="review-fav-btn{% if image.is_favourite %} review-fav-btn--on{% endif %}"
+            data-action="fav"
+            hx-post="{% url 'toggle_fav_corpus' image.content_hash %}"
+            hx-target="#review-card"
+            hx-swap="outerHTML"
+            title="{% if image.is_favourite %}Unfavourite{% else %}Favourite{% endif %}">
+      <span class="review-fav-icon">★</span>
+    </button>
     <button class="trash-btn"
             data-action="trash"
             hx-post="{% url 'trash_corpus' image.content_hash %}"
