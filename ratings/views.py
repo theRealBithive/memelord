@@ -29,23 +29,33 @@ def _counts(show_nsfw: bool = False) -> dict:
             void_count=Count("pk", filter=Q(location=Image.VOID)),
             fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True)),
             nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
-            nsfw_corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=True)),
+            nsfw_corpus_count=Count(
+                "pk", filter=Q(location=Image.CORPUS, is_nsfw=True)
+            ),
             nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
-            nsfw_fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)),
+            nsfw_fav_count=Count(
+                "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
+            ),
         )
     return qs.aggregate(
         inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=False)),
         corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=False)),
         void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=False)),
-        fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=False)),
+        fav_count=Count(
+            "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=False)
+        ),
         nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
         nsfw_corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=True)),
         nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
-        nsfw_fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)),
+        nsfw_fav_count=Count(
+            "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
+        ),
     )
 
 
-def _get_next(mode: str, exclude_hash: str | None = None, show_nsfw: bool = False) -> Image | None:
+def _get_next(
+    mode: str, exclude_hash: str | None = None, show_nsfw: bool = False
+) -> Image | None:
     qs = Image.objects.filter(file_deleted=False)
 
     if mode == "nsfw_fav":
@@ -87,6 +97,7 @@ def _training_ctx(request) -> dict:
     elapsed = None
     if started_at_str:
         from datetime import timezone as tz
+
         started_at = datetime.fromisoformat(started_at_str)
         elapsed = int((datetime.now(tz.utc) - started_at).total_seconds())
         if elapsed > 1800:
@@ -96,7 +107,9 @@ def _training_ctx(request) -> dict:
     return {"active_task_id": task_id, "training_elapsed": _fmt_elapsed(elapsed)}
 
 
-def _build_ctx(mode: str, image: Image | None, show_nsfw: bool = False, request=None) -> dict:
+def _build_ctx(
+    mode: str, image: Image | None, show_nsfw: bool = False, request=None
+) -> dict:
     counts = _counts(show_nsfw)
     ctx = {
         "mode": mode,
@@ -112,7 +125,11 @@ def _build_ctx(mode: str, image: Image | None, show_nsfw: bool = False, request=
 
 def _mode_view(request, mode: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    return render(request, "ratings/rate.html", _build_ctx(mode, _get_next(mode, show_nsfw=show_nsfw), show_nsfw, request))
+    return render(
+        request,
+        "ratings/rate.html",
+        _build_ctx(mode, _get_next(mode, show_nsfw=show_nsfw), show_nsfw, request),
+    )
 
 
 def _move_image(image: Image, new_location: str) -> None:
@@ -224,14 +241,18 @@ def stats(request):
         location=Image.CORPUS, is_favourite=True, file_deleted=False
     ).order_by("-rated_at")[:24]
 
-    return render(request, "ratings/stats.html", {
-        **counts,
-        **_training_ctx(request),
-        "show_nsfw": show_nsfw,
-        "last_trained": last_trained,
-        "source_breakdown": source_breakdown,
-        "favs": favs,
-    })
+    return render(
+        request,
+        "ratings/stats.html",
+        {
+            **counts,
+            **_training_ctx(request),
+            "show_nsfw": show_nsfw,
+            "last_trained": last_trained,
+            "source_breakdown": source_breakdown,
+            "favs": favs,
+        },
+    )
 
 
 @login_required
@@ -263,33 +284,46 @@ def trigger_scrape(request):
 @require_POST
 def trigger_train(request):
     from django_q.tasks import async_task
+
     if request.session.get("training_task_id"):
         ctx = _training_ctx(request)
-        return render(request, "ratings/_train_pending.html", {
-            "task_id": ctx["active_task_id"],
-            "elapsed": ctx["training_elapsed"],
-        })
+        return render(
+            request,
+            "ratings/_train_pending.html",
+            {
+                "task_id": ctx["active_task_id"],
+                "elapsed": ctx["training_elapsed"],
+            },
+        )
     task_id = async_task("ratings.tasks.run_train")
     request.session["training_task_id"] = task_id
     request.session["training_started_at"] = timezone.now().isoformat()
-    return render(request, "ratings/_train_pending.html", {"task_id": task_id, "elapsed": "0s"})
+    return render(
+        request, "ratings/_train_pending.html", {"task_id": task_id, "elapsed": "0s"}
+    )
 
 
 @login_required
 def train_status(request, task_id: str):
     from django_q.tasks import fetch
+
     task = fetch(task_id)
     if task is None or task.stopped is None:
         started_at_str = request.session.get("training_started_at")
         elapsed = None
         if started_at_str:
             from datetime import timezone as tz
+
             started_at = datetime.fromisoformat(started_at_str)
             elapsed = int((datetime.now(tz.utc) - started_at).total_seconds())
-        return render(request, "ratings/_train_pending.html", {
-            "task_id": task_id,
-            "elapsed": _fmt_elapsed(elapsed),
-        })
+        return render(
+            request,
+            "ratings/_train_pending.html",
+            {
+                "task_id": task_id,
+                "elapsed": _fmt_elapsed(elapsed),
+            },
+        )
 
     request.session.pop("training_task_id", None)
     request.session.pop("training_started_at", None)
@@ -297,24 +331,32 @@ def train_status(request, task_id: str):
     result = task.result or {}
     show_nsfw = request.session.get("show_nsfw", False)
     counts = _counts(show_nsfw)
-    return render(request, "ratings/_train_result.html", {
-        "ok": result.get("ok", False),
-        "error": result.get("error", "Unknown error."),
-        "corpus_n": counts["corpus_count"],
-        "void_n": counts["void_count"],
-    })
+    return render(
+        request,
+        "ratings/_train_result.html",
+        {
+            "ok": result.get("ok", False),
+            "error": result.get("error", "Unknown error."),
+            "corpus_n": counts["corpus_count"],
+            "void_n": counts["void_count"],
+        },
+    )
 
 
 @login_required
 def config_view(request):
     show_nsfw = request.session.get("show_nsfw", False)
     counts = _counts(show_nsfw)
-    return render(request, "ratings/config.html", {
-        "sources": Source.objects.all(),
-        "show_nsfw": show_nsfw,
-        **_training_ctx(request),
-        **counts,
-    })
+    return render(
+        request,
+        "ratings/config.html",
+        {
+            "sources": Source.objects.all(),
+            "show_nsfw": show_nsfw,
+            **_training_ctx(request),
+            **counts,
+        },
+    )
 
 
 @login_required
@@ -324,11 +366,19 @@ def source_add(request):
     name = request.POST.get("name", "").strip()
 
     if stype not in dict(Source.TYPE_CHOICES):
-        return render(request, "ratings/_source_error.html", {"error": "Invalid source type."})
+        return render(
+            request, "ratings/_source_error.html", {"error": "Invalid source type."}
+        )
     if not name:
-        return render(request, "ratings/_source_error.html", {"error": "Name is required."})
+        return render(
+            request, "ratings/_source_error.html", {"error": "Name is required."}
+        )
     if stype == Source.PIXELFED and not name.startswith("http"):
-        return render(request, "ratings/_source_error.html", {"error": "Pixelfed value must be a URL (https://…)."})
+        return render(
+            request,
+            "ratings/_source_error.html",
+            {"error": "Pixelfed value must be a URL (https://…)."},
+        )
 
     source, created = Source.objects.get_or_create(type=stype, name=name)
     if not created:
@@ -366,8 +416,13 @@ def source_nsfw_toggle(request, pk):
 @require_POST
 def source_import(request):
     from ratings.scraper import import_from_config
+
     n = import_from_config(Path(settings.CONFIG_PATH))
-    return render(request, "ratings/_source_list.html", {"sources": Source.objects.all(), "imported": n})
+    return render(
+        request,
+        "ratings/_source_list.html",
+        {"sources": Source.objects.all(), "imported": n},
+    )
 
 
 @login_required
@@ -375,13 +430,17 @@ def logs_page(request):
     show_nsfw = request.session.get("show_nsfw", False)
     entries = list(LogEntry.objects.order_by("pk")[:500])
     next_since = entries[-1].pk if entries else 0
-    return render(request, "ratings/logs.html", {
-        **_counts(show_nsfw),
-        **_training_ctx(request),
-        "show_nsfw": show_nsfw,
-        "entries": entries,
-        "next_since": next_since,
-    })
+    return render(
+        request,
+        "ratings/logs.html",
+        {
+            **_counts(show_nsfw),
+            **_training_ctx(request),
+            "show_nsfw": show_nsfw,
+            "entries": entries,
+            "next_since": next_since,
+        },
+    )
 
 
 @login_required
@@ -389,10 +448,14 @@ def log_entries(request):
     since_id = int(request.GET.get("since", 0))
     entries = list(LogEntry.objects.filter(pk__gt=since_id).order_by("pk")[:100])
     next_since = entries[-1].pk if entries else since_id
-    return render(request, "ratings/_log_entries.html", {
-        "entries": entries,
-        "next_since": next_since,
-    })
+    return render(
+        request,
+        "ratings/_log_entries.html",
+        {
+            "entries": entries,
+            "next_since": next_since,
+        },
+    )
 
 
 @login_required

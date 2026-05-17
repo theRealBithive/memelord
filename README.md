@@ -48,6 +48,8 @@ docker compose run --rm memelord createsuperuser
 
 Open `http://localhost:8000` and begin your torment.
 
+User-uploaded images are served at `/media/` behind Django login (not WhiteNoise; `django.conf.urls.static.static()` only registers routes when `DEBUG=True`).
+
 ### One-off commands
 
 ```bash
