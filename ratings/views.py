@@ -141,12 +141,12 @@ def rate_inbox(request):
 
 @login_required
 def rate_corpus(request):
-    return _mode_view(request, "corpus")
+    return redirect("review_corpus")
 
 
 @login_required
 def rate_void(request):
-    return _mode_view(request, "void")
+    return redirect("review_void")
 
 
 @login_required
@@ -244,9 +244,10 @@ def stats(request):
         .annotate(n=Count("content_hash"))
         .order_by("-n")
     )
-    favs = Image.objects.filter(
-        location=Image.CORPUS, is_favourite=True, file_deleted=False
-    ).order_by("-rated_at")[:24]
+    favs_qs = Image.objects.filter(location=Image.CORPUS, is_favourite=True, file_deleted=False)
+    if not show_nsfw:
+        favs_qs = favs_qs.filter(is_nsfw=False)
+    favs = favs_qs.order_by("-rated_at")[:24]
 
     return render(
         request,
@@ -442,7 +443,10 @@ def logs_page(request):
 
 @login_required
 def log_entries(request):
-    since_id = int(request.GET.get("since", 0))
+    try:
+        since_id = int(request.GET.get("since", 0))
+    except (ValueError, TypeError):
+        since_id = 0
     entries = list(LogEntry.objects.filter(pk__gt=since_id).order_by("pk")[:100])
     next_since = entries[-1].pk if entries else since_id
     return render(
@@ -462,6 +466,45 @@ def log_clear(request):
     return redirect("logs")
 
 
+# ── Browse context helper ─────────────────────────────────────────────────────
+
+def _browse_ctx(
+    qs,
+    content_hash: str | None,
+    mode: str,
+    show_nsfw: bool,
+    request,
+    extra: dict | None = None,
+) -> dict:
+    """Build the template context for a prev/next browse view over a queryset."""
+    all_hashes = list(qs.values_list("content_hash", flat=True))
+    base = {"show_nsfw": show_nsfw, **_counts(show_nsfw)}
+    if extra:
+        base.update(extra)
+
+    if not all_hashes:
+        ctx: dict = {"image": None, "mode": mode, **base}
+        if request is not None:
+            ctx.update(_training_ctx(request))
+        return ctx
+
+    hash_index = {h: i for i, h in enumerate(all_hashes)}
+    idx = hash_index.get(content_hash, 0) if content_hash else 0
+
+    ctx = {
+        "image": Image.objects.get(content_hash=all_hashes[idx]),
+        "prev_hash": all_hashes[idx - 1] if idx > 0 else None,
+        "next_hash": all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None,
+        "position": idx + 1,
+        "total": len(all_hashes),
+        "mode": mode,
+        **base,
+    }
+    if request is not None:
+        ctx.update(_training_ctx(request))
+    return ctx
+
+
 # ── Corpus review ────────────────────────────────────────────────────────────
 
 def _review_qs(show_nsfw: bool = False):
@@ -479,46 +522,11 @@ def _review_qs(show_nsfw: bool = False):
     )
 
 
-def _review_ctx(
-    content_hash: str | None,
-    show_nsfw: bool = False,
-    request=None,
-) -> dict:
-    all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
-
-    if not all_hashes:
-        ctx: dict = {
-            "image": None,
-            "mode": "corpus",
-            "scores": range(1, 7),
-            **_counts(show_nsfw),
-        }
-        if request is not None:
-            ctx.update(_training_ctx(request))
-        return ctx
-
-    if content_hash is None or content_hash not in all_hashes:
-        idx = 0
-    else:
-        idx = all_hashes.index(content_hash)
-
-    image = Image.objects.get(content_hash=all_hashes[idx])
-    prev_hash = all_hashes[idx - 1] if idx > 0 else None
-    next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
-
-    ctx = {
-        "image": image,
-        "prev_hash": prev_hash,
-        "next_hash": next_hash,
-        "position": idx + 1,
-        "total": len(all_hashes),
-        "mode": "corpus",
-        "scores": range(1, 7),
-        **_counts(show_nsfw),
-    }
-    if request is not None:
-        ctx.update(_training_ctx(request))
-    return ctx
+def _review_ctx(content_hash: str | None, show_nsfw: bool = False, request=None) -> dict:
+    return _browse_ctx(
+        _review_qs(show_nsfw), content_hash, "corpus", show_nsfw, request,
+        extra={"scores": range(1, 7)},
+    )
 
 
 @login_required
@@ -538,10 +546,7 @@ def score_corpus(request, content_hash: str):
 
     # Capture next position before the score changes ordering.
     all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
-    try:
-        idx = all_hashes.index(content_hash)
-    except ValueError:
-        idx = 0
+    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
     next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
 
     try:
@@ -565,10 +570,7 @@ def trash_corpus(request, content_hash: str):
 
     # Capture neighbour before removing from corpus.
     all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
-    try:
-        idx = all_hashes.index(content_hash)
-    except ValueError:
-        idx = 0
+    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
     next_hash = (
         all_hashes[idx + 1]
         if idx < len(all_hashes) - 1
@@ -594,40 +596,8 @@ def _void_review_qs(show_nsfw: bool = False):
     return qs.order_by("downloaded_at")
 
 
-def _void_review_ctx(
-    content_hash: str | None,
-    show_nsfw: bool = False,
-    request=None,
-) -> dict:
-    all_hashes = list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True))
-
-    if not all_hashes:
-        ctx: dict = {"image": None, "mode": "void", **_counts(show_nsfw)}
-        if request is not None:
-            ctx.update(_training_ctx(request))
-        return ctx
-
-    if content_hash is None or content_hash not in all_hashes:
-        idx = 0
-    else:
-        idx = all_hashes.index(content_hash)
-
-    image = Image.objects.get(content_hash=all_hashes[idx])
-    prev_hash = all_hashes[idx - 1] if idx > 0 else None
-    next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
-
-    ctx = {
-        "image": image,
-        "prev_hash": prev_hash,
-        "next_hash": next_hash,
-        "position": idx + 1,
-        "total": len(all_hashes),
-        "mode": "void",
-        **_counts(show_nsfw),
-    }
-    if request is not None:
-        ctx.update(_training_ctx(request))
-    return ctx
+def _void_review_ctx(content_hash: str | None, show_nsfw: bool = False, request=None) -> dict:
+    return _browse_ctx(_void_review_qs(show_nsfw), content_hash, "void", show_nsfw, request)
 
 
 @login_required
@@ -697,10 +667,7 @@ def void_review_action(request, content_hash: str):
 
     # Capture neighbour before any move changes the list.
     all_hashes = list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True))
-    try:
-        idx = all_hashes.index(content_hash)
-    except ValueError:
-        idx = 0
+    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
     next_hash = (
         all_hashes[idx + 1]
         if idx < len(all_hashes) - 1

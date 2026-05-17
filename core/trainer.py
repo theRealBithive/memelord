@@ -116,7 +116,7 @@ def run(
     if not void_paths:
         logger.warning("No void images found in DB / on disk at {}", data_dir)
     if not corpus_paths or not void_paths:
-        raise SystemExit(1)
+        raise RuntimeError("Need at least one corpus and one void image to train.")
 
     nsfw_paths, safe_paths = collect_nsfw_paths(data_dir)
     train_nsfw = bool(nsfw_paths and safe_paths)

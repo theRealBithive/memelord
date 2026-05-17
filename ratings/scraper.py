@@ -142,7 +142,7 @@ def _process_candidates(
         Image.objects.create(
             content_hash=h,
             file_path=str(path.relative_to(data_dir)),
-            source_url=source_url or "",
+            source_url=source_url or None,
             source_label=source_label,
             location=Image.INBOX,
             is_nsfw=is_nsfw,
