@@ -17,6 +17,8 @@ class Image(models.Model):
     is_favourite = models.BooleanField(default=False)
     is_nsfw = models.BooleanField(default=False)
     file_deleted = models.BooleanField(default=False)
+    phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
+    embedding = models.BinaryField(null=True, blank=True)
 
     class Meta:
         ordering = ["downloaded_at"]
