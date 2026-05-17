@@ -12,7 +12,13 @@
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
     <span class="review-position">{{ position }} / {{ total }}</span>
-    {% if image.is_nsfw %}<span class="nsfw-tag">🔞 nsfw</span>{% endif %}
+    <button class="nsfw-toggle-btn{% if image.is_nsfw %} nsfw-toggle-btn--on{% endif %}"
+            hx-post="{% url 'toggle_nsfw' image.content_hash %}"
+            hx-target="#void-card"
+            hx-swap="outerHTML"
+            title="{% if image.is_nsfw %}Marked NSFW — click to clear{% else %}Click to mark NSFW{% endif %}">
+      🔞{% if image.is_nsfw %} nsfw{% endif %}
+    </button>
   </div>
 
   <div class="btn-row">
@@ -27,13 +33,6 @@
             hx-target="#void-card" hx-swap="outerHTML"
             hx-vals='{"action": "rescue"}'>
       <span class="btn-icon">✓</span><span class="btn-label">RESCUE</span>
-    </button>
-    <button class="btn btn-nsfw{% if image.is_nsfw %} btn-nsfw--on{% endif %}" data-action="mark_nsfw"
-            hx-post="{% url 'void_review_action' image.content_hash %}"
-            hx-target="#void-card" hx-swap="outerHTML"
-            hx-vals='{"action": "mark_nsfw"}'>
-      <span class="btn-icon">🔞</span>
-      <span class="btn-label">{% if image.is_nsfw %}SAFE{% else %}NSFW{% endif %}</span>
     </button>
   </div>
 

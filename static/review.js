@@ -24,8 +24,7 @@
       trigger("[data-action='trash']");
     } else if (key === "n" || key === "N") {
       e.preventDefault();
-      const btn = document.querySelector(".nav-nsfw-toggle");
-      if (btn) btn.closest("form")?.requestSubmit();
+      document.querySelector(".nsfw-toggle-btn")?.click();
     }
   });
 })();
