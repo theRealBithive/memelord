@@ -127,10 +127,14 @@ def _process_candidates(
         return 0
 
     paths = [c[0] for c in candidates]
-    embeddings = brain.encode(encoder, paths, transform=transform)
+    embeddings, valid_paths = brain.encode(encoder, paths, transform=transform)
+    path_to_emb = dict(zip(valid_paths, embeddings))
     inserted = 0
 
-    for (path, source_url, source_label, h, ph), emb in zip(candidates, embeddings):
+    for path, source_url, source_label, h, ph in candidates:
+        emb = path_to_emb.get(path)
+        if emb is None:
+            continue
         if dedup.is_embedding_duplicate(emb, index, vision.dino_dedup_threshold):
             path.unlink(missing_ok=True)
             continue
@@ -200,7 +204,8 @@ def classify_inbox(
     if transform is None:
         transform = brain.get_transform()
     paths = [data_dir / img.file_path for img in images]
-    embeddings = brain.encode(encoder, paths, transform=transform)
+    embeddings, valid_paths = brain.encode(encoder, paths, transform=transform)
+    path_to_emb = dict(zip(valid_paths, embeddings))
 
     taste_clf = None
     if need_vision:
@@ -210,7 +215,10 @@ def classify_inbox(
         nsfw_clf = brain.load_classifier(vision.nsfw_weights_path)
 
     to_corpus = to_void = nsfw_tagged = 0
-    for img, emb, path in zip(images, embeddings, paths):
+    for img, path in zip(images, paths):
+        emb = path_to_emb.get(path)
+        if emb is None:
+            continue
         update_fields: list[str] = []
         if not img.phash:
             from core import phash as phash_mod
