@@ -585,6 +585,57 @@ def trash_corpus(request, content_hash: str):
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
+@login_required
+@require_POST
+def toggle_nsfw(request, content_hash: str):
+    """Generic NSFW toggle for inbox / corpus / void images."""
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash)
+    location = image.location
+
+    if location == Image.CORPUS:
+        # Capture neighbour BEFORE saving so ordering is stable.
+        all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
+        idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
+        neighbor = (
+            all_hashes[idx + 1] if idx < len(all_hashes) - 1
+            else (all_hashes[idx - 1] if idx > 0 else None)
+        )
+        image.is_nsfw = not image.is_nsfw
+        image.save(update_fields=["is_nsfw"])
+        if not show_nsfw and image.is_nsfw:
+            ctx = _review_ctx(neighbor, show_nsfw, request)
+        else:
+            ctx = _review_ctx(content_hash, show_nsfw, request)
+        return render(request, "ratings/_review_htmx.html", ctx)
+
+    if location == Image.VOID:
+        all_hashes = list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True))
+        idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
+        neighbor = (
+            all_hashes[idx + 1] if idx < len(all_hashes) - 1
+            else (all_hashes[idx - 1] if idx > 0 else None)
+        )
+        image.is_nsfw = not image.is_nsfw
+        image.save(update_fields=["is_nsfw"])
+        if not show_nsfw and image.is_nsfw:
+            ctx = _void_review_ctx(neighbor, show_nsfw, request)
+        else:
+            ctx = _void_review_ctx(content_hash, show_nsfw, request)
+        return render(request, "ratings/_void_htmx.html", ctx)
+
+    # Inbox (and any other location)
+    mode = request.POST.get("mode", "inbox")
+    image.is_nsfw = not image.is_nsfw
+    image.save(update_fields=["is_nsfw"])
+    if not show_nsfw and image.is_nsfw:
+        next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
+        ctx = _build_ctx(mode, next_image, show_nsfw, request)
+    else:
+        ctx = _build_ctx(mode, image, show_nsfw, request)
+    return render(request, "ratings/_htmx_rating.html", ctx)
+
+
 # ── Void review ───────────────────────────────────────────────────────────────
 
 def _void_review_qs(show_nsfw: bool = False):

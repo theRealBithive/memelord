@@ -42,7 +42,7 @@
         break;
       case "n": case "N":
         e.preventDefault();
-        document.querySelector(".nav-nsfw-toggle")?.closest("form")?.requestSubmit();
+        document.querySelector(".nsfw-toggle-btn")?.click();
         break;
     }
   });

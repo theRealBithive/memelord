@@ -29,6 +29,7 @@ urlpatterns = [
     path("review/<str:content_hash>/", views.review_corpus, name="review_corpus_image"),
     path("review/<str:content_hash>/score/", views.score_corpus, name="score_corpus"),
     path("review/<str:content_hash>/trash/", views.trash_corpus, name="trash_corpus"),
+    path("toggle/<str:content_hash>/nsfw/", views.toggle_nsfw, name="toggle_nsfw"),
     path("config/", views.config_view, name="config"),
     path("config/add/", views.source_add, name="source_add"),
     path("config/import/", views.source_import, name="source_import"),

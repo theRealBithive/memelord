@@ -5,7 +5,7 @@
 
   function trigger(action) {
     if (action === "nsfw_toggle") {
-      const btn = document.querySelector(".nav-nsfw-toggle");
+      const btn = document.querySelector(".nsfw-toggle-btn");
       if (btn) btn.click();
       return;
     }
