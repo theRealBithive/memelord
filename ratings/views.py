@@ -208,8 +208,9 @@ def submit_rating(request, content_hash: str, action: str):
 
     next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
     ctx = _build_ctx(mode, next_image, show_nsfw, request)
-    template = "ratings/_card.html" if request.htmx else "ratings/rate.html"
-    return render(request, template, ctx)
+    if request.htmx:
+        return render(request, "ratings/_htmx_rating.html", ctx)
+    return render(request, "ratings/rate.html", ctx)
 
 
 @login_required
