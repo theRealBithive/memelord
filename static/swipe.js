@@ -1,5 +1,6 @@
 (function () {
   let startX = 0, startY = 0;
+  let swipeActive = false;
   const THRESHOLD = 55;
 
   function trigger(action) {
@@ -13,11 +14,15 @@
   }
 
   document.addEventListener("touchstart", (e) => {
+    if (!e.target.closest(".image-wrap")) return;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
+    swipeActive = true;
   }, { passive: true });
 
   document.addEventListener("touchend", (e) => {
+    if (!swipeActive) return;
+    swipeActive = false;
     const dx = e.changedTouches[0].clientX - startX;
     const dy = e.changedTouches[0].clientY - startY;
     if (Math.abs(dx) > Math.abs(dy)) {
