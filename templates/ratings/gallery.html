@@ -51,7 +51,7 @@
          class="gallery-item"
          data-score="{{ image.score }}"
          data-fav="{% if image.is_favourite %}1{% else %}0{% endif %}">
-        <img src="{{ MEDIA_URL }}{{ image.file_path }}" alt="" loading="lazy">
+        <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
         <div class="gallery-item-overlay">
           <span class="gallery-item-score gallery-item-score--{{ image.score }}">{{ image.score }}</span>
           {% if image.is_favourite %}<span class="gallery-item-fav">★</span>{% endif %}
