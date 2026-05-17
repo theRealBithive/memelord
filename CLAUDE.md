@@ -81,7 +81,7 @@ Swipe left/right/up/down maps to bad/good/fav/skip. Arrow keys work on desktop.
 - `DATA_DIR` — root for all image files and the SQLite DB (env: `DATA_DIR`, default: `BASE_DIR/data`)
 - `CONFIG_PATH` — path to `config.toml` for scraper sources (env: `CONFIG_PATH`)
 - `WEIGHTS_PATH` — `DATA_DIR/Janulon_weights.pkl`
-- `MEDIA_ROOT = DATA_DIR`, `MEDIA_URL = "/media/"` — images served directly by Django
+- `MEDIA_ROOT = DATA_DIR`, `MEDIA_URL = "/media/"` — images served by `serve_media` (`@login_required`, inbox/corpus/void only); not via `static()` (DEBUG-gated)
 
 ### Data layout under `DATA_DIR`
 ```
