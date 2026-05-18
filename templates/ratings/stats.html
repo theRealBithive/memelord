@@ -9,96 +9,173 @@
   <link rel="stylesheet" href="{% static 'app.css' %}">
   <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
   <style>
-    .stats-page { padding: calc(var(--nav-h) + 1.5rem) 1.25rem 2rem; max-width: 640px; margin: 0 auto; }
-    .counts-row { display: flex; gap: 1rem; margin-bottom: 2rem; }
-    .count-card {
-      flex: 1; padding: 1rem; border-radius: 8px;
-      background: var(--surface); border: 1px solid var(--border);
-      text-align: center;
+    .stats-page {
+      padding: calc(var(--nav-h) + 1.5rem) 1.25rem 3rem;
+      max-width: 640px;
+      margin: 0 auto;
     }
-    .count-card .big { font-size: 2rem; font-weight: 700; line-height: 1; }
-    .count-card .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.3rem; }
-    .count-card.inbox .big  { color: #60a5fa; }
-    .count-card.corpus .big { color: var(--green); }
-    .count-card.void .big   { color: var(--red); }
-
     .section { margin-bottom: 2rem; }
-    .section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.75rem; }
+    .section-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 0.6rem;
+    }
+    .stat-card {
+      padding: 0.9rem 1rem;
+      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      text-align: center;
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+    .stat-card .big { font-size: 1.9rem; font-weight: 700; line-height: 1; }
+    .stat-card .label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.35rem; }
+    .stat-card.c-inbox .big  { color: #60a5fa; }
+    .stat-card.c-unrated .big { color: var(--amber); }
+    .stat-card.c-gallery .big { color: var(--green); }
+    .stat-card.c-fav .big    { color: var(--amber); }
+    .stat-card.c-trash .big  { color: var(--red); }
 
-    .meta-row { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.875rem;
+    }
     .meta-row:last-child { border-bottom: none; }
     .meta-val { color: var(--muted); }
 
-    .source-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.4rem 0; }
-    .source-name { width: 120px; font-size: 0.8rem; color: var(--muted); flex-shrink: 0; }
+    .score-row {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.3rem 0;
+    }
+    .score-label {
+      width: 1.2rem;
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .score-bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+    .score-bar-fill { height: 100%; border-radius: 4px; }
+    .score-bar-fill--1 { background: #71717a; }
+    .score-bar-fill--2 { background: #60a5fa; }
+    .score-bar-fill--3 { background: #4ade80; }
+    .score-bar-fill--4 { background: #facc15; }
+    .score-bar-fill--5 { background: #fb923c; }
+    .score-bar-fill--6 { background: #f59e0b; }
+    .score-bar-n { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; flex-shrink: 0; }
+
+    .source-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.35rem 0;
+    }
+    .source-name {
+      width: 130px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      flex-shrink: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; }
-    .bar-fill { height: 100%; background: var(--green); border-radius: 3px; transition: width 0.3s; }
-    .bar-n { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; }
+    .bar-fill  { height: 100%; background: var(--green); border-radius: 3px; }
+    .bar-n     { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; }
 
-    .favs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.5rem; }
-    .fav-thumb { aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: var(--border); }
-    .fav-thumb img { width: 100%; height: 100%; object-fit: cover; }
-
-    .action-row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .action-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.75rem; }
   </style>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 
-  <nav class="nav">
-    <a href="{% url 'rate_inbox' %}" class="nav-tab">Mix<span class="badge">{{ inbox_count }}</span></a>
-    <a href="{% url 'review_corpus' %}" class="nav-tab">Corpus<span class="badge">{{ corpus_count }}</span></a>
-    <a href="{% url 'rate_fav' %}" class="nav-tab">Fav<span class="badge">{{ fav_count }}</span></a>
-    <a href="{% url 'review_void' %}" class="nav-tab">Trash<span class="badge">{{ void_count }}</span></a>
-    {% if not show_nsfw %}<a href="{% url 'rate_nsfw_inbox' %}" class="nav-tab">NSFW<span class="badge">{{ nsfw_inbox_count }}</span></a>{% endif %}
-    <a href="{% url 'stats' %}" class="nav-tab active">Stats</a>
-    <a href="{% url 'logs' %}" class="nav-tab">Logs</a>
-    <a href="{% url 'config' %}" class="nav-tab">Config</a>
-    <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
-      {% csrf_token %}
-      <button type="submit" class="nav-nsfw-toggle {% if show_nsfw %}nsfw-on{% endif %}" title="{% if show_nsfw %}Hide NSFW (currently merged){% else %}Show NSFW in normal modes{% endif %}">🔞</button>
-    </form>
-    {% if active_task_id %}<span class="nav-training" title="Model training in progress">⟳</span>{% endif %}
-    <a href="{% url 'logout' %}" class="nav-logout">out</a>
-  </nav>
+  {% include "ratings/_nav.html" with mode="stats" %}
 
   <div class="stats-page">
 
-    <div class="counts-row">
-      <div class="count-card inbox">
-        <div class="big">{{ inbox_count }}</div>
-        <div class="label">Inbox</div>
-      </div>
-      <div class="count-card corpus">
-        <div class="big">{{ corpus_count }}</div>
-        <div class="label">Corpus</div>
-      </div>
-      <div class="count-card void">
-        <div class="big">{{ void_count }}</div>
-        <div class="label">Trash</div>
+    <div class="section">
+      <div class="section-title">Queues</div>
+      <div class="stat-grid">
+        <a href="{% url 'rate_inbox' %}" class="stat-card c-inbox">
+          <div class="big">{{ inbox_count }}</div>
+          <div class="label">Inbox</div>
+        </a>
+        <a href="{% url 'review_corpus' %}" class="stat-card c-unrated">
+          <div class="big">{{ corpus_count }}</div>
+          <div class="label">Unrated</div>
+        </a>
       </div>
     </div>
+
+    <div class="section">
+      <div class="section-title">Collection</div>
+      <div class="stat-grid">
+        <a href="{% url 'gallery' %}" class="stat-card c-gallery">
+          <div class="big">{{ gallery_total }}</div>
+          <div class="label">Gallery</div>
+        </a>
+        <a href="{% url 'rate_fav' %}" class="stat-card c-fav">
+          <div class="big">{{ fav_count }}</div>
+          <div class="label">Favs</div>
+        </a>
+        <a href="{% url 'review_void' %}" class="stat-card c-trash">
+          <div class="big">{{ void_count }}</div>
+          <div class="label">Trash</div>
+        </a>
+      </div>
+    </div>
+
+    {% if score_dist %}
+    <div class="section">
+      <div class="section-title">Score distribution</div>
+      {% for row in score_dist %}
+      <div class="score-row">
+        <span class="score-label meta-score--{{ row.score }}">{{ row.score }}</span>
+        <div class="score-bar-track">
+          <div class="score-bar-fill score-bar-fill--{{ row.score }}"
+               style="width:{% widthratio row.n score_dist_max 100 %}%"></div>
+        </div>
+        <span class="score-bar-n">{{ row.n }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
 
     <div class="section">
       <div class="section-title">Model</div>
       <div class="meta-row">
         <span>Last trained</span>
-        <span class="meta-val">
-          {% if last_trained %}{{ last_trained|date:"Y-m-d H:i" }} UTC{% else %}Never{% endif %}
-        </span>
+        <span class="meta-val">{% if last_trained %}{{ last_trained|date:"Y-m-d H:i" }} UTC{% else %}Never{% endif %}</span>
       </div>
-      <div class="meta-row" style="border-bottom:none;padding-top:0.75rem;">
-        <div class="action-row">
-          <button class="done-btn done-btn-scrape"
-                  hx-post="{% url 'trigger_scrape' %}"
-                  hx-target="#scrape-result" hx-swap="outerHTML"
-                  hx-indicator="#scrape-spinner">Scrape more</button>
-          <button class="done-btn done-btn-train"
-                  hx-post="{% url 'trigger_train' %}"
-                  hx-target="#train-result" hx-swap="outerHTML"
-                  {% if active_task_id %}disabled{% endif %}>
-            {% if active_task_id %}Training…{% else %}Train model{% endif %}
-          </button>
-        </div>
+      <div class="meta-row">
+        <span>Training data</span>
+        <span class="meta-val">{{ gallery_total }} gallery + {{ void_count }} trash</span>
+      </div>
+      <div class="action-row">
+        <button class="done-btn done-btn-scrape"
+                hx-post="{% url 'trigger_scrape' %}"
+                hx-target="#scrape-result" hx-swap="outerHTML"
+                hx-indicator="#scrape-spinner">Scrape more</button>
+        <button class="done-btn done-btn-train"
+                hx-post="{% url 'trigger_train' %}"
+                hx-target="#train-result" hx-swap="outerHTML"
+                {% if active_task_id %}disabled{% endif %}>
+          {% if active_task_id %}Training…{% else %}Train model{% endif %}
+        </button>
       </div>
       <span id="scrape-spinner" class="train-spinner htmx-indicator">scraping…</span>
       <div id="scrape-result"></div>
@@ -109,13 +186,27 @@
       {% endif %}
     </div>
 
+    <div class="section">
+      <div class="section-title">Last 7 days</div>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="big" style="color:var(--green)">{{ scraped_7d }}</div>
+          <div class="label">Scraped</div>
+        </div>
+        <div class="stat-card">
+          <div class="big" style="color:#60a5fa">{{ rated_7d }}</div>
+          <div class="label">Rated</div>
+        </div>
+      </div>
+    </div>
+
     {% if source_breakdown %}
     <div class="section">
-      <div class="section-title">Corpus by source</div>
+      <div class="section-title">Gallery by source</div>
       {% with max_n=source_breakdown.0.n %}
       {% for row in source_breakdown %}
-      <div class="source-bar">
-        <span class="source-name">{{ row.source_label }}</span>
+      <div class="source-row">
+        <span class="source-name" title="{{ row.source_label }}">{{ row.source_label }}</span>
         <div class="bar-track">
           <div class="bar-fill" style="width:{% widthratio row.n max_n 100 %}%"></div>
         </div>
@@ -123,19 +214,6 @@
       </div>
       {% endfor %}
       {% endwith %}
-    </div>
-    {% endif %}
-
-    {% if favs %}
-    <div class="section">
-      <div class="section-title">Favourites ({{ favs|length }})</div>
-      <div class="favs-grid">
-        {% for img in favs %}
-        <div class="fav-thumb">
-          <img src="{{ MEDIA_URL }}{{ img.file_path }}" alt="" loading="lazy">
-        </div>
-        {% endfor %}
-      </div>
     </div>
     {% endif %}
 

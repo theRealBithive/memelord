@@ -1,4 +1,4 @@
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 
 from django.conf import settings
@@ -244,18 +244,28 @@ def stats(request):
     except FileNotFoundError:
         pass
 
-    source_breakdown = (
-        Image.objects.filter(location=Image.CORPUS, file_deleted=False)
-        .values("source_label")
-        .annotate(n=Count("content_hash"))
-        .order_by("-n")
-    )
-    favs_qs = Image.objects.filter(
-        location=Image.CORPUS, is_favourite=True, file_deleted=False
-    )
+    gallery_qs = Image.objects.filter(location=Image.CORPUS, file_deleted=False, score__isnull=False)
     if not show_nsfw:
-        favs_qs = favs_qs.filter(is_nsfw=False)
-    favs = favs_qs.order_by("-rated_at")[:24]
+        gallery_qs = gallery_qs.filter(is_nsfw=False)
+
+    gallery_total = gallery_qs.count()
+
+    score_dist = list(
+        gallery_qs.values("score").annotate(n=Count("content_hash")).order_by("-score")
+    )
+    score_dist_max = max((row["n"] for row in score_dist), default=1)
+
+    source_breakdown = list(
+        gallery_qs.values("source_label").annotate(n=Count("content_hash")).order_by("-n")
+    )
+
+    seven_days_ago = timezone.now() - timedelta(days=7)
+    scraped_7d = Image.objects.filter(downloaded_at__gte=seven_days_ago, file_deleted=False).count()
+    rated_7d = Image.objects.filter(
+        rated_at__gte=seven_days_ago,
+        location__in=[Image.CORPUS, Image.VOID],
+        file_deleted=False,
+    ).count()
 
     return render(
         request,
@@ -265,8 +275,12 @@ def stats(request):
             **_training_ctx(request),
             "show_nsfw": show_nsfw,
             "last_trained": last_trained,
+            "gallery_total": gallery_total,
+            "score_dist": score_dist,
+            "score_dist_max": score_dist_max,
             "source_breakdown": source_breakdown,
-            "favs": favs,
+            "scraped_7d": scraped_7d,
+            "rated_7d": rated_7d,
         },
     )
 
@@ -343,16 +357,14 @@ def train_status(request, task_id: str):
     request.session.pop("training_started_at", None)
 
     result = task.result or {}
-    show_nsfw = request.session.get("show_nsfw", False)
-    counts = _counts(show_nsfw)
     return render(
         request,
         "ratings/_train_result.html",
         {
             "ok": result.get("ok", False),
             "error": result.get("error", "Unknown error."),
-            "corpus_n": counts["corpus_count"],
-            "void_n": counts["void_count"],
+            "corpus_n": Image.objects.filter(location=Image.CORPUS, file_deleted=False).count(),
+            "void_n": Image.objects.filter(location=Image.VOID, file_deleted=False).count(),
         },
     )
 
