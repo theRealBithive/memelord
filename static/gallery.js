@@ -64,7 +64,7 @@
     const item  = items[idx];
     const score = item.dataset.score;
     const fav   = item.dataset.fav === "1";
-    lbImg.src           = item.querySelector("img").src;
+    lbImg.src           = item.dataset.src;
     lbReview.href       = item.href;
     lbScore.textContent = score || "";
     lbScore.className   = score ? `lb-score lb-score--${score}` : "lb-score";
