@@ -182,8 +182,12 @@ def rate_nsfw_inbox(request):
 
 
 @login_required
-def rate_nsfw_corpus(request):
-    return _mode_view(request, "nsfw_corpus")
+def rate_nsfw_corpus(request, content_hash: str | None = None):
+    show_nsfw = request.session.get("show_nsfw", False)
+    ctx = _review_nsfw_ctx(content_hash, show_nsfw, request)
+    if request.htmx:
+        return render(request, "ratings/_review_htmx.html", ctx)
+    return render(request, "ratings/review.html", ctx)
 
 
 @login_required
@@ -568,6 +572,12 @@ def _review_qs(show_nsfw: bool = False):
     return qs.order_by("downloaded_at")
 
 
+def _review_nsfw_qs():
+    return Image.objects.filter(
+        location=Image.CORPUS, is_nsfw=True, score__isnull=True, file_deleted=False
+    ).order_by("downloaded_at")
+
+
 def _review_ctx(
     content_hash: str | None, show_nsfw: bool = False, request=None
 ) -> dict:
@@ -577,7 +587,32 @@ def _review_ctx(
         "corpus",
         show_nsfw,
         request,
-        extra={"scores": range(1, 7)},
+        extra={
+            "scores": range(1, 7),
+            "score_url": "score_corpus",
+            "fav_url": "toggle_fav_corpus",
+            "trash_url": "trash_corpus",
+            "image_url": "review_corpus_image",
+        },
+    )
+
+
+def _review_nsfw_ctx(
+    content_hash: str | None, show_nsfw: bool = False, request=None
+) -> dict:
+    return _browse_ctx(
+        _review_nsfw_qs(),
+        content_hash,
+        "nsfw_corpus",
+        show_nsfw,
+        request,
+        extra={
+            "scores": range(1, 7),
+            "score_url": "score_nsfw_corpus",
+            "fav_url": "toggle_fav_nsfw_corpus",
+            "trash_url": "trash_nsfw_corpus",
+            "image_url": "review_nsfw_corpus_image",
+        },
     )
 
 
@@ -646,6 +681,63 @@ def toggle_fav_corpus(request, content_hash: str):
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
+# ── NSFW corpus review (same 1–6 + fav flow as normal corpus) ────────────────
+
+
+@login_required
+@require_POST
+def score_nsfw_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+
+    all_hashes = list(_review_nsfw_qs().values_list("content_hash", flat=True))
+    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
+    next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
+
+    try:
+        score_val = int(request.POST.get("score", 0))
+        if 1 <= score_val <= 6:
+            image.score = score_val
+            image.rated_at = timezone.now()
+            image.save(update_fields=["score", "rated_at"])
+    except (ValueError, TypeError):
+        pass
+
+    ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)
+
+
+@login_required
+@require_POST
+def trash_nsfw_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+
+    next_hash = _neighbor_hash(
+        list(_review_nsfw_qs().values_list("content_hash", flat=True)),
+        content_hash,
+    )
+
+    _move_image(image, Image.VOID)
+    image.is_favourite = False
+    image.rated_at = timezone.now()
+    image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+
+    ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)
+
+
+@login_required
+@require_POST
+def toggle_fav_nsfw_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image.is_favourite = not image.is_favourite
+    image.save(update_fields=["is_favourite"])
+    ctx = _review_nsfw_ctx(content_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)
+
+
 @login_required
 @require_POST
 def toggle_nsfw(request, content_hash: str):
@@ -655,17 +747,30 @@ def toggle_nsfw(request, content_hash: str):
     location = image.location
 
     if location == Image.CORPUS:
-        # Capture neighbour BEFORE saving so ordering is stable.
-        neighbor = _neighbor_hash(
-            list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
-            content_hash,
-        )
-        image.is_nsfw = not image.is_nsfw
-        image.save(update_fields=["is_nsfw"])
-        if not show_nsfw and image.is_nsfw:
-            ctx = _review_ctx(neighbor, show_nsfw, request)
+        mode = request.POST.get("mode", "corpus")
+        if mode == "nsfw_corpus":
+            # In the NSFW corpus queue toggling safe removes the image — always navigate.
+            neighbor = _neighbor_hash(
+                list(_review_nsfw_qs().values_list("content_hash", flat=True)),
+                content_hash,
+            )
+            image.is_nsfw = not image.is_nsfw
+            image.save(update_fields=["is_nsfw"])
+            ctx = _review_nsfw_ctx(
+                content_hash if image.is_nsfw else neighbor, show_nsfw, request
+            )
         else:
-            ctx = _review_ctx(content_hash, show_nsfw, request)
+            # Capture neighbour BEFORE saving so ordering is stable.
+            neighbor = _neighbor_hash(
+                list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
+                content_hash,
+            )
+            image.is_nsfw = not image.is_nsfw
+            image.save(update_fields=["is_nsfw"])
+            if not show_nsfw and image.is_nsfw:
+                ctx = _review_ctx(neighbor, show_nsfw, request)
+            else:
+                ctx = _review_ctx(content_hash, show_nsfw, request)
         return render(request, "ratings/_review_htmx.html", ctx)
 
     if location == Image.VOID:
