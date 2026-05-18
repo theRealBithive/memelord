@@ -4,7 +4,7 @@ from pathlib import Path
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
@@ -805,7 +805,14 @@ def _void_review_qs(show_nsfw: bool = False):
     qs = Image.objects.filter(location=Image.VOID, file_deleted=False)
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
-    return qs.order_by("-rated_at")
+    # Unseen images (void_seen_at IS NULL) sort first in SQLite ASC; then newest-trashed.
+    return qs.order_by("void_seen_at", "-rated_at")
+
+
+def _mark_void_seen(image: Image | None) -> None:
+    if image is not None and image.void_seen_at is None:
+        image.void_seen_at = timezone.now()
+        image.save(update_fields=["void_seen_at"])
 
 
 def _void_review_ctx(
@@ -873,6 +880,7 @@ def gallery(request):
 def review_void(request, content_hash: str | None = None):
     show_nsfw = request.session.get("show_nsfw", False)
     ctx = _void_review_ctx(content_hash, show_nsfw, request)
+    _mark_void_seen(ctx.get("image"))
     if request.htmx:
         return render(request, "ratings/_void_htmx.html", ctx)
     return render(request, "ratings/void_review.html", ctx)
@@ -908,4 +916,36 @@ def void_review_action(request, content_hash: str):
     else:
         ctx = _void_review_ctx(content_hash, show_nsfw, request)
 
+    _mark_void_seen(ctx.get("image"))
     return render(request, "ratings/_void_htmx.html", ctx)
+
+
+@login_required
+@require_POST
+def gallery_action(request, content_hash: str):
+    action = request.POST.get("action", "")
+    image = get_object_or_404(Image, content_hash=content_hash)
+    now = timezone.now()
+
+    if action == "trash":
+        if image.location == Image.CORPUS:
+            _move_image(image, Image.VOID)
+            image.is_favourite = False
+            image.rated_at = now
+            image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+        return JsonResponse({"deleted": True})
+
+    if action == "fav":
+        image.is_favourite = not image.is_favourite
+        image.save(update_fields=["is_favourite"])
+    elif action == "score":
+        try:
+            score_val = int(request.POST.get("score", 0))
+            if 1 <= score_val <= 6:
+                image.score = score_val
+                image.rated_at = now
+                image.save(update_fields=["score", "rated_at"])
+        except (ValueError, TypeError):
+            pass
+
+    return JsonResponse({"score": image.score, "fav": image.is_favourite})

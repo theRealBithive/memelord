@@ -24,6 +24,7 @@ urlpatterns = [
     ),
     path("nsfw-toggle/", views.nsfw_toggle, name="nsfw_toggle"),
     path("gallery/", views.gallery, name="gallery"),
+    path("gallery/<str:content_hash>/action/", views.gallery_action, name="gallery_action"),
     # Void review — must be before the corpus wildcard routes.
     path("review/void/", views.review_void, name="review_void"),
     path("review/void/<str:content_hash>/", views.review_void, name="review_void_image"),
