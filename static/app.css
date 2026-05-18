@@ -1061,7 +1061,7 @@ kbd {
 
 .lb-img {
   max-width: 92vw;
-  max-height: calc(92dvh - 2.5rem);
+  max-height: calc(92dvh - 5.5rem);
   object-fit: contain;
   display: block;
   cursor: zoom-out;
@@ -1107,3 +1107,62 @@ kbd {
 .lb-review:hover {
   color: var(--text);
 }
+
+.lb-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.25rem 0;
+  width: 100%;
+}
+
+.lb-action-score {
+  flex: 1;
+  padding: 0.3rem 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lb-action-score--1 { --lasc: #71717a; }
+.lb-action-score--2 { --lasc: #60a5fa; }
+.lb-action-score--3 { --lasc: #4ade80; }
+.lb-action-score--4 { --lasc: #facc15; }
+.lb-action-score--5 { --lasc: #fb923c; }
+.lb-action-score--6 { --lasc: #f59e0b; }
+
+.lb-action-score:hover {
+  background: color-mix(in srgb, var(--lasc) 15%, var(--surface));
+  color: var(--lasc);
+  border-color: var(--lasc);
+}
+
+.lb-action-score--active {
+  background: color-mix(in srgb, var(--lasc) 22%, var(--surface));
+  color: var(--lasc);
+  border-color: var(--lasc);
+}
+
+.lb-action-fav,
+.lb-action-trash {
+  padding: 0.3rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 100ms, color 100ms, border-color 100ms;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lb-action-fav:hover { color: #facc15; border-color: #facc15; }
+.lb-action-fav--on   { color: #facc15; border-color: #facc15; }
+
+.lb-action-trash:hover { color: var(--red); border-color: var(--red); }
