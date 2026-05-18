@@ -51,7 +51,8 @@
          class="gallery-item"
          data-score="{{ image.score }}"
          data-fav="{% if image.is_favourite %}1{% else %}0{% endif %}"
-         data-action-url="{% url 'gallery_action' image.content_hash %}">
+         data-action-url="{% url 'gallery_action' image.content_hash %}"
+         data-src="{% url 'serve_media' image.file_path %}">
         <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
         <div class="gallery-item-overlay">
           <span class="gallery-item-score gallery-item-score--{{ image.score }}">{{ image.score }}</span>
