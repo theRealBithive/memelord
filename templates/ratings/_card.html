@@ -43,6 +43,13 @@
             hx-vals='{"mode": "inbox"}'>
       <span class="btn-icon">✓</span><span class="btn-label">GOOD</span>
     </button>
+    <button class="btn btn-purge" data-action="purge"
+            hx-post="{% url 'submit_rating' image.content_hash 'purge' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "inbox"}'
+            hx-confirm="Permanently delete this image? It will never be downloaded again.">
+      <span class="btn-icon">⊘</span><span class="btn-label">PURGE</span>
+    </button>
 
   {% elif mode == "corpus" %}
     <button class="btn btn-bad" data-action="bad"
@@ -108,6 +115,13 @@
             hx-target="#card" hx-swap="outerHTML"
             hx-vals='{"mode": "nsfw_inbox"}'>
       <span class="btn-icon">✅</span><span class="btn-label">SAFE</span>
+    </button>
+    <button class="btn btn-purge" data-action="purge"
+            hx-post="{% url 'submit_rating' image.content_hash 'purge' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "nsfw_inbox"}'
+            hx-confirm="Permanently delete this image? It will never be downloaded again.">
+      <span class="btn-icon">⊘</span><span class="btn-label">PURGE</span>
     </button>
 
   {% elif mode == "nsfw_corpus" %}

@@ -49,6 +49,15 @@
       <span class="trash-icon">🗑</span>
       <span class="trash-label">TRASH</span>
     </button>
+    <button class="purge-btn"
+            data-action="purge"
+            hx-post="{% url purge_url image.content_hash %}"
+            hx-target="#review-card"
+            hx-swap="outerHTML"
+            hx-confirm="Permanently delete this image? It will never be downloaded again.">
+      <span class="purge-icon">⊘</span>
+      <span class="purge-label">PURGE</span>
+    </button>
   </div>
 
   <div class="review-nav">

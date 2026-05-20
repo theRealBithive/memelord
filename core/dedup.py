@@ -36,10 +36,11 @@ class DedupIndex:
         scraper doesn't hit the DB once per candidate. Excludes file_deleted
         rows so images that were cleaned up can be re-downloaded freely.
         """
+        from django.db.models import Q
         from ratings.models import Image
 
         rows = list(
-            Image.objects.filter(file_deleted=False).values_list(
+            Image.objects.filter(Q(file_deleted=False) | Q(is_purged=True)).values_list(
                 "content_hash", "phash", "embedding"
             )
         )

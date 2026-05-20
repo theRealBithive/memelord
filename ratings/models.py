@@ -18,6 +18,7 @@ class Image(models.Model):
     is_nsfw = models.BooleanField(default=False)
     score = models.IntegerField(null=True, blank=True)
     file_deleted = models.BooleanField(default=False)
+    is_purged = models.BooleanField(default=False)
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
     embedding = models.BinaryField(null=True, blank=True)
     void_seen_at = models.DateTimeField(null=True, blank=True)

@@ -376,6 +376,10 @@ kbd {
   --accent: var(--gray);
 }
 
+.btn-purge {
+  --accent: var(--red);
+}
+
 .btn-nsfw {
   --accent: var(--purple);
 }
@@ -440,6 +444,11 @@ kbd {
   background: color-mix(in srgb, var(--gray) 20%, var(--surface));
 }
 
+.btn-purge:hover,
+.btn-purge:active {
+  background: color-mix(in srgb, var(--red) 15%, var(--surface));
+}
+
 .btn-nsfw:hover,
 .btn-nsfw:active {
   background: color-mix(in srgb, var(--purple) 15%, var(--surface));
@@ -459,6 +468,10 @@ kbd {
 
 .btn-skip .btn-icon {
   color: var(--gray);
+}
+
+.btn-purge .btn-icon {
+  color: var(--red);
 }
 
 .btn-nsfw .btn-icon {
@@ -715,6 +728,44 @@ kbd {
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--muted);
+}
+
+.purge-btn {
+  flex: 1.5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--surface);
+  transition: background 100ms, transform 80ms;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.purge-btn:hover {
+  background: color-mix(in srgb, var(--red) 20%, var(--surface));
+}
+
+.purge-btn:active {
+  transform: scale(0.94);
+}
+
+.purge-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+  color: var(--red);
+}
+
+.purge-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--red);
+  opacity: 0.7;
 }
 
 .review-fav-btn {

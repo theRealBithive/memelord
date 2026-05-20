@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from ratings.models import Image, LogEntry, ScrapeSchedule, Source
-from ratings.utils import move_image as _move_image_util
+from ratings.utils import move_image as _move_image_util, purge_image as _purge_image
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 
@@ -212,6 +212,8 @@ def submit_rating(request, content_hash: str, action: str):
         _apply_rating(image, Image.CORPUS, action == "fav", now)
     elif action == "bad":
         _apply_rating(image, Image.VOID, False, now)
+    elif action == "purge":
+        _purge_image(image)
     elif action == "unfav":
         image.is_favourite = False
         image.save(update_fields=["is_favourite"])
@@ -592,6 +594,7 @@ def _review_ctx(
             "score_url": "score_corpus",
             "fav_url": "toggle_fav_corpus",
             "trash_url": "trash_corpus",
+            "purge_url": "purge_corpus",
             "image_url": "review_corpus_image",
         },
     )
@@ -611,6 +614,7 @@ def _review_nsfw_ctx(
             "score_url": "score_nsfw_corpus",
             "fav_url": "toggle_fav_nsfw_corpus",
             "trash_url": "trash_nsfw_corpus",
+            "purge_url": "purge_nsfw_corpus",
             "image_url": "review_nsfw_corpus_image",
         },
     )
@@ -681,6 +685,22 @@ def toggle_fav_corpus(request, content_hash: str):
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
+@login_required
+@require_POST
+def purge_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+
+    next_hash = _neighbor_hash(
+        list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
+        content_hash,
+    )
+
+    _purge_image(image)
+    ctx = _review_ctx(next_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)
+
+
 # ── NSFW corpus review (same 1–6 + fav flow as normal corpus) ────────────────
 
 
@@ -735,6 +755,22 @@ def toggle_fav_nsfw_corpus(request, content_hash: str):
     image.is_favourite = not image.is_favourite
     image.save(update_fields=["is_favourite"])
     ctx = _review_nsfw_ctx(content_hash, show_nsfw, request)
+    return render(request, "ratings/_review_htmx.html", ctx)
+
+
+@login_required
+@require_POST
+def purge_nsfw_corpus(request, content_hash: str):
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+
+    next_hash = _neighbor_hash(
+        list(_review_nsfw_qs().values_list("content_hash", flat=True)),
+        content_hash,
+    )
+
+    _purge_image(image)
+    ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -899,7 +935,10 @@ def void_review_action(request, content_hash: str):
         content_hash,
     )
 
-    if action in ("rescue", "rescue_fav"):
+    if action == "purge":
+        _purge_image(image)
+        ctx = _void_review_ctx(next_hash, show_nsfw, request)
+    elif action in ("rescue", "rescue_fav"):
         _move_image(image, Image.CORPUS)
         image.is_favourite = action == "rescue_fav"
         image.rated_at = timezone.now()
