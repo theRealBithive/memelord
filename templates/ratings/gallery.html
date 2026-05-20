@@ -21,37 +21,48 @@
       <div class="gallery-control-group">
         <span class="gallery-label">min score</span>
         {% for s in scores %}
-        <a href="?min_score={{ s }}&sort={{ sort }}{% if fav_only %}&fav=1{% endif %}"
+        <a href="?min_score={{ s }}&sort={{ sort }}{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-score-btn gallery-score-btn--{{ s }}{% if min_score == s %} gallery-score-active{% endif %}">{{ s }}</a>
         {% endfor %}
       </div>
       <div class="gallery-control-group">
         <span class="gallery-label">sort</span>
-        <a href="?min_score={{ min_score }}&sort=newest{% if fav_only %}&fav=1{% endif %}"
+        <a href="?min_score={{ min_score }}&sort=newest{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-sort-btn{% if sort == 'newest' %} gallery-sort-active{% endif %}">newest</a>
-        <a href="?min_score={{ min_score }}&sort=oldest{% if fav_only %}&fav=1{% endif %}"
+        <a href="?min_score={{ min_score }}&sort=oldest{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-sort-btn{% if sort == 'oldest' %} gallery-sort-active{% endif %}">oldest</a>
-        <a href="?min_score={{ min_score }}&sort=random{% if fav_only %}&fav=1{% endif %}"
+        <a href="?min_score={{ min_score }}&sort=random{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-sort-btn{% if sort == 'random' %} gallery-sort-active{% endif %}">random</a>
       </div>
       <div class="gallery-control-group">
         {% if fav_only %}
-        <a href="?min_score={{ min_score }}&sort={{ sort }}" class="gallery-sort-btn gallery-sort-active">★ fav only</a>
+        <a href="?min_score={{ min_score }}&sort={{ sort }}{% if active_tag %}&tag={{ active_tag }}{% endif %}" class="gallery-sort-btn gallery-sort-active">★ fav only</a>
         {% else %}
-        <a href="?min_score={{ min_score }}&sort={{ sort }}&fav=1" class="gallery-sort-btn">★ fav only</a>
+        <a href="?min_score={{ min_score }}&sort={{ sort }}&fav=1{% if active_tag %}&tag={{ active_tag }}{% endif %}" class="gallery-sort-btn">★ fav only</a>
         {% endif %}
       </div>
+      {% if all_tags %}
+      <div class="gallery-control-group gallery-tags-filter">
+        <span class="gallery-label">tags</span>
+        {% for tag in all_tags %}
+        <a href="?min_score={{ min_score }}&sort={{ sort }}{% if fav_only %}&fav=1{% endif %}{% if active_tag != tag %}&tag={{ tag }}{% endif %}"
+           class="tag-pill tag-pill--link{% if active_tag == tag %} tag-pill--active{% endif %}">#{{ tag }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
       <span class="gallery-count">{{ total }} image{{ total|pluralize }}</span>
     </div>
 
     {% if images %}
-    <div class="gallery-grid">
+    <div class="gallery-grid" data-ac-url="{% url 'tag_autocomplete' %}">
       {% for image in images %}
       <a href="{% url 'review_corpus_image' image.content_hash %}"
          class="gallery-item"
          data-score="{{ image.score }}"
          data-fav="{% if image.is_favourite %}1{% else %}0{% endif %}"
          data-action-url="{% url 'gallery_action' image.content_hash %}"
+         data-tag-url="{% url 'update_image_tags' image.content_hash %}"
+         data-tags="{% for t in image.tags.all %}{{ t.name }}{% if not forloop.last %},{% endif %}{% endfor %}"
          data-src="{% url 'serve_media' image.file_path %}">
         <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
         <div class="gallery-item-overlay">

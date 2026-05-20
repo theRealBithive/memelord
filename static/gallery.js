@@ -14,6 +14,7 @@
         <span class="lb-pos"></span>
         <a class="lb-review" href="">review →</a>
       </div>
+      <div class="lb-tags"></div>
       <div class="lb-actions">
         <button class="lb-action-score lb-action-score--1" data-score="1">1</button>
         <button class="lb-action-score lb-action-score--2" data-score="2">2</button>
@@ -35,9 +36,11 @@
   const lbReview       = lb.querySelector(".lb-review");
   const lbPrev         = lb.querySelector(".lb-prev");
   const lbNext         = lb.querySelector(".lb-next");
+  const lbTags         = lb.querySelector(".lb-tags");
   const lbActionFav    = lb.querySelector(".lb-action-fav");
   const lbActionTrash  = lb.querySelector(".lb-action-trash");
   const lbActionScores = Array.from(lb.querySelectorAll(".lb-action-score"));
+  const acUrl          = document.querySelector(".gallery-grid")?.dataset.acUrl || "";
 
   const items = Array.from(document.querySelectorAll(".gallery-item"));
   let current = 0;
@@ -59,6 +62,128 @@
     }).then((r) => r.json());
   }
 
+  // ── Tag management ────────────────────────────────────────────────────────
+
+  function getLbTags() {
+    return Array.from(lbTags.querySelectorAll(".tag-pill[data-tag]"))
+      .map((p) => p.dataset.tag);
+  }
+
+  function saveLbTags(tags) {
+    const item = items[current];
+    return postAction(item.dataset.tagUrl, { tags: tags.join(",") }).then((data) => {
+      item.dataset.tags = data.tags.join(",");
+      renderLbTags(data.tags);
+    });
+  }
+
+  function renderLbTags(tagList) {
+    lbTags.innerHTML = "";
+    tagList.forEach((tag) => {
+      const pill = document.createElement("span");
+      pill.className = "tag-pill";
+      pill.dataset.tag = tag;
+      const label = document.createTextNode("#" + tag + " ");
+      const btn = document.createElement("button");
+      btn.className = "tag-remove";
+      btn.setAttribute("aria-label", "remove tag");
+      btn.textContent = "×";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        saveLbTags(getLbTags().filter((t) => t !== tag));
+      });
+      pill.appendChild(label);
+      pill.appendChild(btn);
+      lbTags.appendChild(pill);
+    });
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "tag-add-btn";
+    addBtn.textContent = "+ tag";
+    addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      addBtn.replaceWith(buildTagInput());
+    });
+    lbTags.appendChild(addBtn);
+  }
+
+  function buildTagInput() {
+    const wrap = document.createElement("span");
+    wrap.className = "tag-input-wrap";
+
+    const input = document.createElement("input");
+    input.className = "tag-input";
+    input.type = "text";
+    input.placeholder = "tag name";
+    input.autocomplete = "off";
+
+    const dropdown = document.createElement("div");
+    dropdown.className = "tag-autocomplete";
+    dropdown.hidden = true;
+
+    let acTimer;
+
+    function commitInput() {
+      const name = input.value.trim().toLowerCase();
+      if (!name) {
+        wrap.remove();
+        renderLbTags(getLbTags());
+        return;
+      }
+      const existing = getLbTags();
+      if (!existing.includes(name)) {
+        saveLbTags([...existing, name]);
+      } else {
+        wrap.remove();
+        renderLbTags(existing);
+      }
+    }
+
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commitInput(); }
+      if (e.key === "Escape") { e.preventDefault(); wrap.remove(); renderLbTags(getLbTags()); }
+    });
+
+    input.addEventListener("input", () => {
+      const q = input.value.trim();
+      clearTimeout(acTimer);
+      if (!q || !acUrl) { dropdown.hidden = true; return; }
+      acTimer = setTimeout(() => {
+        fetch(`${acUrl}?q=${encodeURIComponent(q)}`)
+          .then((r) => r.json())
+          .then(({ tags }) => {
+            dropdown.innerHTML = "";
+            const filtered = tags.filter((t) => !getLbTags().includes(t));
+            if (!filtered.length) { dropdown.hidden = true; return; }
+            filtered.forEach((tag) => {
+              const item = document.createElement("div");
+              item.className = "tag-autocomplete-item";
+              item.textContent = "#" + tag;
+              item.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                const existing = getLbTags();
+                if (!existing.includes(tag)) saveLbTags([...existing, tag]);
+              });
+              dropdown.appendChild(item);
+            });
+            dropdown.hidden = false;
+          });
+      }, 150);
+    });
+
+    input.addEventListener("blur", () => {
+      setTimeout(() => { dropdown.hidden = true; }, 200);
+    });
+
+    wrap.appendChild(input);
+    wrap.appendChild(dropdown);
+    setTimeout(() => input.focus(), 10);
+    return wrap;
+  }
+
+  // ── Core lightbox ─────────────────────────────────────────────────────────
+
   function show(idx) {
     current = idx;
     const item  = items[idx];
@@ -76,6 +201,9 @@
       btn.classList.toggle("lb-action-score--active", btn.dataset.score === score);
     });
     lbActionFav.classList.toggle("lb-action-fav--on", fav);
+
+    const tagCsv = item.dataset.tags || "";
+    renderLbTags(tagCsv ? tagCsv.split(",").filter(Boolean) : []);
   }
 
   function open(idx) {

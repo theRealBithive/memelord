@@ -51,7 +51,7 @@ class SubmitRatingHtmxTests(TestCase):
         self.assertIn('id="card"', content)
         self.assertIn('id="main-nav"', content)
         self.assertIn('hx-swap-oob="true"', content)
-        self.assertIn('id="badge-inbox"', content)
+        self.assertIn('id="badge-queue"', content)
 
     def test_submit_rating_htmx_uses_combined_template(self) -> None:
         img = self._inbox_image()

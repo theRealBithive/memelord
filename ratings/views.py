@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings.models import Image, LogEntry, ScrapeSchedule, Source
+from ratings.models import Image, LogEntry, ScrapeSchedule, Source, Tag
 from ratings.utils import move_image as _move_image_util, purge_image as _purge_image
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
@@ -916,6 +916,7 @@ def gallery(request):
         sort = "newest"
 
     fav_only = request.GET.get("fav") == "1"
+    active_tag = request.GET.get("tag", "").strip().lower()
 
     qs = Image.objects.filter(
         location=Image.CORPUS,
@@ -927,6 +928,8 @@ def gallery(request):
         qs = qs.filter(is_nsfw=False)
     if fav_only:
         qs = qs.filter(is_favourite=True)
+    if active_tag:
+        qs = qs.filter(tags__name=active_tag)
 
     if sort == "random":
         qs = qs.order_by("?")
@@ -935,7 +938,8 @@ def gallery(request):
     else:
         qs = qs.order_by("-downloaded_at")
 
-    images = list(qs[:500])
+    images = list(qs.prefetch_related("tags")[:500])
+    all_tags = list(Tag.objects.values_list("name", flat=True))
 
     return render(
         request,
@@ -951,6 +955,8 @@ def gallery(request):
             "scores": range(1, 7),
             "show_nsfw": show_nsfw,
             "mode": "gallery",
+            "all_tags": all_tags,
+            "active_tag": active_tag,
         },
     )
 
@@ -1000,6 +1006,26 @@ def void_review_action(request, content_hash: str):
 
     _mark_void_seen(ctx.get("image"))
     return render(request, "ratings/_void_htmx.html", ctx)
+
+
+@login_required
+def tag_autocomplete(request):
+    q = request.GET.get("q", "").strip().lower()
+    qs = Tag.objects.all()
+    if q:
+        qs = qs.filter(name__startswith=q)
+    return JsonResponse({"tags": list(qs.values_list("name", flat=True)[:20])})
+
+
+@login_required
+@require_POST
+def update_image_tags(request, content_hash: str):
+    image = get_object_or_404(Image, content_hash=content_hash)
+    tag_str = request.POST.get("tags", "")
+    tag_names = [t.strip().lower() for t in tag_str.split(",") if t.strip()]
+    tags = [Tag.objects.get_or_create(name=name)[0] for name in tag_names]
+    image.tags.set(tags)
+    return JsonResponse({"tags": sorted(image.tags.values_list("name", flat=True))})
 
 
 @login_required

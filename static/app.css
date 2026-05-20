@@ -1217,3 +1217,121 @@ kbd {
 .lb-action-fav--on   { color: #facc15; border-color: #facc15; }
 
 .lb-action-trash:hover { color: var(--red); border-color: var(--red); }
+
+/* ── Tags ── */
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: #1e2a1e;
+  color: #86efac;
+  font-size: 0.72rem;
+  border: 1px solid #166534;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tag-pill--active {
+  background: #166534;
+  color: #bbf7d0;
+}
+
+.tag-pill--link {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.tag-pill--link:hover {
+  background: #166534;
+  color: #bbf7d0;
+}
+
+.tag-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.tag-remove:hover { opacity: 1; }
+
+.tag-add-btn {
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px dashed #444;
+  color: var(--muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tag-add-btn:hover { border-color: #86efac; color: #86efac; }
+
+.tag-input-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.tag-input {
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: #0f1a0f;
+  border: 1px solid #166534;
+  color: #86efac;
+  font-size: 0.72rem;
+  width: 120px;
+  outline: none;
+}
+
+.tag-autocomplete {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  z-index: 200;
+  min-width: 140px;
+  overflow: hidden;
+}
+
+.tag-autocomplete-item {
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  color: #86efac;
+  cursor: pointer;
+}
+
+.tag-autocomplete-item:hover { background: #222; }
+
+/* ── Tag strip in lb-bar ── */
+.lb-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.25rem 0;
+  width: 100%;
+}
+
+/* ── Tag strip in review / rate cards ── */
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.75rem;
+}
+
+/* ── Tag filter row in gallery controls ── */
+.gallery-tags-filter {
+  flex-wrap: wrap;
+  row-gap: 0.3rem;
+}
