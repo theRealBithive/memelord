@@ -1201,6 +1201,7 @@ kbd {
 }
 
 .lb-action-fav,
+.lb-action-nsfw,
 .lb-action-trash {
   padding: 0.3rem 0.5rem;
   background: var(--surface);
@@ -1215,6 +1216,9 @@ kbd {
 
 .lb-action-fav:hover { color: #facc15; border-color: #facc15; }
 .lb-action-fav--on   { color: #facc15; border-color: #facc15; }
+
+.lb-action-nsfw:hover  { color: #f472b6; border-color: #f472b6; }
+.lb-action-nsfw--on    { color: #f472b6; border-color: #f472b6; }
 
 .lb-action-trash:hover { color: var(--red); border-color: var(--red); }
 
