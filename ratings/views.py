@@ -1261,5 +1261,8 @@ def gallery_action(request, content_hash: str):
                 image.save(update_fields=["score", "rated_at"])
         except (ValueError, TypeError):
             pass
+    elif action == "nsfw":
+        image.is_nsfw = not image.is_nsfw
+        image.save(update_fields=["is_nsfw"])
 
-    return JsonResponse({"score": image.score, "fav": image.is_favourite})
+    return JsonResponse({"score": image.score, "fav": image.is_favourite, "nsfw": image.is_nsfw})

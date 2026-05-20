@@ -23,6 +23,7 @@
         <button class="lb-action-score lb-action-score--5" data-score="5">5</button>
         <button class="lb-action-score lb-action-score--6" data-score="6">6</button>
         <button class="lb-action-fav" aria-label="Toggle favourite">★</button>
+        <button class="lb-action-nsfw" aria-label="Toggle NSFW">🔞</button>
         <button class="lb-action-trash" aria-label="Trash">🗑</button>
       </div>
     </div>
@@ -38,6 +39,7 @@
   const lbNext         = lb.querySelector(".lb-next");
   const lbTags         = lb.querySelector(".lb-tags");
   const lbActionFav    = lb.querySelector(".lb-action-fav");
+  const lbActionNsfw   = lb.querySelector(".lb-action-nsfw");
   const lbActionTrash  = lb.querySelector(".lb-action-trash");
   const lbActionScores = Array.from(lb.querySelectorAll(".lb-action-score"));
   const acUrl          = document.querySelector(".gallery-grid")?.dataset.acUrl || "";
@@ -201,6 +203,8 @@
       btn.classList.toggle("lb-action-score--active", btn.dataset.score === score);
     });
     lbActionFav.classList.toggle("lb-action-fav--on", fav);
+    const nsfw = item.dataset.nsfw === "1";
+    lbActionNsfw.classList.toggle("lb-action-nsfw--on", nsfw);
 
     const tagCsv = item.dataset.tags || "";
     renderLbTags(tagCsv ? tagCsv.split(",").filter(Boolean) : []);
@@ -264,6 +268,15 @@
         favEl.remove();
       }
       show(current);
+    });
+  });
+
+  lbActionNsfw.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const item = items[current];
+    postAction(item.dataset.actionUrl, { action: "nsfw" }).then((data) => {
+      item.dataset.nsfw = data.nsfw ? "1" : "0";
+      lbActionNsfw.classList.toggle("lb-action-nsfw--on", data.nsfw);
     });
   });
 
