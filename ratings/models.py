@@ -81,18 +81,21 @@ class Source(models.Model):
     IMGUR = "imgur"
     TUMBLR = "tumblr"
     PIXELFED = "pixelfed"
+    MASTODON = "mastodon"
     TYPE_CHOICES = [
         (FOURCHAN, "4chan"),
         (IMGUR, "Imgur"),
         (TUMBLR, "Tumblr"),
         (PIXELFED, "Pixelfed"),
+        (MASTODON, "Mastodon"),
     ]
 
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
-    name = models.CharField(max_length=255)  # board / topic / blog / instance URL
+    name = models.CharField(max_length=255)  # board / topic / blog / instance URL / account handle
     enabled = models.BooleanField(default=True)
     is_nsfw = models.BooleanField(default=False)
     added_at = models.DateTimeField(auto_now_add=True)
+    cursor = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
         unique_together = [("type", "name")]

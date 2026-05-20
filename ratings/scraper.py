@@ -9,7 +9,7 @@ from loguru import logger
 
 from core import brain, dedup, nsfw
 from ratings.models import Image, Source
-from retina import fourchan, imgur, pixelfed, tumblr
+from retina import fourchan, imgur, mastodon as mastodon_scraper, pixelfed, tumblr
 
 # Maps Source.type → (toml_section, toml_key, result_key) for list-based sources.
 # Pixelfed is kept separate (single URL, not a list).
@@ -50,6 +50,9 @@ def _load_sources(config_path: Path) -> dict:
         result["pixelfed"] = next(
             (s.name for s in db_sources if s.type == Source.PIXELFED), ""
         )
+        result["mastodon_accounts"] = [
+            s.name for s in db_sources if s.type == Source.MASTODON
+        ]
         return result
 
     logger.info("No sources in DB — falling back to config.toml")
@@ -58,6 +61,7 @@ def _load_sources(config_path: Path) -> dict:
         rk: cfg.get(section, {}).get(key, []) for _, section, key, rk in _SOURCE_MAP
     }
     result["pixelfed"] = cfg.get("pixelfed", {}).get("instance_base", "").strip()
+    result["mastodon_accounts"] = cfg.get("mastodon", {}).get("accounts", [])
     return result
 
 
@@ -72,6 +76,10 @@ def import_from_config(config_path: Path) -> int:
     pf = cfg.get("pixelfed", {}).get("instance_base", "").strip()
     if pf and Source.objects.get_or_create(type=Source.PIXELFED, name=pf)[1]:
         created += 1
+    for acct in cfg.get("mastodon", {}).get("accounts", []):
+        acct = acct.strip()
+        if acct and Source.objects.get_or_create(type=Source.MASTODON, name=acct)[1]:
+            created += 1
     return created
 
 
@@ -269,6 +277,7 @@ def run(
     if vision is None:
         vision = VisionConfig()
 
+    cfg = _load_config(config_path)
     sources = _load_sources(config_path)
     inbox_dir = data_dir / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -322,6 +331,24 @@ def run(
         counts["pixelfed"] = _process_downloads(
             downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
         )
+
+    mastodon_token = cfg.get("mastodon", {}).get("access_token", "").strip() or None
+    for account in sources["mastodon_accounts"]:
+        logger.info("Scraping Mastodon: {}", account)
+        source_obj = Source.objects.filter(type=Source.MASTODON, name=account).first()
+        since_id = source_obj.cursor if source_obj else None
+        items, new_cursor = mastodon_scraper.iter_image_items(
+            account, since_id=since_id, access_token=mastodon_token
+        )
+        downloaded = mastodon_scraper.download_images(
+            items, inbox_dir, account, skip_dirs=skip_dirs
+        )
+        counts[f"mastodon/{account}"] = _process_downloads(
+            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
+        )
+        if new_cursor and source_obj:
+            source_obj.cursor = new_cursor
+            source_obj.save(update_fields=["cursor"])
 
     if need_classify:
         classify_inbox(data_dir, vision, encoder=encoder, transform=transform, nsfw_clf=nsfw_clf)
