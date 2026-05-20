@@ -34,6 +34,13 @@
             hx-vals='{"action": "rescue"}'>
       <span class="btn-icon">✓</span><span class="btn-label">RESCUE</span>
     </button>
+    <button class="btn btn-purge" data-action="purge"
+            hx-post="{% url 'void_review_action' image.content_hash %}"
+            hx-target="#void-card" hx-swap="outerHTML"
+            hx-vals='{"action": "purge"}'
+            hx-confirm="Permanently delete this image? It will never be downloaded again.">
+      <span class="btn-icon">⊘</span><span class="btn-label">PURGE</span>
+    </button>
   </div>
 
   <div class="review-nav">

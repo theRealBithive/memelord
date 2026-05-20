@@ -1,6 +1,8 @@
 import shutil
 from pathlib import Path
 
+from django.conf import settings
+
 from ratings.models import Image
 
 
@@ -15,6 +17,15 @@ def _unique_dest(directory: Path, name: str) -> Path:
         if not candidate.exists():
             return candidate
         i += 1
+
+
+def purge_image(image: Image) -> None:
+    abs_path = settings.DATA_DIR / image.file_path
+    if abs_path.exists():
+        abs_path.unlink()
+    image.file_deleted = True
+    image.is_purged = True
+    image.save(update_fields=["file_deleted", "is_purged"])
 
 
 def move_image(image: Image, new_location: str, data_dir: Path) -> None:
