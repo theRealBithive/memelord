@@ -218,7 +218,28 @@ def rate_nsfw_corpus(request, content_hash: str | None = None):
 
 @login_required
 def rate_nsfw_void(request):
-    return _mode_view(request, "nsfw_void")
+    """
+    NSFW trash grid — same layout as the regular void grid but filtered to
+    is_nsfw=True. Reuses the same action endpoints since they operate on any
+    void image regardless of NSFW status.
+    """
+    show_nsfw = request.session.get("show_nsfw", False)
+    images = list(
+        Image.objects.filter(location=Image.VOID, is_nsfw=True, file_deleted=False)
+        .order_by("void_seen_at", "-rated_at")[:500]
+    )
+    return render(
+        request,
+        "ratings/void_grid.html",
+        {
+            **_counts(show_nsfw),
+            **_training_ctx(request),
+            "images": images,
+            "total": len(images),
+            "show_nsfw": show_nsfw,
+            "mode": "nsfw_void",
+        },
+    )
 
 
 @login_required
