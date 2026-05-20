@@ -1081,17 +1081,75 @@ def gallery(request):
 @login_required
 def review_void(request, content_hash: str | None = None):
     """
-    Void review page — mirrors review_corpus but for the void queue.
+    Void grid view — shows all trash images at once for bulk selection and rescue.
 
-    void_seen_at is stamped here so rescued images don't jump back to the front
-    of the void queue if the user changes their mind and trashes them again later.
+    content_hash is ignored (kept for URL compat); the grid always shows the full
+    void queue. Images are ordered unseen-first so recently trashed items appear at
+    the top for quick undo.
     """
     show_nsfw = request.session.get("show_nsfw", False)
-    ctx = _void_review_ctx(content_hash, show_nsfw, request)
-    _mark_void_seen(ctx.get("image"))
-    if request.htmx:
-        return render(request, "ratings/_void_htmx.html", ctx)
-    return render(request, "ratings/void_review.html", ctx)
+    images = list(_void_review_qs(show_nsfw)[:500])
+    return render(
+        request,
+        "ratings/void_grid.html",
+        {
+            **_counts(show_nsfw),
+            **_training_ctx(request),
+            "images": images,
+            "total": len(images),
+            "show_nsfw": show_nsfw,
+            "mode": "void",
+        },
+    )
+
+
+@login_required
+@require_POST
+def void_grid_action(request, content_hash: str):
+    """
+    JSON endpoint for single-image actions from the void grid lightbox.
+
+    Returns {"rescued": True} or {"purged": True} so the JS can remove the
+    item from the DOM without a page reload.
+    """
+    action = request.POST.get("action", "")
+    image = get_object_or_404(Image, content_hash=content_hash, location=Image.VOID, file_deleted=False)
+    if action == "purge":
+        _purge_image(image)
+        return JsonResponse({"purged": True})
+    if action in ("rescue", "rescue_fav"):
+        _move_image(image, Image.CORPUS)
+        image.is_favourite = action == "rescue_fav"
+        image.rated_at = timezone.now()
+        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+        return JsonResponse({"rescued": True})
+    return JsonResponse({"error": "unknown action"}, status=400)
+
+
+@login_required
+@require_POST
+def void_bulk_rescue(request):
+    """
+    Rescue multiple void images to corpus in one request.
+
+    Accepts a list of hashes via repeated 'hashes' POST values. Capped at 500
+    to prevent accidental mass operations. The fav=1 param marks all rescued
+    images as favourites.
+    """
+    hashes = request.POST.getlist("hashes")[:500]
+    fav = request.POST.get("fav") == "1"
+    rescued = 0
+    for h in hashes:
+        try:
+            img = Image.objects.get(content_hash=h, location=Image.VOID, file_deleted=False)
+        except Image.DoesNotExist:
+            continue
+        _move_image(img, Image.CORPUS)
+        img.is_favourite = fav
+        img.rated_at = timezone.now()
+        img.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+        rescued += 1
+    return JsonResponse({"rescued": rescued})
 
 
 @login_required
