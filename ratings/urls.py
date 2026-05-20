@@ -28,10 +28,12 @@ urlpatterns = [
     path("gallery/<str:content_hash>/action/", views.gallery_action, name="gallery_action"),
     path("tags/autocomplete/", views.tag_autocomplete, name="tag_autocomplete"),
     path("tags/<str:content_hash>/", views.update_image_tags, name="update_image_tags"),
-    # Void review — must be before the corpus wildcard routes.
+    # Void grid — must be before the corpus wildcard routes.
     path("review/void/", views.review_void, name="review_void"),
+    path("review/void/bulk/", views.void_bulk_rescue, name="void_bulk_rescue"),
     path("review/void/<str:content_hash>/", views.review_void, name="review_void_image"),
     path("review/void/<str:content_hash>/action/", views.void_review_action, name="void_review_action"),
+    path("review/void/<str:content_hash>/grid-action/", views.void_grid_action, name="void_grid_action"),
     # Corpus review
     path("review/", views.review_corpus, name="review_corpus"),
     path("review/<str:content_hash>/", views.review_corpus, name="review_corpus_image"),

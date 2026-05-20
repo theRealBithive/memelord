@@ -1,0 +1,66 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>memelord — trash</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="{% static 'void_grid.js' %}" defer></script>
+</head>
+<body>
+
+  {% include "ratings/_nav.html" %}
+
+  <div class="gallery-page">
+
+    <div class="gallery-controls">
+      <span class="gallery-count">{{ total }} image{{ total|pluralize }}</span>
+      {% if images %}
+      <button class="gallery-sort-btn" id="void-select-all">select all</button>
+      {% endif %}
+    </div>
+
+    {% if images %}
+    <div class="gallery-grid" id="void-grid" data-bulk-url="{% url 'void_bulk_rescue' %}">
+      {% for image in images %}
+      <div class="gallery-item void-item"
+           tabindex="0"
+           role="button"
+           aria-label="Trash image from {{ image.source_label }}"
+           data-hash="{{ image.content_hash }}"
+           data-action-url="{% url 'void_grid_action' image.content_hash %}"
+           data-src="{% url 'serve_media' image.file_path %}">
+        <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
+        <div class="void-item-select" title="Select">
+          <input type="checkbox" class="void-check" aria-label="Select image" tabindex="-1">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="done">
+      <p class="done-title">Trash empty</p>
+      <p class="done-hint">Nothing in the void.</p>
+      <div class="done-actions">
+        <a href="{% url 'rate_inbox' %}" class="done-btn">← Inbox</a>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <div class="void-toolbar" id="void-toolbar" aria-live="polite">
+    <button class="void-toolbar-btn void-toolbar-btn--rescue" id="void-rescue">
+      ✓ Rescue (<span class="void-sel-count">0</span>)
+    </button>
+    <button class="void-toolbar-btn void-toolbar-btn--fav" id="void-rescue-fav">
+      ★ Rescue (<span class="void-sel-count">0</span>)
+    </button>
+  </div>
+
+</body>
+</html>
