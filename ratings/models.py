@@ -1,6 +1,17 @@
 from django.db import models
 
 
+class Tag(models.Model):
+    name = models.CharField(max_length=100, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class Image(models.Model):
     INBOX = "inbox"
     CORPUS = "corpus"
@@ -21,6 +32,7 @@ class Image(models.Model):
     is_purged = models.BooleanField(default=False)
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
     embedding = models.BinaryField(null=True, blank=True)
+    tags = models.ManyToManyField(Tag, blank=True, related_name="images")
     void_seen_at = models.DateTimeField(null=True, blank=True)
     inbox_seen_at = models.DateTimeField(null=True, blank=True)
     corpus_seen_at = models.DateTimeField(null=True, blank=True)

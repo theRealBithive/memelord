@@ -23,6 +23,15 @@
     <span class="count">{{ queue_count }} left</span>
   </div>
 
+  <div class="card-tags">
+    {% for tag in image.tags.all %}<span class="tag-pill" data-tag="{{ tag.name }}">#{{ tag.name }} <button class="tag-remove" aria-label="remove tag">×</button></span>{% endfor %}
+    <input class="tag-input" type="text" placeholder="+ tag"
+           data-tag-url="{% url 'update_image_tags' image.content_hash %}"
+           data-autocomplete-url="{% url 'tag_autocomplete' %}"
+           autocomplete="off">
+    <div class="tag-autocomplete" hidden></div>
+  </div>
+
   <div class="btn-row">
   {% if mode == "inbox" %}
     <button class="btn btn-bad" data-action="bad"

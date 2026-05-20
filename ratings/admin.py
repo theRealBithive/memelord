@@ -2,7 +2,13 @@ from django.conf import settings
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import Image, Source
+from .models import Image, Source, Tag
+
+
+@admin.register(Tag)
+class TagAdmin(admin.ModelAdmin):
+    list_display = ("name", "created_at")
+    search_fields = ("name",)
 
 
 @admin.register(Source)
@@ -18,6 +24,7 @@ class ImageAdmin(admin.ModelAdmin):
     list_filter = ("location", "is_favourite", "is_nsfw", "source_label", "file_deleted", "is_purged")
     search_fields = ("content_hash", "file_path", "source_url")
     readonly_fields = ("content_hash", "downloaded_at", "thumbnail_large")
+    filter_horizontal = ("tags",)
 
     @admin.display(description="")
     def thumbnail(self, obj: Image):

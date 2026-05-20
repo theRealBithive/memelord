@@ -22,6 +22,19 @@ uv run python manage.py scrape --config /path/to/config.toml
 uv run python manage.py train
 ```
 
+### Running manage.py commands
+
+Always prefix with `DJANGO_DEBUG=true` (required because the settings guard rejects the insecure default key in non-debug mode):
+
+```bash
+DJANGO_DEBUG=true uv run python manage.py migrate
+DJANGO_DEBUG=true uv run python manage.py shell
+DJANGO_DEBUG=true uv run python manage.py makemigrations
+DJANGO_DEBUG=true uv run python manage.py createsuperuser
+```
+
+The `make` targets (run, migrate, superuser) already set this for you via the dev server entrypoint. Use the `DJANGO_DEBUG=true` prefix only when calling `manage.py` directly.
+
 ### Single test
 ```bash
 uv run pytest tests/core/test_brain.py::test_get_transform_returns_compose
