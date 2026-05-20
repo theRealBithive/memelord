@@ -19,35 +19,32 @@ DATA_DIR = Path(settings.DATA_DIR)
 
 
 def index(request):
-    return redirect("rate_inbox")
+    return redirect("review_corpus")
 
 
 def _counts(show_nsfw: bool = False) -> dict:
-    qs = Image.objects.filter(file_deleted=False)
+    qs = Image.objects.filter(file_deleted=False, is_purged=False)
+    queue_filter = Q(
+        location__in=[Image.INBOX, Image.CORPUS], score__isnull=True
+    )
     if show_nsfw:
         return qs.aggregate(
-            inbox_count=Count("pk", filter=Q(location=Image.INBOX)),
-            corpus_count=Count("pk", filter=Q(location=Image.CORPUS, score__isnull=True)),
+            queue_count=Count("pk", filter=queue_filter),
             void_count=Count("pk", filter=Q(location=Image.VOID)),
             fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True)),
-            nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
-            nsfw_corpus_count=Count(
-                "pk", filter=Q(location=Image.CORPUS, is_nsfw=True)
-            ),
+            nsfw_queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=True)),
             nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
             nsfw_fav_count=Count(
                 "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
             ),
         )
     return qs.aggregate(
-        inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=False)),
-        corpus_count=Count("pk", filter=Q(location=Image.CORPUS, score__isnull=True, is_nsfw=False)),
+        queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=False)),
         void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=False)),
         fav_count=Count(
             "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=False)
         ),
-        nsfw_inbox_count=Count("pk", filter=Q(location=Image.INBOX, is_nsfw=True)),
-        nsfw_corpus_count=Count("pk", filter=Q(location=Image.CORPUS, is_nsfw=True)),
+        nsfw_queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=True)),
         nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
         nsfw_fav_count=Count(
             "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
@@ -73,11 +70,7 @@ def _get_next(
         if not show_nsfw:
             qs = qs.filter(is_nsfw=False)
 
-    if mode in ("inbox", "nsfw_inbox"):
-        # Unseen images (inbox_seen_at IS NULL) sort first in SQLite ASC; then oldest-downloaded.
-        qs = qs.order_by("inbox_seen_at", "downloaded_at")
-    else:
-        qs = qs.order_by("?")
+    qs = qs.order_by("?")
 
     if exclude_hash:
         qs = qs.exclude(content_hash=exclude_hash)
@@ -115,7 +108,7 @@ def _build_ctx(
     ctx = {
         "mode": mode,
         "image": image,
-        "queue_count": counts[f"{mode}_count"],
+        "queue_count": counts.get(f"{mode}_count", 0),
         "show_nsfw": show_nsfw,
         **counts,
     }
@@ -127,8 +120,6 @@ def _build_ctx(
 def _mode_view(request, mode: str):
     show_nsfw = request.session.get("show_nsfw", False)
     image = _get_next(mode, show_nsfw=show_nsfw)
-    if mode in ("inbox", "nsfw_inbox"):
-        _mark_inbox_seen(image)
     return render(request, "ratings/rate.html", _build_ctx(mode, image, show_nsfw, request))
 
 
@@ -158,7 +149,7 @@ def _neighbor_hash(all_hashes: list[str], content_hash: str) -> str | None:
 
 @login_required
 def rate_inbox(request):
-    return _mode_view(request, "inbox")
+    return redirect("review_corpus")
 
 
 @login_required
@@ -178,7 +169,7 @@ def rate_fav(request):
 
 @login_required
 def rate_nsfw_inbox(request):
-    return _mode_view(request, "nsfw_inbox")
+    return redirect("rate_nsfw_corpus")
 
 
 @login_required
@@ -225,8 +216,6 @@ def submit_rating(request, content_hash: str, action: str):
         image.save(update_fields=["is_nsfw"])
 
     next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
-    if mode in ("inbox", "nsfw_inbox"):
-        _mark_inbox_seen(next_image)
     ctx = _build_ctx(mode, next_image, show_nsfw, request)
     if request.htmx:
         return render(request, "ratings/_htmx_rating.html", ctx)
@@ -570,17 +559,26 @@ def _browse_ctx(
 
 
 def _review_qs(show_nsfw: bool = False):
-    qs = Image.objects.filter(location=Image.CORPUS, score__isnull=True, file_deleted=False)
+    qs = Image.objects.filter(
+        location__in=[Image.INBOX, Image.CORPUS],
+        score__isnull=True,
+        is_purged=False,
+        file_deleted=False,
+    )
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
-    # Unseen images (corpus_seen_at IS NULL) sort first in SQLite ASC; then oldest-downloaded.
-    return qs.order_by("corpus_seen_at", "downloaded_at")
+    # Unseen images (queue_seen_at IS NULL) sort first in SQLite ASC; then oldest-downloaded.
+    return qs.order_by("queue_seen_at", "downloaded_at")
 
 
 def _review_nsfw_qs():
     return Image.objects.filter(
-        location=Image.CORPUS, is_nsfw=True, score__isnull=True, file_deleted=False
-    ).order_by("corpus_seen_at", "downloaded_at")
+        location__in=[Image.INBOX, Image.CORPUS],
+        is_nsfw=True,
+        score__isnull=True,
+        is_purged=False,
+        file_deleted=False,
+    ).order_by("queue_seen_at", "downloaded_at")
 
 
 def _review_ctx(
@@ -627,7 +625,7 @@ def _review_nsfw_ctx(
 def review_corpus(request, content_hash: str | None = None):
     show_nsfw = request.session.get("show_nsfw", False)
     ctx = _review_ctx(content_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     if request.htmx:
         return render(request, "ratings/_review_htmx.html", ctx)
     return render(request, "ratings/review.html", ctx)
@@ -637,7 +635,9 @@ def review_corpus(request, content_hash: str | None = None):
 @require_POST
 def score_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
 
     # Capture next position before the score changes ordering.
     all_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
@@ -647,14 +647,18 @@ def score_corpus(request, content_hash: str):
     try:
         score_val = int(request.POST.get("score", 0))
         if 1 <= score_val <= 6:
+            fields = ["score", "rated_at"]
+            if image.location == Image.INBOX:
+                _move_image(image, Image.CORPUS)
+                fields += ["file_path", "location"]
             image.score = score_val
             image.rated_at = timezone.now()
-            image.save(update_fields=["score", "rated_at"])
+            image.save(update_fields=fields)
     except (ValueError, TypeError):
         pass
 
     ctx = _review_ctx(next_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -662,9 +666,11 @@ def score_corpus(request, content_hash: str):
 @require_POST
 def trash_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
 
-    # Capture neighbour before removing from corpus.
+    # Capture neighbour before removing from queue.
     next_hash = _neighbor_hash(
         list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
         content_hash,
@@ -676,7 +682,7 @@ def trash_corpus(request, content_hash: str):
     image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
 
     ctx = _review_ctx(next_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -684,11 +690,13 @@ def trash_corpus(request, content_hash: str):
 @require_POST
 def toggle_fav_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
     image.is_favourite = not image.is_favourite
     image.save(update_fields=["is_favourite"])
     ctx = _review_ctx(content_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -696,7 +704,9 @@ def toggle_fav_corpus(request, content_hash: str):
 @require_POST
 def purge_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
 
     next_hash = _neighbor_hash(
         list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
@@ -705,7 +715,7 @@ def purge_corpus(request, content_hash: str):
 
     _purge_image(image)
     ctx = _review_ctx(next_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -716,7 +726,9 @@ def purge_corpus(request, content_hash: str):
 @require_POST
 def score_nsfw_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
 
     all_hashes = list(_review_nsfw_qs().values_list("content_hash", flat=True))
     idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
@@ -725,14 +737,18 @@ def score_nsfw_corpus(request, content_hash: str):
     try:
         score_val = int(request.POST.get("score", 0))
         if 1 <= score_val <= 6:
+            fields = ["score", "rated_at"]
+            if image.location == Image.INBOX:
+                _move_image(image, Image.CORPUS)
+                fields += ["file_path", "location"]
             image.score = score_val
             image.rated_at = timezone.now()
-            image.save(update_fields=["score", "rated_at"])
+            image.save(update_fields=fields)
     except (ValueError, TypeError):
         pass
 
     ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -740,7 +756,9 @@ def score_nsfw_corpus(request, content_hash: str):
 @require_POST
 def trash_nsfw_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
 
     next_hash = _neighbor_hash(
         list(_review_nsfw_qs().values_list("content_hash", flat=True)),
@@ -753,7 +771,7 @@ def trash_nsfw_corpus(request, content_hash: str):
     image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
 
     ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -761,11 +779,13 @@ def trash_nsfw_corpus(request, content_hash: str):
 @require_POST
 def toggle_fav_nsfw_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
     image.is_favourite = not image.is_favourite
     image.save(update_fields=["is_favourite"])
     ctx = _review_nsfw_ctx(content_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -773,7 +793,9 @@ def toggle_fav_nsfw_corpus(request, content_hash: str):
 @require_POST
 def purge_nsfw_corpus(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.CORPUS)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
+    )
 
     next_hash = _neighbor_hash(
         list(_review_nsfw_qs().values_list("content_hash", flat=True)),
@@ -782,7 +804,7 @@ def purge_nsfw_corpus(request, content_hash: str):
 
     _purge_image(image)
     ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
-    _mark_corpus_seen(ctx.get("image"))
+    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -794,7 +816,7 @@ def toggle_nsfw(request, content_hash: str):
     image = get_object_or_404(Image, content_hash=content_hash)
     location = image.location
 
-    if location == Image.CORPUS:
+    if location in (Image.INBOX, Image.CORPUS):
         mode = request.POST.get("mode", "corpus")
         if mode == "nsfw_corpus":
             # In the NSFW corpus queue toggling safe removes the image — always navigate.
@@ -819,7 +841,7 @@ def toggle_nsfw(request, content_hash: str):
                 ctx = _review_ctx(neighbor, show_nsfw, request)
             else:
                 ctx = _review_ctx(content_hash, show_nsfw, request)
-        _mark_corpus_seen(ctx.get("image"))
+        _mark_queue_seen(ctx.get("image"))
         return render(request, "ratings/_review_htmx.html", ctx)
 
     if location == Image.VOID:
@@ -842,7 +864,7 @@ def toggle_nsfw(request, content_hash: str):
     if not show_nsfw and image.is_nsfw:
         next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
         if mode in ("inbox", "nsfw_inbox"):
-            _mark_inbox_seen(next_image)
+            _mark_queue_seen(next_image)
         ctx = _build_ctx(mode, next_image, show_nsfw, request)
     else:
         ctx = _build_ctx(mode, image, show_nsfw, request)
@@ -866,16 +888,10 @@ def _mark_void_seen(image: Image | None) -> None:
         image.save(update_fields=["void_seen_at"])
 
 
-def _mark_inbox_seen(image: Image | None) -> None:
-    if image is not None and image.inbox_seen_at is None:
-        image.inbox_seen_at = timezone.now()
-        image.save(update_fields=["inbox_seen_at"])
-
-
-def _mark_corpus_seen(image: Image | None) -> None:
-    if image is not None and image.corpus_seen_at is None:
-        image.corpus_seen_at = timezone.now()
-        image.save(update_fields=["corpus_seen_at"])
+def _mark_queue_seen(image: Image | None) -> None:
+    if image is not None and image.queue_seen_at is None:
+        image.queue_seen_at = timezone.now()
+        image.save(update_fields=["queue_seen_at"])
 
 
 def _void_review_ctx(

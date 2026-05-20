@@ -89,13 +89,13 @@
   <div class="done">
     {% if mode == "nsfw_corpus" %}
     <p class="done-title">NSFW queue empty</p>
-    <p class="done-hint">No unscored NSFW images in corpus.</p>
+    <p class="done-hint">No unscored NSFW images waiting.</p>
     {% else %}
-    <p class="done-title">Corpus empty</p>
-    <p class="done-hint">Rate images from the inbox to build your corpus.</p>
+    <p class="done-title">Queue empty</p>
+    <p class="done-hint">Scrape more images to keep rating.</p>
     {% endif %}
     <div class="done-actions">
-      <a href="{% url 'rate_inbox' %}" class="done-btn">← Inbox</a>
+      <a href="{% url 'gallery' %}" class="done-btn">→ Gallery</a>
     </div>
   </div>
 
