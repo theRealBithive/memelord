@@ -229,13 +229,12 @@ def classify_inbox(
             img.embedding = brain.embedding_to_bytes(emb)
             update_fields.append("embedding")
 
-        if nsfw_clf is not None:
+        if nsfw_clf is not None and not img.is_nsfw:
             predicted = nsfw.predict_nsfw(nsfw_clf, emb, vision.nsfw_threshold)
-            if predicted != img.is_nsfw:
-                img.is_nsfw = predicted
+            if predicted:
+                img.is_nsfw = True
                 update_fields.append("is_nsfw")
-                if predicted:
-                    nsfw_tagged += 1
+                nsfw_tagged += 1
 
         if taste_clf is not None:
             prob = float(brain.predict_proba(taste_clf, emb))
