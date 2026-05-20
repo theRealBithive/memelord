@@ -524,6 +524,12 @@ def source_add(request):
             "ratings/_source_error.html",
             {"error": "Pixelfed value must be a URL (https://…)."},
         )
+    if stype == Source.MASTODON and "@" not in name.lstrip("@"):
+        return render(
+            request,
+            "ratings/_source_error.html",
+            {"error": "Mastodon handle must include an instance, e.g. @user@mastodon.social"},
+        )
 
     source, created = Source.objects.get_or_create(type=stype, name=name)
     if not created:

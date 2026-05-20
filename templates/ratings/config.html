@@ -32,6 +32,7 @@
     .source-type-imgur    { background: #15803d22; color: #86efac; border: 1px solid #15803d55; }
     .source-type-tumblr   { background: #1d4ed822; color: #93c5fd; border: 1px solid #1d4ed855; }
     .source-type-pixelfed { background: #7c3aed22; color: #c4b5fd; border: 1px solid #7c3aed55; }
+    .source-type-mastodon { background: #6364ff22; color: #b4b5ff; border: 1px solid #6364ff55; }
 
     .source-name { flex: 1; font-size: 0.875rem; font-family: monospace; word-break: break-all; }
     .source-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
@@ -136,6 +137,7 @@
           <option value="imgur">Imgur</option>
           <option value="tumblr">Tumblr</option>
           <option value="pixelfed">Pixelfed</option>
+          <option value="mastodon">Mastodon</option>
         </select>
         <input type="text" name="name" id="src-name" placeholder="board (e.g. wg)" required autocomplete="off">
         <button type="submit">Add</button>
@@ -152,12 +154,14 @@
       "imgur":    'Imgur topic slug, e.g. <code>warhammer40k</code>',
       "tumblr":   'Tumblr blog name, e.g. <code>myblog</code>',
       "pixelfed": 'Pixelfed instance URL, e.g. <code>https://pixelfed.social</code>',
+      "mastodon": 'Mastodon account handle, e.g. <code>@user@mastodon.social</code>',
     };
     const placeholders = {
       "4chan": "board (e.g. wg)",
       "imgur": "topic (e.g. funny)",
       "tumblr": "blog name",
       "pixelfed": "https://pixelfed.social",
+      "mastodon": "@user@mastodon.social",
     };
     function updateHint(sel) {
       document.getElementById("src-hint").innerHTML = hints[sel.value] || "";
