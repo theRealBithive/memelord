@@ -74,7 +74,8 @@ def _get_next(
             qs = qs.filter(is_nsfw=False)
 
     if mode in ("inbox", "nsfw_inbox"):
-        qs = qs.order_by("downloaded_at")
+        # Unseen images (inbox_seen_at IS NULL) sort first in SQLite ASC; then oldest-downloaded.
+        qs = qs.order_by("inbox_seen_at", "downloaded_at")
     else:
         qs = qs.order_by("?")
 
@@ -125,11 +126,10 @@ def _build_ctx(
 
 def _mode_view(request, mode: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    return render(
-        request,
-        "ratings/rate.html",
-        _build_ctx(mode, _get_next(mode, show_nsfw=show_nsfw), show_nsfw, request),
-    )
+    image = _get_next(mode, show_nsfw=show_nsfw)
+    if mode in ("inbox", "nsfw_inbox"):
+        _mark_inbox_seen(image)
+    return render(request, "ratings/rate.html", _build_ctx(mode, image, show_nsfw, request))
 
 
 def _move_image(image: Image, new_location: str) -> None:
@@ -225,6 +225,8 @@ def submit_rating(request, content_hash: str, action: str):
         image.save(update_fields=["is_nsfw"])
 
     next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
+    if mode in ("inbox", "nsfw_inbox"):
+        _mark_inbox_seen(next_image)
     ctx = _build_ctx(mode, next_image, show_nsfw, request)
     if request.htmx:
         return render(request, "ratings/_htmx_rating.html", ctx)
@@ -571,13 +573,14 @@ def _review_qs(show_nsfw: bool = False):
     qs = Image.objects.filter(location=Image.CORPUS, score__isnull=True, file_deleted=False)
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
-    return qs.order_by("downloaded_at")
+    # Unseen images (corpus_seen_at IS NULL) sort first in SQLite ASC; then oldest-downloaded.
+    return qs.order_by("corpus_seen_at", "downloaded_at")
 
 
 def _review_nsfw_qs():
     return Image.objects.filter(
         location=Image.CORPUS, is_nsfw=True, score__isnull=True, file_deleted=False
-    ).order_by("downloaded_at")
+    ).order_by("corpus_seen_at", "downloaded_at")
 
 
 def _review_ctx(
@@ -624,6 +627,7 @@ def _review_nsfw_ctx(
 def review_corpus(request, content_hash: str | None = None):
     show_nsfw = request.session.get("show_nsfw", False)
     ctx = _review_ctx(content_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     if request.htmx:
         return render(request, "ratings/_review_htmx.html", ctx)
     return render(request, "ratings/review.html", ctx)
@@ -650,6 +654,7 @@ def score_corpus(request, content_hash: str):
         pass
 
     ctx = _review_ctx(next_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -671,6 +676,7 @@ def trash_corpus(request, content_hash: str):
     image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
 
     ctx = _review_ctx(next_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -682,6 +688,7 @@ def toggle_fav_corpus(request, content_hash: str):
     image.is_favourite = not image.is_favourite
     image.save(update_fields=["is_favourite"])
     ctx = _review_ctx(content_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -698,6 +705,7 @@ def purge_corpus(request, content_hash: str):
 
     _purge_image(image)
     ctx = _review_ctx(next_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -724,6 +732,7 @@ def score_nsfw_corpus(request, content_hash: str):
         pass
 
     ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -744,6 +753,7 @@ def trash_nsfw_corpus(request, content_hash: str):
     image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
 
     ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -755,6 +765,7 @@ def toggle_fav_nsfw_corpus(request, content_hash: str):
     image.is_favourite = not image.is_favourite
     image.save(update_fields=["is_favourite"])
     ctx = _review_nsfw_ctx(content_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -771,6 +782,7 @@ def purge_nsfw_corpus(request, content_hash: str):
 
     _purge_image(image)
     ctx = _review_nsfw_ctx(next_hash, show_nsfw, request)
+    _mark_corpus_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -807,6 +819,7 @@ def toggle_nsfw(request, content_hash: str):
                 ctx = _review_ctx(neighbor, show_nsfw, request)
             else:
                 ctx = _review_ctx(content_hash, show_nsfw, request)
+        _mark_corpus_seen(ctx.get("image"))
         return render(request, "ratings/_review_htmx.html", ctx)
 
     if location == Image.VOID:
@@ -828,6 +841,8 @@ def toggle_nsfw(request, content_hash: str):
     image.save(update_fields=["is_nsfw"])
     if not show_nsfw and image.is_nsfw:
         next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
+        if mode in ("inbox", "nsfw_inbox"):
+            _mark_inbox_seen(next_image)
         ctx = _build_ctx(mode, next_image, show_nsfw, request)
     else:
         ctx = _build_ctx(mode, image, show_nsfw, request)
@@ -849,6 +864,18 @@ def _mark_void_seen(image: Image | None) -> None:
     if image is not None and image.void_seen_at is None:
         image.void_seen_at = timezone.now()
         image.save(update_fields=["void_seen_at"])
+
+
+def _mark_inbox_seen(image: Image | None) -> None:
+    if image is not None and image.inbox_seen_at is None:
+        image.inbox_seen_at = timezone.now()
+        image.save(update_fields=["inbox_seen_at"])
+
+
+def _mark_corpus_seen(image: Image | None) -> None:
+    if image is not None and image.corpus_seen_at is None:
+        image.corpus_seen_at = timezone.now()
+        image.save(update_fields=["corpus_seen_at"])
 
 
 def _void_review_ctx(
