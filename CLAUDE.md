@@ -120,3 +120,12 @@ Single volume `/data` holds everything (DB, weights, images, config). Entrypoint
 - Mirror source structure: `tests/core/`, `tests/retina/`
 - Integration tests (real DINOv2, real network): `@pytest.mark.integration`, skipped by default
 - No Django test runner yet — `pytest` with `pytest-django` would need adding if Django view tests are written
+
+## Code style
+
+### Comments
+Every non-trivial function should have a docstring explaining **why** it works the way it does — hidden constraints, design trade-offs, non-obvious decisions, workarounds for specific behaviour. Not *what* the code does (the names do that).
+
+`core/brain.py` is the reference: it explains why ViT-B/14 was chosen, why `eval()` is required, why pickle is used, why float32 blobs instead of a native array type.
+
+One-liners are fine for simple helpers. Multi-paragraph is fine when there is genuinely important context. Never strip existing docstrings.

@@ -34,7 +34,14 @@ def collect_image_paths(data_dir: Path) -> tuple[list[Path], list[Path]]:
 
 
 def collect_nsfw_paths(data_dir: Path) -> tuple[list[Path], list[Path]]:
-    """Return (nsfw_paths, safe_paths) from Image.is_nsfw labels."""
+    """
+    Return (nsfw_paths, safe_paths) for NSFW classifier training.
+
+    Uses is_nsfw labels across all images regardless of location, so the NSFW
+    head is trained on the full signal available — not just inbox or corpus
+    images. A manually flagged void image is just as valid a training sample
+    as a corpus one.
+    """
     from ratings.models import Image
 
     nsfw_paths: list[Path] = []
@@ -51,9 +58,13 @@ def collect_nsfw_paths(data_dir: Path) -> tuple[list[Path], list[Path]]:
 
 
 def _get_favourite_weights(data_dir: Path) -> dict[str, float]:
-    """Return {absolute_path_str: weight} for corpus images.
+    """
+    Return {absolute_path_str: weight} for corpus images.
 
     Priority: score (1–6 mapped directly) > is_favourite (3.0) > default (1.0).
+    Score takes precedence because it's a finer-grained signal than the binary
+    fav flag; is_favourite acts as a fallback for images rated before the scoring
+    UI was added.
     """
     from ratings.models import Image
 
@@ -69,26 +80,25 @@ def _get_favourite_weights(data_dir: Path) -> dict[str, float]:
     return result
 
 
-def _path_to_image_map(data_dir: Path) -> dict[str, object]:
-    """Map absolute path string to Image ORM instance."""
-    from ratings.models import Image
-
-    out: dict[str, object] = {}
-    for img in Image.objects.filter(file_deleted=False):
-        path = data_dir / img.file_path
-        if path.exists():
-            out[str(path)] = img
-    return out
-
-
 def _backfill_phash_embedding(
     path_to_emb: dict[str, np.ndarray],
     data_dir: Path,
 ) -> None:
-    """Persist phash and embedding on Image rows after encoding."""
-    from core import phash as phash_mod
+    """
+    Persist phash and embedding on Image rows after encoding.
 
-    path_to_img = _path_to_image_map(data_dir)
+    Images scraped before the embedding column was added (or before DINOv2 was
+    available) have null embedding fields. Training backfills these so the next
+    scrape's dedup index is fully populated from the DB without re-encoding.
+    """
+    from core import phash as phash_mod
+    from ratings.models import Image
+
+    path_to_img = {
+        str(data_dir / img.file_path): img
+        for img in Image.objects.filter(file_deleted=False)
+        if (data_dir / img.file_path).exists()
+    }
     for path_str, emb in path_to_emb.items():
         img = path_to_img.get(path_str)
         if img is None:
@@ -106,9 +116,11 @@ def run(
     nsfw_threshold: float = 0.30,
 ) -> None:
     """
-    Train taste classifier on corpus (1) vs void (0), optionally NSFW head.
+    Train taste classifier on corpus (1) vs void (0) and optionally an NSFW head.
 
-    Encodes each unique image path once and fits classifiers on shared embeddings.
+    All unique image paths are encoded once with DINOv2 in a single forward pass,
+    then the embeddings are sliced for each classifier — this avoids running the
+    GPU encoder multiple times when training both taste and NSFW heads together.
     """
     corpus_paths, void_paths = collect_image_paths(data_dir)
     if not corpus_paths:
@@ -137,9 +149,9 @@ def run(
 
     # Re-filter each list to paths that were actually encoded (handles files moved mid-run).
     corpus_paths = [p for p in corpus_paths if str(p) in path_to_emb]
-    void_paths   = [p for p in void_paths   if str(p) in path_to_emb]
-    nsfw_paths   = [p for p in nsfw_paths   if str(p) in path_to_emb]
-    safe_paths   = [p for p in safe_paths   if str(p) in path_to_emb]
+    void_paths = [p for p in void_paths if str(p) in path_to_emb]
+    nsfw_paths = [p for p in nsfw_paths if str(p) in path_to_emb]
+    safe_paths = [p for p in safe_paths if str(p) in path_to_emb]
     if not corpus_paths or not void_paths:
         raise RuntimeError("Need at least one corpus and one void image to train.")
 

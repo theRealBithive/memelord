@@ -2,6 +2,8 @@ from django.db import models
 
 
 class Tag(models.Model):
+    """Free-form label that can be attached to any Image for gallery filtering."""
+
     name = models.CharField(max_length=100, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -13,6 +15,15 @@ class Tag(models.Model):
 
 
 class Image(models.Model):
+    """
+    Central record for a scraped image.
+
+    content_hash (SHA-256) is the primary key so the scraper can skip
+    re-downloading in O(1) without a filename-based lookup — filenames are
+    unreliable across sources and can collide. file_path is stored relative
+    to DATA_DIR so the entire data volume can be moved without a migration.
+    """
+
     INBOX = "inbox"
     CORPUS = "corpus"
     VOID = "void"
@@ -46,6 +57,8 @@ class Image(models.Model):
 
 
 class LogEntry(models.Model):
+    """Single log line from a scrape or train run, persisted for the in-app log viewer."""
+
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
     level = models.CharField(max_length=10)
     source = models.CharField(max_length=20)  # "scrape" or "train"
@@ -56,6 +69,14 @@ class LogEntry(models.Model):
 
 
 class Source(models.Model):
+    """
+    User-configured scrape source (a 4chan board, Imgur topic, Tumblr blog, or Pixelfed instance).
+
+    Sources in the DB take precedence over config.toml entries — the DB is
+    the live config that the UI edits, while config.toml serves as the seed
+    file imported on first setup via source_import.
+    """
+
     FOURCHAN = "4chan"
     IMGUR = "imgur"
     TUMBLR = "tumblr"
@@ -83,9 +104,11 @@ class Source(models.Model):
 
 class ScrapeSchedule(models.Model):
     """Singleton (pk=1) storing the user-configured auto-scrape interval."""
+
     interval_hours = models.PositiveSmallIntegerField(default=6)
     enabled = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
+        """Force pk=1 to maintain the singleton invariant."""
         self.pk = 1
         super().save(*args, **kwargs)
