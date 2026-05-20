@@ -22,6 +22,8 @@ class Image(models.Model):
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
     embedding = models.BinaryField(null=True, blank=True)
     void_seen_at = models.DateTimeField(null=True, blank=True)
+    inbox_seen_at = models.DateTimeField(null=True, blank=True)
+    corpus_seen_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["downloaded_at"]
