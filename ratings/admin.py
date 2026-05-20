@@ -16,6 +16,7 @@ class SourceAdmin(admin.ModelAdmin):
     list_display = ("type", "name", "enabled", "is_nsfw", "added_at")
     list_filter = ("type", "enabled", "is_nsfw")
     list_editable = ("enabled", "is_nsfw")
+    readonly_fields = ("cursor",)
 
 
 @admin.register(Image)
