@@ -108,15 +108,11 @@
   <div class="stats-page">
 
     <div class="section">
-      <div class="section-title">Queues</div>
+      <div class="section-title">Queue</div>
       <div class="stat-grid">
-        <a href="{% url 'rate_inbox' %}" class="stat-card c-inbox">
-          <div class="big">{{ inbox_count }}</div>
-          <div class="label">Inbox</div>
-        </a>
         <a href="{% url 'review_corpus' %}" class="stat-card c-unrated">
-          <div class="big">{{ corpus_count }}</div>
-          <div class="label">Unrated</div>
+          <div class="big">{{ queue_count }}</div>
+          <div class="label">To rate</div>
         </a>
       </div>
     </div>

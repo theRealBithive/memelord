@@ -24,6 +24,7 @@ class Image(models.Model):
     void_seen_at = models.DateTimeField(null=True, blank=True)
     inbox_seen_at = models.DateTimeField(null=True, blank=True)
     corpus_seen_at = models.DateTimeField(null=True, blank=True)
+    queue_seen_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["downloaded_at"]
