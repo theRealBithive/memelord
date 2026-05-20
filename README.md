@@ -11,10 +11,10 @@ It is a machine that watches you suffer, learns from it, and tries to suffer mor
 ## The loop
 
 1. **Scrape** — pull images from 4chan, Tumblr, Imgur, Pixelfed into an inbox
-2. **Rate** — swipe left/right/up through the inbox: bad / good / fav
+2. **Review** — work through the queue: score 1–6, star favourites, trash the bad ones
 3. **Train** — DINOv2 encodes your rated images; a logistic regression learns your damage
 
-After enough ratings, the classifier starts auto-sorting new scrapes before they reach your queue. High-confidence matches go straight to corpus or void. You only see the confusing middle ground.
+After enough ratings, the classifier starts auto-sorting new scrapes before they reach your queue. High-confidence good matches go straight to corpus. High-confidence bad matches go straight to void. You only see the confusing middle ground.
 
 ---
 
@@ -48,7 +48,7 @@ docker compose run --rm memelord createsuperuser
 
 Open `http://localhost:8000` and begin your torment.
 
-User-uploaded images are served at `/media/` behind Django login (not WhiteNoise; `django.conf.urls.static.static()` only registers routes when `DEBUG=True`).
+Images are served at `/media/` behind Django login — no unauthenticated access to your collection.
 
 ### One-off commands
 
@@ -75,20 +75,31 @@ topics = ["pics"]
 instance_base = "https://pixelfed.social"
 ```
 
-Sources can also be managed from the Config page in the UI. Mark a source NSFW and its images are quarantined to a separate rating mode.
+Sources can also be managed directly from the **Config** page in the UI — add, toggle, delete, and import from config.toml without restarting. Mark a source NSFW and its images are quarantined to a separate review queue.
+
+Auto-scrape scheduling is also configured from the Config page: set an interval (1–168 hours) and the background worker picks it up immediately.
 
 ---
 
-## Rating modes
+## Review
 
-| Mode | Queue | Bad | Fav | Good |
-|---|---|---|---|---|
-| **Inbox** | new scrapes | → void | → corpus ★ | → corpus |
-| **Corpus** | approved | → void | toggle ★ | — |
-| **Fav** | favourites | → void | toggle ★ | — |
-| **Trash** | void | — | → corpus ★ | → corpus |
+The review queue shows unscored inbox and corpus images, unseen ones first.
 
-Swipe or use arrow keys. `?` shows keyboard shortcuts.
+**Score 1–6** to rate an image (moves it to corpus). **Trash** sends it to void. **Star** marks a favourite (higher training weight). **Purge** hard-deletes it from disk and blocks re-download.
+
+| Queue | What's in it | Trash | Rescue |
+|---|---|---|---|
+| **Review** | inbox + unscored corpus | → void | — |
+| **NSFW Review** | is_nsfw=True, unscored | → void | — |
+| **Void** | trashed images | purge (permanent) | → corpus |
+
+Keyboard shortcuts: `1`–`6` to score, `f` to favourite, `t` to trash, `p` to purge, `n` to toggle NSFW. Arrow keys navigate prev/next.
+
+---
+
+## Gallery
+
+Scored corpus images (score ≥ filter) browsable with sort (newest / oldest / random), fav-only filter, and `#tag` filter. Tags are assigned per-image from the review queue or gallery.
 
 ---
 
@@ -118,7 +129,7 @@ make test
 - django-q2 (background jobs, SQLite broker — no Redis)
 - PyTorch + DINOv2 ViT-B/14 (768-d image embeddings)
 - scikit-learn LogisticRegression (the taste oracle)
-- Playwright-powered scrapers for 4chan, Tumblr, Imgur, Pixelfed
+- Playwright optional: used as fallback for Imgur topic pages and Pixelfed instances that don't serve the API without auth
 
 ---
 
