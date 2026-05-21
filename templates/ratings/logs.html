@@ -95,7 +95,6 @@
 
   <nav class="nav">
     <a href="{% url 'review_corpus' %}" class="nav-tab">Rate<span class="badge">{{ queue_count }}</span></a>
-    <a href="{% url 'rate_fav' %}" class="nav-tab">Fav<span class="badge">{{ fav_count }}</span></a>
     <a href="{% url 'review_void' %}" class="nav-tab">Trash<span class="badge">{{ void_count }}</span></a>
     {% if not show_nsfw %}<a href="{% url 'rate_nsfw_corpus' %}" class="nav-tab">NSFW<span class="badge">{{ nsfw_queue_count }}</span></a>{% endif %}
     <a href="{% url 'stats' %}" class="nav-tab">Stats</a>

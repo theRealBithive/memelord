@@ -43,9 +43,6 @@ def _counts(show_nsfw: bool = False) -> dict:
             fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True)),
             nsfw_queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=True)),
             nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
-            nsfw_fav_count=Count(
-                "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
-            ),
         )
     return qs.aggregate(
         queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=False)),
@@ -55,9 +52,6 @@ def _counts(show_nsfw: bool = False) -> dict:
         ),
         nsfw_queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=True)),
         nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
-        nsfw_fav_count=Count(
-            "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
-        ),
     )
 
 
@@ -77,10 +71,6 @@ def _get_next(
         qs = qs.filter(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
     elif mode.startswith("nsfw_"):
         qs = qs.filter(location=mode[5:], is_nsfw=True)
-    elif mode == "fav":
-        qs = qs.filter(location=Image.CORPUS, is_favourite=True)
-        if not show_nsfw:
-            qs = qs.filter(is_nsfw=False)
     else:
         qs = qs.filter(location=mode)
         if not show_nsfw:
@@ -196,11 +186,6 @@ def rate_void(request):
 
 
 @login_required
-def rate_fav(request):
-    return _mode_view(request, "fav")
-
-
-@login_required
 def rate_nsfw_inbox(request):
     return redirect("rate_nsfw_corpus")
 
@@ -242,11 +227,6 @@ def rate_nsfw_void(request):
             "mode": "nsfw_void",
         },
     )
-
-
-@login_required
-def rate_nsfw_fav(request):
-    return _mode_view(request, "nsfw_fav")
 
 
 @login_required
