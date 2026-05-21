@@ -24,6 +24,7 @@
         <button class="lb-action-score lb-action-score--6" data-score="6">6</button>
         <button class="lb-action-fav" aria-label="Toggle favourite">★</button>
         <button class="lb-action-nsfw" aria-label="Toggle NSFW">🔞</button>
+        <button class="lb-action-share" aria-label="Share" hidden>↗</button>
         <button class="lb-action-trash" aria-label="Trash">🗑</button>
       </div>
     </div>
@@ -40,9 +41,14 @@
   const lbTags         = lb.querySelector(".lb-tags");
   const lbActionFav    = lb.querySelector(".lb-action-fav");
   const lbActionNsfw   = lb.querySelector(".lb-action-nsfw");
+  const lbActionShare  = lb.querySelector(".lb-action-share");
   const lbActionTrash  = lb.querySelector(".lb-action-trash");
   const lbActionScores = Array.from(lb.querySelectorAll(".lb-action-score"));
-  const acUrl          = document.querySelector(".gallery-grid")?.dataset.acUrl || "";
+  const grid           = document.querySelector(".gallery-grid");
+  const acUrl          = grid?.dataset.acUrl || "";
+  const mmEnabled      = grid?.dataset.mmEnabled === "1";
+  const signalEnabled  = grid?.dataset.signalEnabled === "1";
+  if (mmEnabled || signalEnabled) lbActionShare.hidden = false;
 
   const items = Array.from(document.querySelectorAll(".gallery-item"));
   let current = 0;
@@ -277,6 +283,34 @@
     postAction(item.dataset.actionUrl, { action: "nsfw" }).then((data) => {
       item.dataset.nsfw = data.nsfw ? "1" : "0";
       lbActionNsfw.classList.toggle("lb-action-nsfw--on", data.nsfw);
+    });
+  });
+
+  lbActionShare.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const item = items[current];
+    const body = {};
+    if (mmEnabled) body.mattermost = "1";
+    if (signalEnabled) body.signal = "1";
+    lbActionShare.disabled = true;
+    lbActionShare.classList.add("lb-action-share--sending");
+    fetch(item.dataset.shareUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-CSRFToken": getCsrf(),
+      },
+      body: new URLSearchParams(body),
+    }).then((r) => r.text()).then(() => {
+      lbActionShare.classList.remove("lb-action-share--sending");
+      lbActionShare.classList.add("lb-action-share--sent");
+      setTimeout(() => {
+        lbActionShare.classList.remove("lb-action-share--sent");
+        lbActionShare.disabled = false;
+      }, 1200);
+    }).catch(() => {
+      lbActionShare.classList.remove("lb-action-share--sending");
+      lbActionShare.disabled = false;
     });
   });
 
