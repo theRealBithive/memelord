@@ -16,8 +16,6 @@ urlpatterns = [
     path("rate/nsfw/corpus/<str:content_hash>/purge/", views.purge_nsfw_corpus, name="purge_nsfw_corpus"),
     path("rate/nsfw/corpus/<str:content_hash>/fav/", views.toggle_fav_nsfw_corpus, name="toggle_fav_nsfw_corpus"),
     path("rate/nsfw/void/", views.rate_nsfw_void, name="rate_nsfw_void"),
-    path("rate/fav/", views.rate_fav, name="rate_fav"),
-    path("rate/nsfw/fav/", views.rate_nsfw_fav, name="rate_nsfw_fav"),
     path(
         "rate/<str:content_hash>/<str:action>/",
         views.submit_rating,

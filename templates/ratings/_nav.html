@@ -2,9 +2,6 @@
   <a href="{% url 'review_corpus' %}" class="nav-tab {% if mode == 'corpus' %}active{% endif %}">
     Rate<span class="badge" id="badge-queue">{{ queue_count }}</span>
   </a>
-  <a href="{% url 'rate_fav' %}" class="nav-tab {% if mode == 'fav' %}active{% endif %}">
-    Fav<span class="badge" id="badge-fav">{{ fav_count }}</span>
-  </a>
   <a href="{% url 'gallery' %}" class="nav-tab {% if mode == 'gallery' %}active{% endif %}">Gallery</a>
   <a href="{% url 'review_void' %}" class="nav-tab {% if mode == 'void' %}active{% endif %}">
     Trash<span class="badge" id="badge-void">{{ void_count }}</span>
@@ -14,9 +11,6 @@
     NSFW<span class="badge" id="badge-nsfw-queue">{{ nsfw_queue_count }}</span>
   </a>
   {% if 'nsfw' in mode %}
-  <a href="{% url 'rate_nsfw_fav' %}" class="nav-tab {% if mode == 'nsfw_fav' %}active{% endif %}">
-    <span class="nav-label-long">NSFW Fav</span><span class="nav-label-short">N.Fav</span><span class="badge" id="badge-nsfw-fav">{{ nsfw_fav_count }}</span>
-  </a>
   <a href="{% url 'rate_nsfw_void' %}" class="nav-tab {% if mode == 'nsfw_void' %}active{% endif %}">
     <span class="nav-label-long">NSFW Trash</span><span class="nav-label-short">N.Trash</span><span class="badge" id="badge-nsfw-void">{{ nsfw_void_count }}</span>
   </a>
