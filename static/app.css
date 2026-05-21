@@ -1302,6 +1302,7 @@ kbd {
 
 .lb-action-fav,
 .lb-action-nsfw,
+.lb-action-share,
 .lb-action-trash {
   padding: 0.3rem 0.5rem;
   background: var(--surface);
@@ -1319,6 +1320,10 @@ kbd {
 
 .lb-action-nsfw:hover  { color: #f472b6; border-color: #f472b6; }
 .lb-action-nsfw--on    { color: #f472b6; border-color: #f472b6; }
+
+.lb-action-share:hover         { color: #38bdf8; border-color: #38bdf8; }
+.lb-action-share--sending      { opacity: 0.5; }
+.lb-action-share--sent         { color: #4ade80; border-color: #4ade80; }
 
 .lb-action-trash:hover { color: var(--red); border-color: var(--red); }
 

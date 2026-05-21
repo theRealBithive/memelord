@@ -1679,11 +1679,12 @@ def share_image(request, content_hash):
     """
     image = get_object_or_404(Image, content_hash=content_hash)
     cfg, _ = NotificationConfig.objects.get_or_create(pk=1)
+    image_path = DATA_DIR / image.file_path
     media_url = request.build_absolute_uri(settings.MEDIA_URL + image.file_path)
     errors = []
     if request.POST.get("mattermost") and cfg.mattermost_enabled and cfg.mattermost_token:
         try:
-            notifiers.send_to_mattermost(cfg, media_url, image.source_label or "")
+            notifiers.send_to_mattermost(cfg, image_path, image.source_label or "")
         except Exception as exc:
             errors.append(f"Mattermost: {exc}")
     if request.POST.get("signal") and cfg.signal_enabled and cfg.signal_api_url:

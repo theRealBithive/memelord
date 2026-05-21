@@ -54,7 +54,10 @@
     </div>
 
     {% if images %}
-    <div class="gallery-grid" data-ac-url="{% url 'tag_autocomplete' %}">
+    <div class="gallery-grid"
+         data-ac-url="{% url 'tag_autocomplete' %}"
+         data-mm-enabled="{% if mm_enabled %}1{% else %}0{% endif %}"
+         data-signal-enabled="{% if signal_enabled %}1{% else %}0{% endif %}">
       {% for image in images %}
       <a href="{% url 'review_corpus_image' image.content_hash %}"
          class="gallery-item"
@@ -62,6 +65,7 @@
          data-fav="{% if image.is_favourite %}1{% else %}0{% endif %}"
          data-nsfw="{% if image.is_nsfw %}1{% else %}0{% endif %}"
          data-action-url="{% url 'gallery_action' image.content_hash %}"
+         data-share-url="{% url 'share_image' image.content_hash %}"
          data-tag-url="{% url 'update_image_tags' image.content_hash %}"
          data-tags="{% for t in image.tags.all %}{{ t.name }}{% if not forloop.last %},{% endif %}{% endfor %}"
          data-src="{% url 'serve_media' image.file_path %}">
