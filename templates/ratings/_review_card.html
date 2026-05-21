@@ -20,6 +20,7 @@
             title="{% if image.is_nsfw %}Marked NSFW — click to clear{% else %}Click to mark NSFW{% endif %}">
       🔞{% if image.is_nsfw %} nsfw{% endif %}
     </button>
+    {% include "ratings/_share_button.html" %}
   </div>
 
   <div class="card-tags">

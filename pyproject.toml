@@ -17,6 +17,7 @@ dependencies = [
     "django-q2>=1.7",
     "gunicorn>=23.0",
     "whitenoise>=6.8",
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]

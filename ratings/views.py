@@ -9,8 +9,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings.models import Image, LogEntry, ScrapeSchedule, Source, Tag
+from ratings.models import Image, LogEntry, NotificationConfig, ScrapeSchedule, Source, Tag
 from ratings.utils import move_image as _move_image_util, purge_image as _purge_image
+import ratings.notifiers as notifiers
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 
@@ -1346,3 +1347,49 @@ def gallery_action(request, content_hash: str):
         image.save(update_fields=["is_nsfw"])
 
     return JsonResponse({"score": image.score, "fav": image.is_favourite, "nsfw": image.is_nsfw})
+
+
+@login_required
+@require_POST
+def share_image(request, content_hash):
+    """
+    Share an image to Mattermost and/or Signal.
+
+    Sends synchronously — both APIs are expected to be on the same LAN so
+    latency is negligible. The image URL is built from the request so it works
+    regardless of the deployment domain.
+    """
+    image = get_object_or_404(Image, content_hash=content_hash)
+    cfg, _ = NotificationConfig.objects.get_or_create(pk=1)
+    media_url = request.build_absolute_uri(settings.MEDIA_URL + image.file_path)
+    errors = []
+    if request.POST.get("mattermost") and cfg.mattermost_enabled and cfg.mattermost_token:
+        try:
+            notifiers.send_to_mattermost(cfg, media_url, image.source_label or "")
+        except Exception as exc:
+            errors.append(f"Mattermost: {exc}")
+    if request.POST.get("signal") and cfg.signal_enabled and cfg.signal_api_url:
+        try:
+            notifiers.send_to_signal(cfg, media_url, image.source_label or "")
+        except Exception as exc:
+            errors.append(f"Signal: {exc}")
+    return render(request, "ratings/_share_toast.html", {"errors": errors})
+
+
+@login_required
+@require_POST
+def save_notification_config(request):
+    """Persist Mattermost and Signal notification settings from the Config UI."""
+    cfg, _ = NotificationConfig.objects.get_or_create(pk=1)
+    cfg.mattermost_enabled = request.POST.get("mattermost_enabled") == "1"
+    cfg.mattermost_base_url = request.POST.get("mattermost_base_url", "").strip()
+    cfg.mattermost_token = request.POST.get("mattermost_token", "").strip()
+    cfg.mattermost_channel_id = request.POST.get("mattermost_channel_id", "").strip()
+    cfg.mattermost_message_prefix = request.POST.get("mattermost_message_prefix", "").strip()
+    cfg.signal_enabled = request.POST.get("signal_enabled") == "1"
+    cfg.signal_api_url = request.POST.get("signal_api_url", "").strip()
+    cfg.signal_sender = request.POST.get("signal_sender", "").strip()
+    cfg.signal_recipients = request.POST.get("signal_recipients", "").strip()
+    cfg.signal_message_prefix = request.POST.get("signal_message_prefix", "").strip()
+    cfg.save()
+    return render(request, "ratings/_notification_config.html", {"notification_cfg": cfg})
