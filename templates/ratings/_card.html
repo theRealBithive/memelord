@@ -34,6 +34,20 @@
     <span class="count">{{ queue_count }} left</span>
   </div>
 
+  {% if similar %}{% if mode == "inbox" or mode == "corpus" or mode == "nsfw_inbox" or mode == "nsfw_corpus" %}
+  <div class="similar-strip" aria-label="Similar already-rated images">
+    {% for s in similar %}
+      {% if s.image.location == 'corpus' %}{% url 'review_corpus_image' s.image.content_hash as link %}{% else %}{% url 'review_void_image' s.image.content_hash as link %}{% endif %}
+      <a href="{{ link }}" class="similar-item" title="{{ s.similarity }}% similar · {% if s.image.location == 'corpus' %}rated{% if s.image.score %} {{ s.image.score }}{% endif %}{% else %}trashed{% endif %}">
+        <img src="{% url 'serve_thumbnail' s.image.file_path %}" alt="" loading="lazy">
+        {% if s.image.score %}<span class="similar-badge similar-score--{{ s.image.score }}">{{ s.image.score }}</span>{% endif %}
+        {% if s.image.is_favourite %}<span class="similar-fav">★</span>{% endif %}
+        {% if s.image.location == 'void' %}<span class="similar-trash">🗑</span>{% endif %}
+      </a>
+    {% endfor %}
+  </div>
+  {% endif %}{% endif %}
+
   <div class="card-tags">
     {% for tag in image.tags.all %}<span class="tag-pill" data-tag="{{ tag.name }}">#{{ tag.name }} <button class="tag-remove" aria-label="remove tag">×</button></span>{% endfor %}
     <input class="tag-input" type="text" placeholder="+ tag"
