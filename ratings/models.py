@@ -115,3 +115,35 @@ class ScrapeSchedule(models.Model):
         """Force pk=1 to maintain the singleton invariant."""
         self.pk = 1
         super().save(*args, **kwargs)
+
+
+class NotificationConfig(models.Model):
+    """
+    Singleton (pk=1) storing credentials for Mattermost and Signal sharing.
+
+    Mattermost uses a Personal Access Token so posts appear from the user's own
+    account rather than a bot. Signal requires signal-cli-rest-api running locally
+    or on the LAN — this model stores the endpoint URL and sender/recipient numbers.
+    """
+
+    # Mattermost
+    mattermost_enabled = models.BooleanField(default=False)
+    mattermost_base_url = models.CharField(max_length=255, blank=True)
+    mattermost_token = models.CharField(max_length=255, blank=True)
+    mattermost_channel_id = models.CharField(max_length=64, blank=True)
+    mattermost_message_prefix = models.CharField(max_length=255, blank=True)
+
+    # Signal
+    signal_enabled = models.BooleanField(default=False)
+    signal_api_url = models.CharField(max_length=255, blank=True)
+    signal_sender = models.CharField(max_length=32, blank=True)
+    signal_recipients = models.TextField(blank=True)  # comma-separated phone numbers
+    signal_message_prefix = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        verbose_name = "notification config"
+
+    def save(self, *args, **kwargs):
+        """Force pk=1 to maintain the singleton invariant."""
+        self.pk = 1
+        super().save(*args, **kwargs)

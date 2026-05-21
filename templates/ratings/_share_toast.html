@@ -1,0 +1,13 @@
+{% if errors %}
+  <span class="share-toast share-toast--error" id="share-toast">
+    {% for e in errors %}{{ e }}{% if not forloop.last %} · {% endif %}{% endfor %}
+  </span>
+{% else %}
+  <span class="share-toast share-toast--ok" id="share-toast">Shared ✓</span>
+{% endif %}
+<script>
+  (function(){
+    var el = document.getElementById('share-toast');
+    if (el) setTimeout(function(){ el.style.opacity='0'; setTimeout(function(){ el.remove(); }, 300); }, 2500);
+  })();
+</script>

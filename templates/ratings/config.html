@@ -86,6 +86,41 @@
       padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: 4px;
       background: var(--surface); color: var(--text); font-size: 0.8rem; cursor: pointer;
     }
+
+    .notif-section { margin-bottom: 2rem; }
+    .notif-service {
+      margin-bottom: 1.25rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+    .notif-service-header {
+      display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;
+    }
+    .notif-service-name { font-size: 0.8rem; font-weight: 600; }
+    .notif-badge { font-size: 0.7rem; }
+    .notif-badge--on { color: var(--green); }
+    .notif-badge--off { color: var(--muted); }
+    .notif-fields { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.6rem; }
+    .notif-input {
+      padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 5px;
+      background: var(--bg, #0a0a0a); color: var(--text); font-size: 0.8rem; outline: none;
+      width: 100%; box-sizing: border-box;
+    }
+    .notif-input:focus { border-color: #555; }
+    .notif-actions { display: flex; gap: 0.4rem; }
+
+    .share-btn {
+      padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); cursor: pointer; font-size: 0.85rem;
+      line-height: 1;
+    }
+    .share-btn:hover { color: var(--text); border-color: #555; }
+    .share-form { display: inline; }
+    .share-toast { font-size: 0.75rem; margin-left: 0.4rem; transition: opacity 0.3s; }
+    .share-toast--ok { color: var(--green); }
+    .share-toast--error { color: var(--red); }
   </style>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
@@ -111,6 +146,11 @@
     <div class="schedule-section">
       <div class="section-title">Auto-scrape</div>
       {% include "ratings/_schedule_status.html" %}
+    </div>
+
+    <div class="notif-section">
+      <div class="section-title">Sharing</div>
+      {% include "ratings/_notification_config.html" %}
     </div>
 
     <div class="config-header">

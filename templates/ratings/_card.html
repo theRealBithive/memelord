@@ -20,6 +20,7 @@
       🔞{% if image.is_nsfw %} nsfw{% endif %}
     </button>
     {% endif %}
+    {% include "ratings/_share_button.html" %}
     <span class="count">{{ queue_count }} left</span>
   </div>
 

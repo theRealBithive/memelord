@@ -1,0 +1,12 @@
+{% if mm_enabled or signal_enabled %}
+<form class="share-form"
+      hx-post="{% url 'share_image' image.content_hash %}"
+      hx-target="#share-toast"
+      hx-swap="outerHTML">
+  {% csrf_token %}
+  {% if mm_enabled %}<input type="hidden" name="mattermost" value="1">{% endif %}
+  {% if signal_enabled %}<input type="hidden" name="signal" value="1">{% endif %}
+  <button type="submit" class="share-btn" title="Share">↗</button>
+</form>
+<span id="share-toast"></span>
+{% endif %}
