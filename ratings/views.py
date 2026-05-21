@@ -18,6 +18,34 @@ _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 WEIGHTS_PATH = Path(settings.WEIGHTS_PATH)
 DATA_DIR = Path(settings.DATA_DIR)
 
+_taste_clf_cache = None
+_taste_clf_mtime: float | None = None
+
+
+def _get_taste_clf():
+    """Load (and cache) the taste classifier, reloading if weights change on disk."""
+    global _taste_clf_cache, _taste_clf_mtime
+    if not WEIGHTS_PATH.exists():
+        return None
+    mtime = WEIGHTS_PATH.stat().st_mtime
+    if _taste_clf_cache is None or mtime != _taste_clf_mtime:
+        from core import brain
+        _taste_clf_cache = brain.load_classifier(WEIGHTS_PATH)
+        _taste_clf_mtime = mtime
+    return _taste_clf_cache
+
+
+def _taste_prediction(image) -> int | None:
+    """Return P(corpus) as integer percentage 0–100, or None if unavailable."""
+    if not image or not image.embedding:
+        return None
+    clf = _get_taste_clf()
+    if clf is None:
+        return None
+    from core import brain
+    emb = brain.bytes_to_embedding(bytes(image.embedding))
+    return round(float(brain.predict_proba(clf, emb)) * 100)
+
 
 def index(request):
     return redirect("review_corpus")
@@ -131,6 +159,7 @@ def _build_ctx(
         "image": image,
         "queue_count": counts.get(f"{mode}_count", 0),
         "show_nsfw": show_nsfw,
+        "prediction": _taste_prediction(image),
         **counts,
     }
     if request is not None:
@@ -711,13 +740,15 @@ def _browse_ctx(
     hash_index = {h: i for i, h in enumerate(all_hashes)}
     idx = hash_index.get(content_hash, 0) if content_hash else 0
 
+    image = Image.objects.get(content_hash=all_hashes[idx])
     ctx = {
-        "image": Image.objects.get(content_hash=all_hashes[idx]),
+        "image": image,
         "prev_hash": all_hashes[idx - 1] if idx > 0 else None,
         "next_hash": all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None,
         "position": idx + 1,
         "total": len(all_hashes),
         "mode": mode,
+        "prediction": _taste_prediction(image),
         **base,
     }
     if request is not None:

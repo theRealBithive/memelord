@@ -11,7 +11,7 @@
     {% else %}
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
-    <span class="review-position">{{ position }} / {{ total }}</span>
+    <span class="review-position">{{ position }} / {{ total }}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
     <button class="nsfw-toggle-btn{% if image.is_nsfw %} nsfw-toggle-btn--on{% endif %}"
             hx-post="{% url 'toggle_nsfw' image.content_hash %}"
             hx-target="#void-card"

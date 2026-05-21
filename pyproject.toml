@@ -11,13 +11,17 @@ dependencies = [
     "torch>=2.10.0",
     "torchvision>=0.25.0",
     "playwright>=1.40",
-    "transformers>=4.45.0",
+    "transformers>=4.46,<4.50",
     "django>=5.0",
     "django-htmx>=1.21",
     "django-q2>=1.7",
     "gunicorn>=23.0",
     "whitenoise>=6.8",
     "requests>=2.32",
+    "timm>=1.0.27",
+    "protobuf>=4.25",
+    "sentencepiece>=0.2",
+    "einops>=0.7",
 ]
 
 [project.optional-dependencies]
