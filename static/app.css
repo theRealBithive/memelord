@@ -430,6 +430,31 @@ kbd {
   border-color: color-mix(in srgb, var(--purple) 30%, transparent);
 }
 
+.order-toggle-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 0.1rem 0.4rem;
+  letter-spacing: 0.04em;
+  transition: color 0.1s, background 0.1s, border-color 0.1s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.order-toggle-btn:hover {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+}
+
+.order-toggle-btn--on {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 15%, var(--surface));
+  border-color: color-mix(in srgb, var(--amber) 30%, transparent);
+}
+
 .btn-bad:hover,
 .btn-bad:active {
   background: color-mix(in srgb, var(--red) 15%, var(--surface));

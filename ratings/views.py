@@ -83,15 +83,50 @@ def _counts(show_nsfw: bool = False) -> dict:
     )
 
 
+def _get_uncertain_next(qs) -> Image | None:
+    """
+    Pick a random image from the top-30 most-uncertain inbox candidates.
+
+    "Uncertain" = predicted probability closest to 0.5 — these are the images
+    the classifier learns most from per rating (classic active learning). A
+    random pick from the top-K rather than always the single absolute most-
+    uncertain prevents visually-similar runs that would happen if the same
+    near-50% cluster came up rating after rating without an intervening retrain.
+    """
+    clf = _get_taste_clf()
+    if clf is None:
+        return None
+    candidates = [
+        (h, e) for h, e in qs.values_list("content_hash", "embedding") if e
+    ]
+    if not candidates:
+        return None
+    import numpy as np
+
+    embeddings = np.stack(
+        [np.frombuffer(bytes(e), dtype=np.float32) for _, e in candidates]
+    )
+    probas = clf.predict_proba(embeddings)[:, 1]
+    uncertainty_order = np.argsort(np.abs(probas - 0.5))
+    k = min(30, len(candidates))
+    pick_idx = int(np.random.choice(uncertainty_order[:k]))
+    return Image.objects.get(content_hash=candidates[pick_idx][0])
+
+
 def _get_next(
-    mode: str, exclude_hash: str | None = None, show_nsfw: bool = False
+    mode: str,
+    exclude_hash: str | None = None,
+    show_nsfw: bool = False,
+    order: str = "random",
 ) -> Image | None:
     """
-    Pick the next image for the swipe-style rating view (random order).
+    Pick the next image for the swipe-style rating view.
 
-    Random ordering intentionally avoids anchoring bias — sequential ordering
-    would cause the user to mentally anticipate the next image rather than
-    judging each one independently.
+    Default random order intentionally avoids anchoring bias — sequential
+    ordering would cause the user to mentally anticipate the next image rather
+    than judging each one independently. The "uncertain" order opts into
+    active-learning sampling for inbox modes only; it falls back to random
+    when no classifier is trained yet.
     """
     qs = Image.objects.filter(file_deleted=False)
 
@@ -104,11 +139,15 @@ def _get_next(
         if not show_nsfw:
             qs = qs.filter(is_nsfw=False)
 
-    qs = qs.order_by("?")
-
     if exclude_hash:
         qs = qs.exclude(content_hash=exclude_hash)
-    return qs.first()
+
+    if order == "uncertain" and mode in ("inbox", "nsfw_inbox"):
+        result = _get_uncertain_next(qs)
+        if result is not None:
+            return result
+
+    return qs.order_by("?").first()
 
 
 def _fmt_elapsed(seconds: int | None) -> str | None:
@@ -154,12 +193,16 @@ def _build_ctx(
 ) -> dict:
     """Build the minimal context dict shared by all swipe-mode rating templates."""
     counts = _counts(show_nsfw)
+    inbox_order = "random"
+    if request is not None:
+        inbox_order = request.session.get("inbox_order", "random")
     ctx = {
         "mode": mode,
         "image": image,
         "queue_count": counts.get(f"{mode}_count", 0),
         "show_nsfw": show_nsfw,
         "prediction": _taste_prediction(image),
+        "inbox_order": inbox_order,
         **counts,
     }
     if request is not None:
@@ -169,8 +212,21 @@ def _build_ctx(
 
 def _mode_view(request, mode: str):
     show_nsfw = request.session.get("show_nsfw", False)
-    image = _get_next(mode, show_nsfw=show_nsfw)
+    order = request.session.get("inbox_order", "random")
+    image = _get_next(mode, show_nsfw=show_nsfw, order=order)
     return render(request, "ratings/rate.html", _build_ctx(mode, image, show_nsfw, request))
+
+
+@login_required
+@require_POST
+def toggle_inbox_order(request):
+    """Flip inbox ordering between random and uncertain, then re-render the card."""
+    current = request.session.get("inbox_order", "random")
+    request.session["inbox_order"] = "uncertain" if current == "random" else "random"
+    mode = request.POST.get("mode", "inbox")
+    show_nsfw = request.session.get("show_nsfw", False)
+    image = _get_next(mode, show_nsfw=show_nsfw, order=request.session["inbox_order"])
+    return render(request, "ratings/_card.html", _build_ctx(mode, image, show_nsfw, request))
 
 
 def _move_image(image: Image, new_location: str) -> None:
@@ -295,7 +351,8 @@ def submit_rating(request, content_hash: str, action: str):
         image.is_nsfw = False
         image.save(update_fields=["is_nsfw"])
 
-    next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
+    order = request.session.get("inbox_order", "random")
+    next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order)
     ctx = _build_ctx(mode, next_image, show_nsfw, request)
     if request.htmx:
         return render(request, "ratings/_htmx_rating.html", ctx)
@@ -1094,7 +1151,8 @@ def toggle_nsfw(request, content_hash: str):
     image.is_nsfw = not image.is_nsfw
     image.save(update_fields=["is_nsfw"])
     if not show_nsfw and image.is_nsfw:
-        next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw)
+        order = request.session.get("inbox_order", "random")
+        next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order)
         if mode in ("inbox", "nsfw_inbox"):
             _mark_queue_seen(next_image)
         ctx = _build_ctx(mode, next_image, show_nsfw, request)
