@@ -115,8 +115,29 @@
     });
   }
 
+  function initSuggestionPills(container) {
+    container.querySelectorAll(".tag-suggestion-pill:not([data-init])").forEach((pill) => {
+      pill.dataset.init = "1";
+      pill.addEventListener("click", (e) => {
+        e.preventDefault();
+        const tag = pill.dataset.tag;
+        const url = pill.dataset.tagUrl;
+        if (!tag || !url) return;
+        const existing = getTagsFromContainer(container);
+        if (existing.includes(tag)) { pill.remove(); return; }
+        saveTags(url, [...existing, tag]).then((data) => {
+          renderPills(container, data.tags);
+          pill.remove();
+        });
+      });
+    });
+  }
+
   function initAll() {
-    document.querySelectorAll(".card-tags").forEach(initCardTags);
+    document.querySelectorAll(".card-tags").forEach((c) => {
+      initCardTags(c);
+      initSuggestionPills(c);
+    });
   }
 
   initAll();

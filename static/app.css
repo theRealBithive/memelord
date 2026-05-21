@@ -317,6 +317,12 @@ kbd {
   color: var(--muted);
 }
 
+.meta-pred {
+  color: var(--muted);
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Buttons ── */
 .btn-row {
   display: flex;
@@ -1277,6 +1283,46 @@ kbd {
 }
 
 .tag-add-btn:hover { border-color: #86efac; color: #86efac; }
+
+.tag-suggestion-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px dashed #2d3a2d;
+  color: #4a6a4a;
+  font-size: 0.72rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 120ms, color 120ms;
+}
+
+.tag-suggestion-pill:hover {
+  border-color: #86efac;
+  color: #86efac;
+}
+
+/* kNN-inherited tag suggestions: solid blueish border to distinguish from
+   Florence-2's dashed green visual-label pills. Same shape and click affordance. */
+.tag-suggestion-pill--knn {
+  border-style: solid;
+  border-color: #2d3a52;
+  color: #6a82b0;
+}
+
+.tag-suggestion-pill--knn:hover {
+  border-color: #a0b8e8;
+  color: #c4d4f8;
+}
+
+.suggestion-group {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
 
 .tag-input-wrap {
   position: relative;

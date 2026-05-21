@@ -11,7 +11,7 @@
     {% else %}
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
-    <span class="review-position">{{ position }} / {{ total }}{% if image.score %} · <span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if image.is_favourite %} ★{% endif %}</span>
+    <span class="review-position">{{ position }} / {{ total }}{% if image.score %} · <span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if image.is_favourite %} ★{% endif %}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
     <button class="nsfw-toggle-btn{% if image.is_nsfw %} nsfw-toggle-btn--on{% endif %}"
             hx-post="{% url 'toggle_nsfw' image.content_hash %}"
             hx-target="#review-card"
@@ -30,6 +30,8 @@
            data-autocomplete-url="{% url 'tag_autocomplete' %}"
            autocomplete="off">
     <div class="tag-autocomplete" hidden></div>
+    {% if image.keyword_suggestions_list %}<div class="suggestion-group suggestion-group--florence">{% for kw in image.keyword_suggestions_list %}<button class="tag-suggestion-pill" data-tag="{{ kw }}" data-tag-url="{% url 'update_image_tags' image.content_hash %}">{{ kw }}</button>{% endfor %}</div>{% endif %}
+    {% if image.knn_tag_suggestions_list %}<div class="suggestion-group suggestion-group--knn">{% for kw in image.knn_tag_suggestions_list %}<button class="tag-suggestion-pill tag-suggestion-pill--knn" data-tag="{{ kw }}" data-tag-url="{% url 'update_image_tags' image.content_hash %}">{{ kw }}</button>{% endfor %}</div>{% endif %}
   </div>
 
   <div class="score-row">
