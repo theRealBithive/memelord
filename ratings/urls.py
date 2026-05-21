@@ -24,7 +24,10 @@ urlpatterns = [
     path("nsfw-toggle/", views.nsfw_toggle, name="nsfw_toggle"),
     path("gallery/", views.gallery, name="gallery"),
     path("gallery/<str:content_hash>/action/", views.gallery_action, name="gallery_action"),
+    path("tags/", views.tag_list, name="tag_list"),
     path("tags/autocomplete/", views.tag_autocomplete, name="tag_autocomplete"),
+    path("tags/<int:pk>/rename/", views.tag_rename, name="tag_rename"),
+    path("tags/<int:pk>/delete/", views.tag_delete, name="tag_delete"),
     path("tags/<str:content_hash>/", views.update_image_tags, name="update_image_tags"),
     # Void grid — must be before the corpus wildcard routes.
     path("review/void/", views.review_void, name="review_void"),

@@ -1345,6 +1345,55 @@ def update_image_tags(request, content_hash: str):
 
 
 @login_required
+def tag_list(request):
+    """List all tags with image counts for management (rename / delete)."""
+    tags = list(Tag.objects.annotate(n=Count("images")).order_by("-n", "name"))
+    return render(request, "ratings/tags.html", {"tags": tags, **_counts()})
+
+
+@login_required
+def tag_rename(request, pk: int):
+    """
+    Rename a tag in-place.
+
+    GET ?edit=1 swaps the row for an inline edit form.
+    POST applies the rename; if the new name already exists the two tags are
+    merged — all images from the old tag move to the existing one and the old
+    record is deleted — so the user can consolidate typos without manual cleanup.
+    """
+    tag = get_object_or_404(Tag, pk=pk)
+    if request.method == "GET":
+        tag.n = tag.images.count()
+        tmpl = "_tag_row_edit.html" if request.GET.get("edit") else "_tag_row.html"
+        return render(request, f"ratings/{tmpl}", {"tag": tag})
+    new_name = request.POST.get("name", "").strip().lower()
+    if not new_name or new_name == tag.name:
+        tag.n = tag.images.count()
+        return render(request, "ratings/_tag_row.html", {"tag": tag})
+    existing = Tag.objects.filter(name=new_name).exclude(pk=pk).first()
+    if existing:
+        # Merge: move all images from the old tag to the existing one, then
+        # delete the old tag so there's no duplicate entry in the tag list.
+        for image in tag.images.all():
+            image.tags.add(existing)
+        tag.delete()
+        existing.n = existing.images.count()
+        return render(request, "ratings/_tag_row.html", {"tag": existing})
+    tag.name = new_name
+    tag.save(update_fields=["name"])
+    tag.n = tag.images.count()
+    return render(request, "ratings/_tag_row.html", {"tag": tag})
+
+
+@login_required
+@require_POST
+def tag_delete(request, pk: int):
+    """Delete a tag and remove it from all images that carry it."""
+    get_object_or_404(Tag, pk=pk).delete()
+    return HttpResponse("")
+
+
+@login_required
 @require_POST
 def gallery_action(request, content_hash: str):
     """
