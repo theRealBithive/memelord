@@ -1,6 +1,7 @@
 <div id="card">
 {% if image %}
 
+  {% if preload_url %}<link rel="preload" as="image" href="{{ MEDIA_URL }}{{ preload_url }}">{% endif %}
   <div class="image-wrap">
     <img src="{{ MEDIA_URL }}{{ image.file_path }}" alt="" loading="eager">
   </div>

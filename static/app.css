@@ -326,7 +326,9 @@ kbd {
 /* ── Buttons ── */
 .btn-row {
   display: flex;
-  height: var(--btn-h);
+  height: calc(var(--btn-h) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
   border-top: 1px solid var(--border);
 }
 
