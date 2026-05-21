@@ -385,6 +385,26 @@ def stats(request):
         file_deleted=False,
     ).count()
 
+    tag_breakdown = list(
+        Tag.objects.annotate(n=Count("images")).filter(n__gt=0).order_by("-n")[:20]
+    )
+
+    tagged_count = gallery_qs.filter(tags__isnull=False).distinct().count()
+    untagged_count = gallery_total - tagged_count
+
+    # Compute average inbox dwell time in Python — SQLite doesn't aggregate
+    # timedeltas natively and fetching (downloaded_at, rated_at) pairs is
+    # cheap at corpus scale.
+    inbox_durations = list(
+        Image.objects.filter(
+            location=Image.CORPUS, rated_at__isnull=False, file_deleted=False
+        ).values_list("downloaded_at", "rated_at")
+    )
+    avg_inbox_hours: int | None = None
+    if inbox_durations:
+        total_s = sum((r - d).total_seconds() for d, r in inbox_durations if r > d)
+        avg_inbox_hours = round(total_s / len(inbox_durations) / 3600)
+
     return render(
         request,
         "ratings/stats.html",
@@ -400,6 +420,10 @@ def stats(request):
             "source_breakdown": source_breakdown,
             "scraped_7d": scraped_7d,
             "rated_7d": rated_7d,
+            "tag_breakdown": tag_breakdown,
+            "tagged_count": tagged_count,
+            "untagged_count": untagged_count,
+            "avg_inbox_hours": avg_inbox_hours,
         },
     )
 
