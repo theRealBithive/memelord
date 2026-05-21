@@ -1,0 +1,103 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>memelord — tags</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  <style>
+    .tags-page {
+      padding: calc(var(--nav-h) + 1.5rem) 1.25rem 3rem;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    .tags-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    .tags-table th {
+      text-align: left;
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      padding: 0 0 0.6rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .tags-table td {
+      padding: 0.45rem 0;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .tags-table tr:last-child td { border-bottom: none; }
+    .tag-cell-name { width: 55%; }
+    .tag-cell-count { width: 15%; color: var(--muted); }
+    .tag-cell-actions { width: 30%; text-align: right; }
+    .tag-name-link {
+      color: #a78bfa;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .tag-name-link:hover { text-decoration: underline; }
+    .tag-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 4px;
+      padding: 0.2rem 0.55rem;
+      font-size: 0.72rem;
+      cursor: pointer;
+      margin-left: 0.35rem;
+    }
+    .tag-btn:hover { color: var(--fg); border-color: var(--fg); }
+    .tag-btn-delete:hover { color: var(--red); border-color: var(--red); }
+    .tag-btn-edit:hover { color: #a78bfa; border-color: #a78bfa; }
+    .tag-rename-form { display: flex; align-items: center; gap: 0.4rem; }
+    .tag-rename-input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid #a78bfa;
+      border-radius: 4px;
+      color: var(--fg);
+      padding: 0.25rem 0.5rem;
+      font-size: 0.875rem;
+      outline: none;
+    }
+    .empty-state { color: var(--muted); padding: 2rem 0; text-align: center; font-size: 0.875rem; }
+  </style>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+
+  {% include "ratings/_nav.html" with mode="tags" %}
+
+  <div class="tags-page">
+    <div class="section-title" style="font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:1rem;">
+      {{ tags|length }} tag{{ tags|length|pluralize }}
+    </div>
+
+    {% if tags %}
+    <table class="tags-table">
+      <thead>
+        <tr>
+          <th>Tag</th>
+          <th>Images</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tag in tags %}
+          {% include "ratings/_tag_row.html" %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No tags yet — add them from the rating or gallery views.</div>
+    {% endif %}
+  </div>
+</body>
+</html>

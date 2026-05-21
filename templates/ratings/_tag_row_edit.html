@@ -1,0 +1,17 @@
+<tr id="tag-row-{{ tag.pk }}">
+  <td class="tag-cell-name" colspan="2">
+    <form hx-post="{% url 'tag_rename' tag.pk %}"
+          hx-target="#tag-row-{{ tag.pk }}"
+          hx-swap="outerHTML"
+          class="tag-rename-form">
+      {% csrf_token %}
+      <input class="tag-rename-input" name="name" value="{{ tag.name }}" autofocus>
+      <button type="submit" class="tag-btn tag-btn-edit">save</button>
+      <button type="button" class="tag-btn"
+              hx-get="{% url 'tag_rename' tag.pk %}"
+              hx-target="#tag-row-{{ tag.pk }}"
+              hx-swap="outerHTML">cancel</button>
+    </form>
+  </td>
+  <td class="tag-cell-actions"></td>
+</tr>
