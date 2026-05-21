@@ -20,6 +20,15 @@
       🔞{% if image.is_nsfw %} nsfw{% endif %}
     </button>
     {% endif %}
+    {% if mode == "inbox" or mode == "nsfw_inbox" %}
+    <button class="order-toggle-btn{% if inbox_order == 'uncertain' %} order-toggle-btn--on{% endif %}"
+            hx-post="{% url 'toggle_inbox_order' %}"
+            hx-target="#card" hx-swap="outerHTML"
+            hx-vals='{"mode": "{{ mode }}"}'
+            title="{% if inbox_order == 'uncertain' %}Active learning on — showing images the model is least sure about. Tap for random.{% else %}Random order. Tap to surface images the model is least sure about (faster training).{% endif %}">
+      🎯{% if inbox_order == 'uncertain' %} uncertain{% endif %}
+    </button>
+    {% endif %}
     {% include "ratings/_share_button.html" %}
     {% if prediction is not None %}<span class="meta-pred">{{ prediction }}%</span>{% endif %}
     <span class="count">{{ queue_count }} left</span>

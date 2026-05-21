@@ -22,6 +22,7 @@ urlpatterns = [
         name="submit_rating",
     ),
     path("nsfw-toggle/", views.nsfw_toggle, name="nsfw_toggle"),
+    path("inbox/order/toggle/", views.toggle_inbox_order, name="toggle_inbox_order"),
     path("gallery/", views.gallery, name="gallery"),
     path("gallery/<str:content_hash>/action/", views.gallery_action, name="gallery_action"),
     path("tags/", views.tag_list, name="tag_list"),
