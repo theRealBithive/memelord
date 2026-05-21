@@ -10,11 +10,11 @@ It is a machine that watches you suffer, learns from it, and tries to suffer mor
 
 ## The loop
 
-1. **Scrape** — pull images from 4chan, Tumblr, Imgur, Pixelfed into an inbox
-2. **Review** — work through the queue: score 1–6, star favourites, trash the bad ones
+1. **Scrape** — pull images from 4chan, Tumblr, Imgur, Pixelfed, Mastodon into an inbox
+2. **Review** — swipe inbox images good/bad/fav, then score the keepers 1–6
 3. **Train** — DINOv2 encodes your rated images; a logistic regression learns your damage
 
-After enough ratings, the classifier starts auto-sorting new scrapes before they reach your queue. High-confidence good matches go straight to corpus. High-confidence bad matches go straight to void. You only see the confusing middle ground.
+After enough ratings the classifier starts auto-sorting new scrapes before they reach your queue. High-confidence good matches go straight to corpus. High-confidence bad matches go straight to void. You only see the confusing middle ground — and a 🎯 toggle on the inbox card lets you actively *target* that middle for fastest model improvement.
 
 ---
 
@@ -73,33 +73,77 @@ topics = ["pics"]
 
 [pixelfed]
 instance_base = "https://pixelfed.social"
+
+[mastodon]
+accounts = ["@user@instance.social"]
 ```
 
-Sources can also be managed directly from the **Config** page in the UI — add, toggle, delete, and import from config.toml without restarting. Mark a source NSFW and its images are quarantined to a separate review queue.
+Sources can also be managed directly from the **Config** page in the UI — add, toggle, delete, and import from `config.toml` without restarting. Mark a source NSFW and its images are quarantined to a separate review queue.
 
-Auto-scrape scheduling is also configured from the Config page: set an interval (1–168 hours) and the background worker picks it up immediately.
+Auto-scrape scheduling lives on the same Config page: set an interval (1–168 hours) and the background worker picks it up immediately.
 
----
-
-## Review
-
-The review queue shows unscored inbox and corpus images, unseen ones first.
-
-**Score 1–6** to rate an image (moves it to corpus). **Trash** sends it to void. **Star** marks a favourite (higher training weight). **Purge** hard-deletes it from disk and blocks re-download.
-
-| Queue | What's in it | Trash | Rescue |
-|---|---|---|---|
-| **Review** | inbox + unscored corpus | → void | — |
-| **NSFW Review** | is_nsfw=True, unscored | → void | — |
-| **Void** | trashed images | purge (permanent) | → corpus |
-
-Keyboard shortcuts: `1`–`6` to score, `f` to favourite, `t` to trash, `p` to purge, `n` to toggle NSFW. Arrow keys navigate prev/next.
+New downloads are deduplicated in three layers — SHA-256, perceptual hash, and DINO cosine similarity — so resizes, recompressions, and watermarked clones of images you've already seen never reach the queue.
 
 ---
 
-## Gallery
+## Curating images
 
-Scored corpus images (score ≥ filter) browsable with sort (newest / oldest / random), fav-only filter, and `#tag` filter. Tags are assigned per-image from the review queue or gallery.
+Two flows, depending on whether you're triaging a fresh inbox or polishing the corpus.
+
+### Swipe flow (inbox & NSFW inbox)
+
+Full-screen card, mobile-first, gesture-driven.
+
+| Gesture | Key | Action |
+|---|---|---|
+| Swipe right | `→` | Good — moves to corpus |
+| Swipe left | `←` | Bad — moves to void |
+| Swipe up | `↑` | Fav — moves to corpus with high training weight |
+| Swipe down | `↓` | Skip |
+| — | `N` | Toggle NSFW flag |
+
+Each card shows the classifier's confidence (`P(corpus)` as a percentage), an inline tag editor with Florence-2 keyword and kNN tag suggestions, and a horizontal strip of the six visually-most-similar already-rated images (with score / fav / trash badges) so you can rate consistently and see whether the model's neighborhood actually matches your taste.
+
+Tap the 🎯 button in the meta row to switch from random ordering to **active-learning mode** — the queue surfaces the images the classifier is least sure about, concentrating your ratings where they teach the model the most per click.
+
+The card preloads the next image while you're looking at the current one, so the rate→next swap is instant on mobile.
+
+### Corpus review
+
+A grid of scored corpus images for re-grading, re-tagging, or trashing. Keyboard: `1`–`6` to score, `f` to favourite, `t` to trash, `n` to toggle NSFW, arrows to navigate.
+
+### Void grid
+
+Bulk-review trashed images — rescue back to corpus or permanently **purge** (deletes from disk and blocks re-download by content hash).
+
+---
+
+## Tags
+
+Each image can carry free-form tags. Two suggestion sources auto-populate per image:
+
+- **Florence-2 keywords** — visual content labels ("dog", "comic", "screenshot") from the image itself
+- **kNN tag suggestions** — your own taste tags ("warhammer40k", "cursed") inherited from the visually-nearest already-tagged images via cosine similarity over DINO embeddings
+
+Tap a suggestion pill to apply it. A `#tag` filter on the gallery surfaces everything you've labelled the same way.
+
+The **Tags** page (under the `⋯` menu) lists all tags by image count. Rename inline; renaming to an existing name merges the two. Delete to strip a tag from every image that carries it.
+
+---
+
+## Gallery & stats
+
+The **Gallery** shows scored corpus images with controls for minimum score, sort order (newest / oldest / random), fav-only, and tag filter.
+
+The **Stats** page summarises queue / collection counts, score distribution, source breakdown, tagging coverage (tagged vs untagged corpus), top tags by image count, average inbox dwell time, the last training run's success/failure with error trace, and recent 7-day scrape & rate velocity.
+
+The **Logs** page surfaces background scrape and train output for in-app debugging.
+
+---
+
+## Sharing
+
+Configure Mattermost (personal access token, posts from your own account) or Signal (via signal-cli-rest-api) under Config → Notifications. Then any image gets a share button that posts the image URL to the configured channel / recipients with an optional prefix.
 
 ---
 
@@ -125,10 +169,11 @@ make test
 
 ### Stack
 
-- Django 6 + django-htmx (mobile-first UI, swipe gestures)
+- Django 6 + django-htmx (mobile-first UI, swipe gestures, image preload, haptic feedback)
 - django-q2 (background jobs, SQLite broker — no Redis)
-- PyTorch + DINOv2 ViT-B/14 (768-d image embeddings)
-- scikit-learn LogisticRegression (the taste oracle)
+- PyTorch + DINOv2 ViT-B/14 (768-d image embeddings for taste classifier + dedup + kNN)
+- Microsoft Florence-2 (caption + keyword extraction for tag suggestions)
+- scikit-learn LogisticRegression (the taste oracle + a separate NSFW classifier)
 - Playwright optional: used as fallback for Imgur topic pages and Pixelfed instances that don't serve the API without auth
 
 ---
