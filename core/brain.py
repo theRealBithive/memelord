@@ -56,9 +56,16 @@ def encode(
     transform: T.Compose | None = None,
     device: str | torch.device | None = None,
     batch_size: int = 32,
+    progress_label: str = "encode",
 ) -> tuple[np.ndarray, list[Path]]:
     """
     Encode images to 768-d DINOv2 embeddings.
+
+    Per-batch progress is logged via loguru so the in-app log viewer shows the
+    job is alive — a silent ViT-B/14 forward pass over thousands of images on
+    CPU can take 30+ minutes, which previously looked indistinguishable from a
+    crashed worker. progress_label disambiguates concurrent encode passes (e.g.
+    "train", "classify_inbox") in the log stream.
 
     Returns:
         (embeddings, valid_paths) — embeddings shape (N, 768) float32, and the
@@ -67,6 +74,9 @@ def encode(
         moved mid-training does not crash the job.
     """
     import logging
+    import time
+
+    from loguru import logger
 
     if not image_paths:
         return np.zeros((0, 768), dtype=np.float32), []
@@ -79,9 +89,19 @@ def encode(
     if transform is None:
         transform = get_transform()
 
+    total = len(image_paths)
+    n_batches = (total + batch_size - 1) // batch_size
+    # Cap to ~20 progress lines for large jobs so the log doesn't drown in noise.
+    log_every = max(1, n_batches // 20)
+    logger.info(
+        "{}: encoding {} images on {} ({} batches of {})",
+        progress_label, total, device, n_batches, batch_size,
+    )
+    t_start = time.monotonic()
+
     embeddings: list[np.ndarray] = []
     valid_paths: list[Path] = []
-    for start in range(0, len(image_paths), batch_size):
+    for batch_idx, start in enumerate(range(0, total, batch_size)):
         batch_paths = image_paths[start:start + batch_size]
         tensors: list[torch.Tensor] = []
         batch_valid: list[Path] = []
@@ -102,7 +122,18 @@ def encode(
             out = out[:, 0, :]
         embeddings.append(out.cpu().numpy().astype(np.float32))
         valid_paths.extend(batch_valid)
+        done = start + len(batch_paths)
+        if (batch_idx + 1) % log_every == 0 or done >= total:
+            elapsed = time.monotonic() - t_start
+            rate = done / elapsed if elapsed > 0 else 0.0
+            eta = (total - done) / rate if rate > 0 else 0.0
+            logger.info(
+                "{}: {}/{} encoded ({:.1f} img/s, ETA {:.0f}s)",
+                progress_label, done, total, rate, eta,
+            )
 
+    elapsed = time.monotonic() - t_start
+    logger.info("{}: encoding done in {:.0f}s", progress_label, elapsed)
     if not embeddings:
         return np.zeros((0, 768), dtype=np.float32), []
     return np.vstack(embeddings), valid_paths

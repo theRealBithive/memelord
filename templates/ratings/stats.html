@@ -99,6 +99,31 @@
     .bar-n     { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; }
 
     .action-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.75rem; }
+
+    .train-status {
+      margin-top: 0.5rem;
+      padding: 0.6rem 0.8rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+    .train-status.ok    { border-color: var(--green); }
+    .train-status.fail  { border-color: var(--red); }
+    .train-status .lbl  { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .train-status.ok   .lbl { color: var(--green); }
+    .train-status.fail .lbl { color: var(--red); }
+    .train-status .err {
+      font-family: monospace;
+      font-size: 0.72rem;
+      color: var(--red);
+      word-break: break-word;
+      white-space: pre-wrap;
+      max-height: 8rem;
+      overflow-y: auto;
+    }
   </style>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
@@ -154,9 +179,16 @@
     <div class="section">
       <div class="section-title">Model</div>
       <div class="meta-row">
-        <span>Last trained</span>
+        <span>Weights saved</span>
         <span class="meta-val">{% if last_trained %}{{ last_trained|date:"Y-m-d H:i" }} UTC{% else %}Never{% endif %}</span>
       </div>
+      {% if last_train %}
+      <div class="train-status {% if last_train.ok %}ok{% else %}fail{% endif %}">
+        <span class="lbl">Last training run · {% if last_train.ok %}succeeded{% else %}failed{% endif %}</span>
+        <span>{{ last_train.stopped|date:"Y-m-d H:i" }} UTC</span>
+        {% if last_train.error %}<span class="err">{{ last_train.error }}</span>{% endif %}
+      </div>
+      {% endif %}
       <div class="meta-row">
         <span>Training data</span>
         <span class="meta-val">{{ gallery_total }} gallery + {{ void_count }} trash</span>

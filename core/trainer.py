@@ -87,9 +87,10 @@ def _backfill_phash_embedding(
     """
     Persist phash and embedding on Image rows after encoding.
 
-    Images scraped before the embedding column was added (or before DINOv2 was
-    available) have null embedding fields. Training backfills these so the next
-    scrape's dedup index is fully populated from the DB without re-encoding.
+    Only fills rows that don't already have a value — re-saving every row on
+    every training run was previously the dominant cost on large libraries
+    (one disk read for phash plus one DB write per image, even when both
+    fields were already populated from the prior scrape).
     """
     from core import phash as phash_mod
     from ratings.models import Image
@@ -99,14 +100,30 @@ def _backfill_phash_embedding(
         for img in Image.objects.filter(file_deleted=False)
         if (data_dir / img.file_path).exists()
     }
+    backfilled_phash = 0
+    backfilled_emb = 0
     for path_str, emb in path_to_emb.items():
         img = path_to_img.get(path_str)
         if img is None:
             continue
-        ph = phash_mod.compute_phash(Path(path_str))
-        img.phash = ph
-        img.embedding = brain.embedding_to_bytes(emb)
-        img.save(update_fields=["phash", "embedding"])
+        update_fields: list[str] = []
+        if not img.phash:
+            img.phash = phash_mod.compute_phash(Path(path_str))
+            update_fields.append("phash")
+            backfilled_phash += 1
+        if img.embedding is None:
+            img.embedding = brain.embedding_to_bytes(emb)
+            update_fields.append("embedding")
+            backfilled_emb += 1
+        if update_fields:
+            img.save(update_fields=update_fields)
+    if backfilled_phash or backfilled_emb:
+        logger.info(
+            "Backfilled {} phash and {} embedding rows",
+            backfilled_phash, backfilled_emb,
+        )
+    else:
+        logger.info("No phash/embedding backfill needed (all rows up to date)")
 
 
 def run(
@@ -141,10 +158,21 @@ def run(
         set(corpus_paths + void_paths + (nsfw_paths + safe_paths if train_nsfw else []))
     )
 
-    logger.info("Encoding {} unique images with DINOv2", len(all_paths))
+    if train_nsfw:
+        logger.info(
+            "Training data: {} corpus + {} void, NSFW: {} nsfw + {} safe",
+            len(corpus_paths), len(void_paths), len(nsfw_paths), len(safe_paths),
+        )
+    else:
+        logger.info(
+            "Training data: {} corpus + {} void", len(corpus_paths), len(void_paths)
+        )
+    logger.info("Loading DINOv2 encoder…")
     encoder = brain.get_encoder()
     transform = brain.get_transform()
-    X_all, valid_all_paths = brain.encode(encoder, all_paths, transform=transform)
+    X_all, valid_all_paths = brain.encode(
+        encoder, all_paths, transform=transform, progress_label="train"
+    )
     path_to_emb = {str(p): X_all[i] for i, p in enumerate(valid_all_paths)}
 
     # Re-filter each list to paths that were actually encoded (handles files moved mid-run).

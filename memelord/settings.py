@@ -107,8 +107,8 @@ DATABASES = {
 Q_CLUSTER = {
     "name": "memelord",
     "workers": 1,
-    "timeout": 3600,
-    "retry": 25200,
+    "timeout": 14400,
+    "retry": 28800,
     "max_attempts": 1,
     "orm": "default",
 }
