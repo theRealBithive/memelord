@@ -70,7 +70,7 @@ def _get_next(
     if mode == "nsfw_fav":
         qs = qs.filter(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
     elif mode.startswith("nsfw_"):
-        qs = qs.filter(location=mode[5:], is_nsfw=True)
+        qs = qs.filter(location=mode.removeprefix("nsfw_"), is_nsfw=True)
     else:
         qs = qs.filter(location=mode)
         if not show_nsfw:
@@ -91,6 +91,15 @@ def _fmt_elapsed(seconds: int | None) -> str | None:
     return f"{seconds // 60}m {seconds % 60}s"
 
 
+def _elapsed_from_session(request) -> int | None:
+    """Return seconds since training_started_at was recorded in the session, or None."""
+    started_at_str = request.session.get("training_started_at")
+    if not started_at_str:
+        return None
+    started_at = datetime.fromisoformat(started_at_str)
+    return int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
+
+
 def _training_ctx(request) -> dict:
     """
     Build the training-progress context fragment for templates.
@@ -104,15 +113,11 @@ def _training_ctx(request) -> dict:
     task_id = request.session.get("training_task_id")
     if not task_id:
         return {"active_task_id": None, "training_elapsed": None}
-    started_at_str = request.session.get("training_started_at")
-    elapsed = None
-    if started_at_str:
-        started_at = datetime.fromisoformat(started_at_str)
-        elapsed = int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
-        if elapsed > 14400:
-            request.session.pop("training_task_id", None)
-            request.session.pop("training_started_at", None)
-            return {"active_task_id": None, "training_elapsed": None}
+    elapsed = _elapsed_from_session(request)
+    if elapsed is not None and elapsed > 14400:
+        request.session.pop("training_task_id", None)
+        request.session.pop("training_started_at", None)
+        return {"active_task_id": None, "training_elapsed": None}
     return {"active_task_id": task_id, "training_elapsed": _fmt_elapsed(elapsed)}
 
 
@@ -445,11 +450,7 @@ def train_status(request, task_id: str):
 
     task = fetch(task_id)
     if task is None or task.stopped is None:
-        started_at_str = request.session.get("training_started_at")
-        elapsed = None
-        if started_at_str:
-            started_at = datetime.fromisoformat(started_at_str)
-            elapsed = int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
+        elapsed = _elapsed_from_session(request)
         return render(
             request,
             "ratings/_train_pending.html",
