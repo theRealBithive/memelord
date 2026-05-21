@@ -135,7 +135,9 @@ def _process_candidates(
         return 0
 
     paths = [c[0] for c in candidates]
-    embeddings, valid_paths = brain.encode(encoder, paths, transform=transform)
+    embeddings, valid_paths = brain.encode(
+        encoder, paths, transform=transform, progress_label="scrape"
+    )
     path_to_emb = dict(zip(valid_paths, embeddings))
     inserted = 0
 
@@ -212,7 +214,9 @@ def classify_inbox(
     if transform is None:
         transform = brain.get_transform()
     paths = [data_dir / img.file_path for img in images]
-    embeddings, valid_paths = brain.encode(encoder, paths, transform=transform)
+    embeddings, valid_paths = brain.encode(
+        encoder, paths, transform=transform, progress_label="classify_inbox"
+    )
     path_to_emb = dict(zip(valid_paths, embeddings))
 
     taste_clf = None

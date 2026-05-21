@@ -1,5 +1,5 @@
 <div id="log-poll"
-     hx-get="{% url 'log_entries' %}?since={{ next_since }}"
+     hx-get="{% url 'log_entries' %}?since={{ next_since }}{% if active_source and active_source != 'all' %}&source={{ active_source }}{% endif %}"
      hx-trigger="every 2s"
      hx-swap="outerHTML">
 </div>

@@ -105,9 +105,10 @@ def _training_ctx(request) -> dict:
     Build the training-progress context fragment for templates.
 
     django-q doesn't expose task progress over HTTP, so elapsed time is tracked
-    via session storage on the web process side. The 1800s (30 min) timeout
-    discards orphaned task IDs if the worker never completed or reported back —
-    without it a crashed worker would leave the UI permanently showing "Training…"
+    via session storage on the web process side. The 14400s (4h) cutoff matches
+    Q_CLUSTER["timeout"] so the UI gives up at the same moment the worker would
+    have killed the task — without it a crashed worker would leave the UI
+    permanently showing "Training…".
     """
     task_id = request.session.get("training_task_id")
     if not task_id:
@@ -117,7 +118,7 @@ def _training_ctx(request) -> dict:
     if started_at_str:
         started_at = datetime.fromisoformat(started_at_str)
         elapsed = int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
-        if elapsed > 1800:
+        if elapsed > 14400:
             request.session.pop("training_task_id", None)
             request.session.pop("training_started_at", None)
             return {"active_task_id": None, "training_elapsed": None}
@@ -299,11 +300,16 @@ def stats(request):
     """
     Render the stats dashboard.
 
-    last_trained is derived from the weights file mtime rather than a DB field
-    because the weights file is the ground truth — a DB timestamp could drift
-    if the file was replaced out-of-band (e.g. docker volume swap or manual
-    copy from another machine).
+    last_trained is derived from the weights file mtime — the weights file is
+    the ground truth for "last successful save" (a DB timestamp could drift if
+    the file was replaced out-of-band). last_train_task surfaces the most
+    recent django-q run regardless of outcome so a user can tell the
+    difference between "trained successfully yesterday" and "tried this
+    morning and crashed" — without it, a failed retrain shows the same stale
+    mtime as before the attempt.
     """
+    from django_q.models import Task
+
     show_nsfw = request.session.get("show_nsfw", False)
     counts = _counts(show_nsfw)
 
@@ -313,6 +319,33 @@ def stats(request):
         last_trained = datetime.fromtimestamp(mtime, tz=dt_timezone.utc)
     except FileNotFoundError:
         pass
+
+    last_train_task = (
+        Task.objects.filter(func="ratings.tasks.run_train")
+        .order_by("-stopped")
+        .first()
+    )
+    last_train_info: dict | None = None
+    if last_train_task is not None:
+        result = last_train_task.result if isinstance(last_train_task.result, dict) else {}
+        # success=True from django-q only means the worker returned without raising —
+        # run_train catches its own exceptions and returns {"ok": False, "error": ...},
+        # so the in-app notion of "succeeded" needs both flags.
+        ok = bool(last_train_task.success and result.get("ok", True))
+        error = None
+        if not ok:
+            if isinstance(result, dict) and result.get("error"):
+                error = str(result["error"])
+            elif last_train_task.result:
+                error = str(last_train_task.result)[:500]
+            else:
+                error = "Task exited without a result."
+        last_train_info = {
+            "ok": ok,
+            "stopped": last_train_task.stopped,
+            "started": last_train_task.started,
+            "error": error,
+        }
 
     gallery_qs = Image.objects.filter(location=Image.CORPUS, file_deleted=False, score__isnull=False)
     if not show_nsfw:
@@ -345,6 +378,7 @@ def stats(request):
             **_training_ctx(request),
             "show_nsfw": show_nsfw,
             "last_trained": last_trained,
+            "last_train": last_train_info,
             "gallery_total": gallery_total,
             "score_dist": score_dist,
             "score_dist_max": score_dist_max,
@@ -591,11 +625,30 @@ def source_import(request):
     )
 
 
+_LOG_SOURCES = {"scrape", "train"}
+
+
+def _log_source_filter(request) -> str | None:
+    """Return the ?source= filter if it matches a known source, else None for 'all'."""
+    src = request.GET.get("source", "").strip().lower()
+    return src if src in _LOG_SOURCES else None
+
+
 @login_required
 def logs_page(request):
-    """Show the 500 most recent log entries; next_since seeds the HTMX polling interval."""
+    """
+    Show the 500 most recent log entries, optionally filtered by source.
+
+    Source filter is a query param (?source=train|scrape) so it survives an
+    HTMX swap of the entries fragment — the polling endpoint reads the same
+    value and only returns entries matching the active source.
+    """
     show_nsfw = request.session.get("show_nsfw", False)
-    entries = list(LogEntry.objects.order_by("-pk")[:500])
+    source = _log_source_filter(request)
+    qs = LogEntry.objects.all()
+    if source:
+        qs = qs.filter(source=source)
+    entries = list(qs.order_by("-pk")[:500])
     next_since = entries[0].pk if entries else 0
     return render(
         request,
@@ -606,6 +659,7 @@ def logs_page(request):
             "show_nsfw": show_nsfw,
             "entries": entries,
             "next_since": next_since,
+            "active_source": source or "all",
         },
     )
 
@@ -617,7 +671,11 @@ def log_entries(request):
         since_id = int(request.GET.get("since", 0))
     except (ValueError, TypeError):
         since_id = 0
-    entries = list(LogEntry.objects.filter(pk__gt=since_id).order_by("-pk")[:100])
+    source = _log_source_filter(request)
+    qs = LogEntry.objects.filter(pk__gt=since_id)
+    if source:
+        qs = qs.filter(source=source)
+    entries = list(qs.order_by("-pk")[:100])
     next_since = entries[-1].pk if entries else since_id
     return render(
         request,
@@ -625,6 +683,7 @@ def log_entries(request):
         {
             "entries": entries,
             "next_since": next_since,
+            "active_source": source or "all",
         },
     )
 

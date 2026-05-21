@@ -43,6 +43,21 @@
     }
     .logs-clear:hover { border-color: var(--red); color: var(--red); }
 
+    .logs-filter { display: flex; gap: 0.25rem; }
+    .logs-filter a {
+      padding: 0.3rem 0.7rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.7rem;
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .logs-filter a:hover { color: var(--text); border-color: var(--text); }
+    .logs-filter a.active { color: var(--text); border-color: var(--text); background: var(--surface); }
+    .logs-actions { display: flex; align-items: center; gap: 0.75rem; }
+
     #log-body {
       flex: 1;
       overflow-y: auto;
@@ -97,10 +112,17 @@
   <div class="logs-page">
     <div class="logs-toolbar">
       <span class="logs-title">Activity log</span>
-      <form method="post" action="{% url 'log_clear' %}">
-        {% csrf_token %}
-        <button type="submit" class="logs-clear">Clear</button>
-      </form>
+      <div class="logs-actions">
+        <nav class="logs-filter" aria-label="Filter by source">
+          <a href="{% url 'logs' %}" class="{% if active_source == 'all' %}active{% endif %}">All</a>
+          <a href="{% url 'logs' %}?source=train" class="{% if active_source == 'train' %}active{% endif %}">Train</a>
+          <a href="{% url 'logs' %}?source=scrape" class="{% if active_source == 'scrape' %}active{% endif %}">Scrape</a>
+        </nav>
+        <form method="post" action="{% url 'log_clear' %}">
+          {% csrf_token %}
+          <button type="submit" class="logs-clear">Clear</button>
+        </form>
+      </div>
     </div>
 
     <div id="log-body">
