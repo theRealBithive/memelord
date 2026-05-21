@@ -228,6 +228,43 @@
       </div>
     </div>
 
+    <div class="section">
+      <div class="section-title">Tagging</div>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="big" style="color:#a78bfa">{{ tagged_count }}</div>
+          <div class="label">Tagged</div>
+        </div>
+        <div class="stat-card">
+          <div class="big" style="color:var(--muted)">{{ untagged_count }}</div>
+          <div class="label">Untagged</div>
+        </div>
+        {% if avg_inbox_hours is not None %}
+        <div class="stat-card">
+          <div class="big" style="color:var(--amber)">{{ avg_inbox_hours }}h</div>
+          <div class="label">Avg inbox wait</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if tag_breakdown %}
+    <div class="section">
+      <div class="section-title">Top tags</div>
+      {% with max_n=tag_breakdown.0.n %}
+      {% for tag in tag_breakdown %}
+      <div class="source-row">
+        <a href="{% url 'gallery' %}?tag={{ tag.name }}" class="source-name" title="{{ tag.name }}">#{{ tag.name }}</a>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:{% widthratio tag.n max_n 100 %}%; background:#a78bfa;"></div>
+        </div>
+        <span class="bar-n">{{ tag.n }}</span>
+      </div>
+      {% endfor %}
+      {% endwith %}
+    </div>
+    {% endif %}
+
     {% if source_breakdown %}
     <div class="section">
       <div class="section-title">Gallery by source</div>
