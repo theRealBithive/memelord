@@ -19,6 +19,14 @@ _SOURCE_MAP = [
     (Source.TUMBLR, "tumblr", "blogs", "blogs"),
 ]
 
+# Scrapers that share the same iter_image_urls / download_images(urls, dir, name, skip_dirs)
+# interface. Pixelfed and Mastodon have different signatures so they stay explicit below.
+_SIMPLE_SCRAPERS = [
+    (fourchan, "boards", "4chan/{}"),
+    (imgur, "topics", "imgur/{}"),
+    (tumblr, "blogs", "tumblr/{}"),
+]
+
 
 @dataclass
 class VisionConfig:
@@ -302,31 +310,15 @@ def run(
 
     counts: dict[str, int] = {}
 
-    for board in sources["boards"]:
-        logger.info("Scraping 4chan /{}/", board)
-        urls = fourchan.iter_image_urls(board)
-        downloaded = fourchan.download_images(
-            urls, inbox_dir, board, skip_dirs=skip_dirs
-        )
-        counts[f"4chan/{board}"] = _process_downloads(
-            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
-        )
-
-    for topic in sources["topics"]:
-        logger.info("Scraping Imgur: {}", topic)
-        urls = imgur.iter_image_urls(topic)
-        downloaded = imgur.download_images(urls, inbox_dir, topic, skip_dirs=skip_dirs)
-        counts[f"imgur/{topic}"] = _process_downloads(
-            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
-        )
-
-    for blog in sources["blogs"]:
-        logger.info("Scraping Tumblr: {}", blog)
-        urls = tumblr.iter_image_urls(blog)
-        downloaded = tumblr.download_images(urls, inbox_dir, blog, skip_dirs=skip_dirs)
-        counts[f"tumblr/{blog}"] = _process_downloads(
-            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
-        )
+    for module, sources_key, label_fmt in _SIMPLE_SCRAPERS:
+        for name in sources[sources_key]:
+            label = label_fmt.format(name)
+            logger.info("Scraping {}", label)
+            urls = module.iter_image_urls(name)
+            downloaded = module.download_images(urls, inbox_dir, name, skip_dirs=skip_dirs)
+            counts[label] = _process_downloads(
+                downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
+            )
 
     if sources["pixelfed"]:
         logger.info("Scraping Pixelfed: {}", sources["pixelfed"])

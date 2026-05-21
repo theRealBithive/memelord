@@ -86,8 +86,6 @@ def run_train():
             nsfw_threshold=settings.NSFW_THRESHOLD,
         )
         return {"ok": True}
-    except RuntimeError as exc:
-        return {"ok": False, "error": str(exc)}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     finally:
