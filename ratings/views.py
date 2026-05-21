@@ -208,6 +208,53 @@ def _get_uncertain_next(qs) -> Image | None:
     return Image.objects.get(content_hash=candidates[pick_idx][0])
 
 
+def _image_matches_mode(img: Image, mode: str, show_nsfw: bool) -> bool:
+    """
+    Whether an Image is still a valid candidate for the swipe queue of `mode`.
+
+    Used to validate a session-stored preload hash before consuming it — the
+    image could have been rated in another tab, purged, or had its NSFW flag
+    toggled between the GET that produced the preload and the POST that uses it.
+    """
+    if img.file_deleted or img.is_purged:
+        return False
+    if mode == "nsfw_fav":
+        return img.location == Image.CORPUS and img.is_favourite and img.is_nsfw
+    if mode == "fav":
+        return img.location == Image.CORPUS and img.is_favourite
+    if mode.startswith("nsfw_"):
+        target = mode.removeprefix("nsfw_")
+        return img.location == target and img.is_nsfw
+    if not show_nsfw and img.is_nsfw:
+        return False
+    return img.location == mode
+
+
+def _next_image_for_session(
+    request,
+    mode: str,
+    exclude_hash: str | None = None,
+    show_nsfw: bool = False,
+    order: str = "random",
+) -> Image | None:
+    """
+    Return the preloaded image from the session if it's still a valid candidate,
+    otherwise fall back to a fresh _get_next pick.
+
+    The preload mechanism (set in _build_ctx) lets the browser fetch the next
+    image while the user is still looking at the current card; consuming the
+    same hash here is what makes the rate→next-card swap actually instant —
+    the served image hits the preload cache rather than a fresh network round-trip.
+    """
+    stored_hash = request.session.get("preloaded_hash")
+    stored_mode = request.session.get("preloaded_mode")
+    if stored_hash and stored_hash != exclude_hash and stored_mode == mode:
+        img = Image.objects.filter(content_hash=stored_hash).first()
+        if img and _image_matches_mode(img, mode, show_nsfw):
+            return img
+    return _get_next(mode, exclude_hash=exclude_hash, show_nsfw=show_nsfw, order=order)
+
+
 def _get_next(
     mode: str,
     exclude_hash: str | None = None,
@@ -289,8 +336,28 @@ def _build_ctx(
     """Build the minimal context dict shared by all swipe-mode rating templates."""
     counts = _counts(show_nsfw)
     inbox_order = "random"
+    preload_url: str | None = None
     if request is not None:
         inbox_order = request.session.get("inbox_order", "random")
+        if image is not None:
+            # Pre-pick the image that should follow this one and stash its hash
+            # in the session — _next_image_for_session consumes it on the next
+            # rating request, and the template renders <link rel="preload"> so
+            # the browser fetches it while the user is still looking at the
+            # current card. Result: rate→next swap is served from cache.
+            next_img = _get_next(
+                mode,
+                exclude_hash=image.content_hash,
+                show_nsfw=show_nsfw,
+                order=inbox_order,
+            )
+            if next_img is not None:
+                preload_url = next_img.file_path
+                request.session["preloaded_hash"] = next_img.content_hash
+                request.session["preloaded_mode"] = mode
+            else:
+                request.session.pop("preloaded_hash", None)
+                request.session.pop("preloaded_mode", None)
     ctx = {
         "mode": mode,
         "image": image,
@@ -299,6 +366,7 @@ def _build_ctx(
         "prediction": _taste_prediction(image),
         "inbox_order": inbox_order,
         "similar": _get_similar_rated(image) if image else [],
+        "preload_url": preload_url,
         **counts,
     }
     if request is not None:
@@ -455,7 +523,9 @@ def submit_rating(request, content_hash: str, action: str):
         image.save(update_fields=["is_nsfw"])
 
     order = request.session.get("inbox_order", "random")
-    next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order)
+    next_image = _next_image_for_session(
+        request, mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order
+    )
     ctx = _build_ctx(mode, next_image, show_nsfw, request)
     if request.htmx:
         return render(request, "ratings/_htmx_rating.html", ctx)
@@ -1255,7 +1325,9 @@ def toggle_nsfw(request, content_hash: str):
     image.save(update_fields=["is_nsfw"])
     if not show_nsfw and image.is_nsfw:
         order = request.session.get("inbox_order", "random")
-        next_image = _get_next(mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order)
+        next_image = _next_image_for_session(
+            request, mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order
+        )
         if mode in ("inbox", "nsfw_inbox"):
             _mark_queue_seen(next_image)
         ctx = _build_ctx(mode, next_image, show_nsfw, request)

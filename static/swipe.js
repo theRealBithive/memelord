@@ -3,6 +3,15 @@
   let swipeActive = false;
   const THRESHOLD = 55;
 
+  // Short haptic confirm on any rate action — fires once per click regardless of
+  // whether the click came from a tap, a swipe (which synthesises a click), or
+  // the keyboard map below.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn || !navigator.vibrate) return;
+    navigator.vibrate(15);
+  }, true);
+
   function trigger(action) {
     if (action === "nsfw_toggle") {
       const btn = document.querySelector(".nsfw-toggle-btn");
