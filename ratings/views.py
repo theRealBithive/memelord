@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from ratings.models import Image, LogEntry, NotificationConfig, ScrapeSchedule, Source, Tag
-from ratings.utils import move_image as _move_image_util, purge_image as _purge_image
+from ratings.utils import move_image as _move_image_util, purge_image as _purge_image_util
 import ratings.notifiers as notifiers
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
@@ -20,6 +20,10 @@ DATA_DIR = Path(settings.DATA_DIR)
 
 _taste_clf_cache = None
 _taste_clf_mtime: float | None = None
+
+_similar_index_cache: dict | None = None
+_similar_index_built_at: float = 0.0
+_SIMILAR_INDEX_TTL = 300.0
 
 
 def _get_taste_clf():
@@ -45,6 +49,97 @@ def _taste_prediction(image) -> int | None:
     from core import brain
     emb = brain.bytes_to_embedding(bytes(image.embedding))
     return round(float(brain.predict_proba(clf, emb)) * 100)
+
+
+def _get_similar_index() -> dict | None:
+    """
+    Cache (hashes, embeddings) of every rated image for fast kNN at view time.
+
+    Held at module scope with a 5-minute TTL plus explicit invalidation on
+    rating writes — the matrix multiplication itself is sub-millisecond but
+    rebuilding the matrix from a DB scan of binary blobs would dominate the
+    per-request cost without this cache.
+    """
+    global _similar_index_cache, _similar_index_built_at
+    import time
+
+    now = time.monotonic()
+    if (
+        _similar_index_cache is not None
+        and now - _similar_index_built_at < _SIMILAR_INDEX_TTL
+    ):
+        return _similar_index_cache
+
+    rows = list(
+        Image.objects.filter(
+            location__in=[Image.CORPUS, Image.VOID],
+            file_deleted=False,
+            is_purged=False,
+        )
+        .exclude(embedding=None)
+        .values_list("content_hash", "embedding")
+    )
+    if not rows:
+        _similar_index_cache = None
+    else:
+        import numpy as np
+
+        hashes = [r[0] for r in rows]
+        embeddings = np.stack(
+            [np.frombuffer(bytes(r[1]), dtype=np.float32) for r in rows]
+        )
+        _similar_index_cache = {"hashes": hashes, "embeddings": embeddings}
+    _similar_index_built_at = now
+    return _similar_index_cache
+
+
+def _invalidate_similar_index() -> None:
+    """Drop the kNN cache so the next request rebuilds it with fresh ratings."""
+    global _similar_index_cache
+    _similar_index_cache = None
+
+
+def _get_similar_rated(image, k: int = 6) -> list[dict]:
+    """
+    Return the top-K most cosine-similar already-rated images.
+
+    Shown alongside the rate card so the user can see how they (or the model)
+    treated visually-comparable images before — a consistency aid, and a
+    live read on whether the embedding neighbourhood reflects actual taste.
+    """
+    if not image or not image.embedding:
+        return []
+    idx = _get_similar_index()
+    if not idx:
+        return []
+    import numpy as np
+
+    from core import brain
+
+    q = brain.bytes_to_embedding(bytes(image.embedding))
+    sims = brain.cosine_similarity_matrix(q, idx["embeddings"])
+    own_hash = image.content_hash
+    order = np.argsort(-sims)
+    picks: list[tuple[str, float]] = []
+    for i in order:
+        h = idx["hashes"][int(i)]
+        if h == own_hash:
+            continue
+        picks.append((h, float(sims[int(i)])))
+        if len(picks) >= k:
+            break
+    if not picks:
+        return []
+    hashes = [h for h, _ in picks]
+    images = {
+        img.content_hash: img
+        for img in Image.objects.filter(content_hash__in=hashes)
+    }
+    return [
+        {"image": images[h], "similarity": round(s * 100)}
+        for h, s in picks
+        if h in images
+    ]
 
 
 def index(request):
@@ -203,6 +298,7 @@ def _build_ctx(
         "show_nsfw": show_nsfw,
         "prediction": _taste_prediction(image),
         "inbox_order": inbox_order,
+        "similar": _get_similar_rated(image) if image else [],
         **counts,
     }
     if request is not None:
@@ -248,6 +344,13 @@ def _apply_rating(image: Image, target_location: str, is_fav: bool, now) -> None
     image.is_favourite = is_fav
     image.rated_at = now
     image.save(update_fields=fields)
+    _invalidate_similar_index()
+
+
+def _purge_image(image: Image) -> None:
+    """Local wrapper around the utility purge so cache invalidation stays centralised."""
+    _purge_image_util(image)
+    _invalidate_similar_index()
 
 
 def _neighbor_hash(all_hashes: list[str], content_hash: str) -> str | None:
