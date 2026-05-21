@@ -15,7 +15,8 @@ jobs:
       packages: write   # push to ghcr.io
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -44,8 +45,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Still reads existing caches (e.g. from your main branch) so the build is fast
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # cache-to is completely omitted. This bypasses the slow GitHub API cache export step!
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
