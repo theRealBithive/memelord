@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from django.db import IntegrityError
 from loguru import logger
 
 from core import brain, dedup, nsfw
@@ -161,16 +162,26 @@ def _process_candidates(
         if nsfw_clf is not None:
             is_nsfw = nsfw.predict_nsfw(nsfw_clf, emb, vision.nsfw_threshold)
 
-        Image.objects.create(
-            content_hash=h,
-            file_path=str(path.relative_to(data_dir)),
-            source_url=source_url or None,
-            source_label=source_label,
-            location=Image.INBOX,
-            is_nsfw=is_nsfw,
-            phash=ph,
-            embedding=brain.embedding_to_bytes(emb),
-        )
+        try:
+            Image.objects.create(
+                content_hash=h,
+                file_path=str(path.relative_to(data_dir)),
+                source_url=source_url or None,
+                source_label=source_label,
+                location=Image.INBOX,
+                is_nsfw=is_nsfw,
+                phash=ph,
+                embedding=brain.embedding_to_bytes(emb),
+            )
+        except IntegrityError:
+            # A concurrent scrape (gunicorn manual trigger vs. qcluster auto)
+            # can insert the same content_hash between our from_db() snapshot
+            # and this create. Drop the orphaned download and move on rather
+            # than aborting the whole batch. Django runs in autocommit so the
+            # failed INSERT auto-rolls-back at the DB level — no atomic() needed.
+            logger.warning("Duplicate content_hash {} inserted concurrently; skipping.", h[:12])
+            path.unlink(missing_ok=True)
+            continue
         index.add(h, ph, emb)
         inserted += 1
 
