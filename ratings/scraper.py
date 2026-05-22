@@ -215,7 +215,15 @@ def classify_inbox(
     transform=None,
     nsfw_clf=None,
 ) -> None:
-    """Auto-sort inbox with taste classifier; tag NSFW; backfill phash/embedding."""
+    """
+    Auto-sort inbox with taste classifier; tag NSFW; backfill phash/embedding.
+
+    Reuses each image's stored embedding when available — re-encoding the whole
+    inbox from disk was an all-or-nothing batch that took ~100s on CPU and lost
+    every move if the worker was killed mid-encode (container restart / OOM),
+    stranding low-prediction images that the classifier already considered trash.
+    Per-image save() means partial progress is durable.
+    """
     from ratings.utils import move_image
 
     need_vision = vision.weights_path and vision.weights_path.exists()
@@ -228,15 +236,21 @@ def classify_inbox(
         return
 
     logger.info("Auto-classifying {} inbox images.", len(images))
-    if encoder is None:
-        encoder = brain.get_encoder()
-    if transform is None:
-        transform = brain.get_transform()
-    paths = [data_dir / img.file_path for img in images]
-    embeddings, valid_paths = brain.encode(
-        encoder, paths, transform=transform, progress_label="classify_inbox"
-    )
-    path_to_emb = dict(zip(valid_paths, embeddings))
+
+    # Only encode images missing an embedding or phash — the common case is
+    # that everything was encoded at scrape time and we can read from the DB.
+    backfill = [img for img in images if img.embedding is None or not img.phash]
+    path_to_emb: dict[Path, "object"] = {}
+    if backfill:
+        if encoder is None:
+            encoder = brain.get_encoder()
+        if transform is None:
+            transform = brain.get_transform()
+        backfill_paths = [data_dir / img.file_path for img in backfill]
+        embeddings, valid_paths = brain.encode(
+            encoder, backfill_paths, transform=transform, progress_label="classify_inbox"
+        )
+        path_to_emb = dict(zip(valid_paths, embeddings))
 
     taste_clf = None
     if need_vision:
@@ -246,19 +260,24 @@ def classify_inbox(
         nsfw_clf = brain.load_classifier(vision.nsfw_weights_path)
 
     to_corpus = to_void = nsfw_tagged = 0
-    for img, path in zip(images, paths):
-        emb = path_to_emb.get(path)
-        if emb is None:
-            continue
+    for img in images:
+        path = data_dir / img.file_path
         update_fields: list[str] = []
+
+        if img.embedding is not None:
+            emb = brain.bytes_to_embedding(bytes(img.embedding))
+        else:
+            emb = path_to_emb.get(path)
+            if emb is None:
+                continue
+            img.embedding = brain.embedding_to_bytes(emb)
+            update_fields.append("embedding")
+
         if not img.phash:
             from core import phash as phash_mod
 
             img.phash = phash_mod.compute_phash(path)
             update_fields.append("phash")
-        if img.embedding is None:
-            img.embedding = brain.embedding_to_bytes(emb)
-            update_fields.append("embedding")
 
         if nsfw_clf is not None and not img.is_nsfw:
             predicted = nsfw.predict_nsfw(nsfw_clf, emb, vision.nsfw_threshold)
