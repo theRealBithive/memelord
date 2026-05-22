@@ -1402,19 +1402,6 @@ kbd {
   color: #86efac;
 }
 
-/* kNN-inherited tag suggestions: solid blueish border to distinguish from
-   Florence-2's dashed green visual-label pills. Same shape and click affordance. */
-.tag-suggestion-pill--knn {
-  border-style: solid;
-  border-color: #2d3a52;
-  color: #6a82b0;
-}
-
-.tag-suggestion-pill--knn:hover {
-  border-color: #a0b8e8;
-  color: #c4d4f8;
-}
-
 .suggestion-group {
   flex-basis: 100%;
   display: flex;
@@ -1483,6 +1470,184 @@ kbd {
 .gallery-tags-filter {
   flex-wrap: wrap;
   row-gap: 0.3rem;
+}
+
+/* ── Tag modal (mobile-first full-screen editor) ────────────────────────
+   The inline tag input gets unusable on mobile: the soft keyboard covers
+   the input + autocomplete because they sit at the bottom of the card.
+   On <640px the inline input is hidden and replaced with the .tag-modal-open
+   button, which opens this full-screen overlay with the input near the top
+   so the keyboard never occludes it. */
+
+.tag-modal-open {
+  display: none;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px dashed #166534;
+  color: #86efac;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tag-modal-open:hover { border-style: solid; }
+
+.tag-modal[hidden] { display: none; }
+.tag-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+}
+
+.tag-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.tag-modal-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  width: 100%;
+  height: 100dvh;
+  padding: max(env(safe-area-inset-top), 0.5rem) 1rem max(env(safe-area-inset-bottom), 0.75rem);
+  box-sizing: border-box;
+}
+
+.tag-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tag-modal-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tag-modal-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.6rem;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tag-modal-close:hover { color: var(--text); }
+
+.tag-modal-input-wrap {
+  position: relative;
+  margin: 0.75rem 0 0;
+}
+
+.tag-modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.7rem 0.85rem;
+  font-size: 1rem;
+  background: #0f1a0f;
+  border: 1px solid #166534;
+  border-radius: 10px;
+  color: #86efac;
+  outline: none;
+}
+
+.tag-modal-input:focus { border-color: #4ade80; }
+
+.tag-modal-autocomplete {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  z-index: 2;
+  overflow: hidden;
+  max-height: 40dvh;
+  overflow-y: auto;
+}
+
+.tag-modal-autocomplete .tag-autocomplete-item {
+  padding: 0.6rem 0.85rem;
+  font-size: 0.9rem;
+}
+
+.tag-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  margin-top: 0.75rem;
+  padding-bottom: 0.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tag-modal-section + .tag-modal-section { margin-top: 1rem; }
+
+.tag-modal-section-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.45rem;
+}
+
+.tag-modal-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tag-modal-pills .tag-pill,
+.tag-modal-pills .tag-suggestion-pill {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.7rem;
+}
+
+.tag-modal-pills .tag-remove {
+  font-size: 1rem;
+  padding-left: 0.15rem;
+}
+
+.tag-modal-empty {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.tag-modal-done {
+  margin-top: 0.5rem;
+  padding: 0.85rem;
+  background: #166534;
+  color: #bbf7d0;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tag-modal-done:active { background: #14532d; }
+
+@media (max-width: 640px) {
+  .card-tags .tag-input,
+  .card-tags .tag-autocomplete,
+  .lb-tags .tag-input-wrap {
+    display: none !important;
+  }
+  .tag-modal-open { display: inline-flex; }
 }
 
 /* ── Void grid selection ─────────────────────────────────────────────── */
