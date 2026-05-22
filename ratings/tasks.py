@@ -75,6 +75,7 @@ def run_train():
     """
     from loguru import logger
     from core import trainer
+    from ratings.scraper import populate_knn_tag_suggestions
 
     _trim_logs()
     sink_id = logger.add(_db_sink("train"), format="{message}")
@@ -85,6 +86,9 @@ def run_train():
             nsfw_weights_path=Path(settings.NSFW_WEIGHTS_PATH),
             nsfw_threshold=settings.NSFW_THRESHOLD,
         )
+        # Refresh kNN tag suggestions so newly-tagged anchors propagate
+        # immediately and existing rows recompute against the latest threshold.
+        populate_knn_tag_suggestions(refill=True)
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
