@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from core import trainer
+from ratings.scraper import populate_knn_tag_suggestions
 
 
 class Command(BaseCommand):
@@ -16,3 +17,4 @@ class Command(BaseCommand):
             nsfw_weights_path=Path(settings.NSFW_WEIGHTS_PATH),
             nsfw_threshold=settings.NSFW_THRESHOLD,
         )
+        populate_knn_tag_suggestions(refill=True)

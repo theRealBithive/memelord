@@ -297,7 +297,7 @@ def populate_knn_tag_suggestions(
     limit: int | None = None,
     k: int = 15,
     max_suggestions: int = 8,
-    min_similarity: float = 0.5,
+    min_similarity: float = 0.35,
 ) -> dict[str, int]:
     """
     Fill Image.knn_tag_suggestions by inheriting tags from k visually-similar

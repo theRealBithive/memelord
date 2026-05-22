@@ -28,7 +28,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--min-similarity",
             type=float,
-            default=0.5,
+            default=0.35,
             help="Cosine similarity below which a neighbour is ignored.",
         )
 
