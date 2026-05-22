@@ -52,14 +52,21 @@ def move_image(image: Image, new_location: str, data_dir: Path) -> None:
     Only file_path and location are updated here; the caller is responsible for
     saving these fields plus any additional fields (rated_at, is_favourite, etc.)
     in the same save() call to keep the DB and filesystem in sync.
+
+    If the source file is missing, the record is flagged file_deleted=True and
+    persisted immediately — silently rewriting file_path to a destination that
+    was never actually written would leave the DB pointing at a non-existent
+    file in a place it never lived (the bug that produced /media/corpus/X.png
+    404s after concurrent-scrape collisions orphaned the underlying file).
     """
     src = data_dir / image.file_path
+    if not src.exists():
+        image.file_deleted = True
+        image.save(update_fields=["file_deleted"])
+        return
     dest_dir = data_dir / new_location
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = _unique_dest(dest_dir, src.name)
-    try:
-        shutil.move(str(src), str(dest))
-    except FileNotFoundError:
-        pass
+    shutil.move(str(src), str(dest))
     image.file_path = str(dest.relative_to(data_dir))
     image.location = new_location

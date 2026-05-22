@@ -176,11 +176,14 @@ def _process_candidates(
         except IntegrityError:
             # A concurrent scrape (gunicorn manual trigger vs. qcluster auto)
             # can insert the same content_hash between our from_db() snapshot
-            # and this create. Drop the orphaned download and move on rather
-            # than aborting the whole batch. Django runs in autocommit so the
-            # failed INSERT auto-rolls-back at the DB level — no atomic() needed.
+            # and this create. Django runs in autocommit so the failed INSERT
+            # auto-rolls-back at the DB level — no atomic() needed. Do NOT
+            # unlink path here: filenames are deterministic per URL, so both
+            # threads wrote to the same path. The winning record references
+            # that exact file; deleting it would strand the live record with
+            # a 404 file_path that classify_inbox can then mis-route to
+            # corpus/void via shutil.move's silent FileNotFoundError catch.
             logger.warning("Duplicate content_hash {} inserted concurrently; skipping.", h[:12])
-            path.unlink(missing_ok=True)
             continue
         index.add(h, ph, emb)
         inserted += 1
