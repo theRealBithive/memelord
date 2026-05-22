@@ -33,8 +33,12 @@ qcluster:
 	uv run python manage.py qcluster
 
 # === docker
+# APP_VERSION is read by the Dockerfile and stamped into the image so the UI
+# can display it. Falls back to "dev" if not in a git checkout.
+APP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 build:
-	docker compose build
+	APP_VERSION=$(APP_VERSION) docker compose build
 
 push: build
 	@if [ -n "$${PUBLIC_REGISTRY_PASSWORD}" ]; then \
@@ -52,6 +56,6 @@ release-push:
 	if [ -n "$${PUBLIC_REGISTRY_PASSWORD}" ]; then \
 		echo "$${PUBLIC_REGISTRY_PASSWORD}" | docker login "$(REGISTRY_HOST)" -u "PUBLIC_REGISTRY_USER" --password-stdin; \
 	fi; \
-	docker build -t "$(REGISTRY_IMAGE_BASE):$$v" -t "$(REGISTRY_IMAGE_BASE):latest" .; \
+	docker build --build-arg APP_VERSION=$$v -t "$(REGISTRY_IMAGE_BASE):$$v" -t "$(REGISTRY_IMAGE_BASE):latest" .; \
 	docker push "$(REGISTRY_IMAGE_BASE):$$v"; \
 	docker push "$(REGISTRY_IMAGE_BASE):latest"

@@ -45,6 +45,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
           # Still reads existing caches (e.g. from your main branch) so the build is fast
           cache-from: type=gha
           # cache-to is completely omitted. This bypasses the slow GitHub API cache export step!

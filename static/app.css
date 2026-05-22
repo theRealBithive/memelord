@@ -104,6 +104,18 @@ body {
   background: var(--border);
 }
 
+.nav-more-version {
+  margin-top: 0.25rem;
+  padding: 0.35rem 0.75rem 0.15rem;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  opacity: 0.55;
+  font-size: 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+  user-select: text;
+}
+
 @media (max-width: 640px) {
 
   .nav-tab--secondary,

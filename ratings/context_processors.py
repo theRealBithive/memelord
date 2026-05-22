@@ -1,5 +1,15 @@
 """Template context processors for the ratings app."""
 
+from django.conf import settings
+
+
+def app_version(request):
+    """
+    Expose APP_VERSION (resolved once at settings import) to every template
+    so the nav footer can show the running build's git tag.
+    """
+    return {"app_version": getattr(settings, "APP_VERSION", "dev")}
+
 
 def notification_config(request):
     """
