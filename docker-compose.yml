@@ -1,6 +1,9 @@
 services:
   memelord:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     image: memelord:latest
     ports:
       - "8000:8000"

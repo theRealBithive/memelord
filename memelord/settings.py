@@ -1,7 +1,41 @@
 import os
+import subprocess
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _resolve_app_version() -> str:
+    """
+    Version string shown in the UI footer / nav menu.
+
+    Precedence: APP_VERSION env var (set by the Docker build from the git tag in
+    CI) → `git describe` against the working tree (so developers running
+    `make run` see e.g. v1.10.3-2-gabc123-dirty without rebuilding) → "dev".
+    The git fallback is wrapped because Docker images strip the .git directory
+    via .dockerignore, and we don't want a crash there.
+    """
+    env = os.environ.get("APP_VERSION", "").strip()
+    if env:
+        return env
+    try:
+        out = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+        described = out.stdout.strip()
+        if described:
+            return described
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    return "dev"
+
+
+APP_VERSION = _resolve_app_version()
 
 
 def _csv_env(name: str, default: str = "") -> list[str]:
@@ -88,6 +122,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "ratings.context_processors.notification_config",
+                "ratings.context_processors.app_version",
             ],
         },
     },

@@ -37,6 +37,11 @@ ENV DATA_DIR=/data
 ENV CONFIG_PATH=/data/config.toml
 ENV DJANGO_DEBUG=false
 
+# Stamped at build time so the running app can display its version.
+# CI passes the git tag (e.g. v1.10.3); local builds default to "dev".
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
+
 VOLUME ["/data"]
 EXPOSE 8000
 

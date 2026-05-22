@@ -27,6 +27,7 @@
       <a href="{% url 'logs' %}" class="nav-more-item">Logs</a>
       <a href="{% url 'config' %}" class="nav-more-item">Config</a>
       <a href="{% url 'logout' %}" class="nav-more-item">Log out</a>
+      <span class="nav-more-version" aria-label="Build version">{{ app_version }}</span>
     </div>
   </details>
   <form method="post" action="{% url 'nsfw_toggle' %}" style="display:contents">
