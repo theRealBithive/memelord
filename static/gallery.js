@@ -82,6 +82,7 @@
     return postAction(item.dataset.tagUrl, { tags: tags.join(",") }).then((data) => {
       item.dataset.tags = data.tags.join(",");
       renderLbTags(data.tags);
+      return data.tags;
     });
   }
 
@@ -110,7 +111,19 @@
     addBtn.textContent = "+ tag";
     addBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      addBtn.replaceWith(buildTagInput());
+      // On phones the keyboard would cover the inline input; route through the
+      // shared full-screen modal in tags.js. Desktop keeps the snappy inline editor.
+      const useModal = window.matchMedia("(max-width: 640px)").matches && window.TagModal;
+      if (useModal) {
+        window.TagModal.open({
+          appliedTags: () => getLbTags(),
+          suggestedTags: [],
+          autocompleteUrl: acUrl,
+          onSave: (tags) => saveLbTags(tags),
+        });
+      } else {
+        addBtn.replaceWith(buildTagInput());
+      }
     });
     lbTags.appendChild(addBtn);
   }
@@ -223,6 +236,7 @@
   }
 
   function close() {
+    if (window.TagModal) window.TagModal.close();
     lb.classList.remove("lb-open");
     lbImg.src = "";
     document.documentElement.style.overflow = "";

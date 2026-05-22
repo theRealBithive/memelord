@@ -102,7 +102,7 @@ Full-screen card, mobile-first, gesture-driven.
 | Swipe down | `↓` | Skip |
 | — | `N` | Toggle NSFW flag |
 
-Each card shows the classifier's confidence (`P(corpus)` as a percentage), an inline tag editor with Florence-2 keyword and kNN tag suggestions, and a horizontal strip of the six visually-most-similar already-rated images (with score / fav / trash badges) so you can rate consistently and see whether the model's neighborhood actually matches your taste.
+Each card shows the classifier's confidence (`P(corpus)` as a percentage), a tag editor with kNN tag suggestions (full-screen modal on mobile, inline on desktop), and a horizontal strip of the six visually-most-similar already-rated images (with score / fav / trash badges) so you can rate consistently and see whether the model's neighborhood actually matches your taste.
 
 Tap the 🎯 button in the meta row to switch from random ordering to **active-learning mode** — the queue surfaces the images the classifier is least sure about, concentrating your ratings where they teach the model the most per click.
 
@@ -120,12 +120,9 @@ Bulk-review trashed images — rescue back to corpus or permanently **purge** (d
 
 ## Tags
 
-Each image can carry free-form tags. Two suggestion sources auto-populate per image:
+Each image can carry free-form tags. Suggestions auto-populate per image via **kNN** — your own taste tags ("warhammer40k", "cursed") inherited from the visually-nearest already-tagged images via cosine similarity over DINO embeddings. Every new tag you add immediately improves what neighbours can inherit; no model retraining required.
 
-- **Florence-2 keywords** — visual content labels ("dog", "comic", "screenshot") from the image itself
-- **kNN tag suggestions** — your own taste tags ("warhammer40k", "cursed") inherited from the visually-nearest already-tagged images via cosine similarity over DINO embeddings
-
-Tap a suggestion pill to apply it. A `#tag` filter on the gallery surfaces everything you've labelled the same way.
+Tap a suggestion pill to apply it, or type a new tag with autocomplete on existing ones. A `#tag` filter on the gallery surfaces everything you've labelled the same way.
 
 The **Tags** page (under the `⋯` menu) lists all tags by image count. Rename inline; renaming to an existing name merges the two. Delete to strip a tag from every image that carries it.
 
@@ -172,7 +169,6 @@ make test
 - Django 6 + django-htmx (mobile-first UI, swipe gestures, image preload, haptic feedback)
 - django-q2 (background jobs, SQLite broker — no Redis)
 - PyTorch + DINOv2 ViT-B/14 (768-d image embeddings for taste classifier + dedup + kNN)
-- Microsoft Florence-2 (caption + keyword extraction for tag suggestions)
 - scikit-learn LogisticRegression (the taste oracle + a separate NSFW classifier)
 - Playwright optional: used as fallback for Imgur topic pages and Pixelfed instances that don't serve the API without auth
 

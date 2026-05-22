@@ -48,7 +48,6 @@ class Image(models.Model):
     inbox_seen_at = models.DateTimeField(null=True, blank=True)
     corpus_seen_at = models.DateTimeField(null=True, blank=True)
     queue_seen_at = models.DateTimeField(null=True, blank=True)
-    keyword_suggestions = models.CharField(max_length=500, blank=True, default="")
     knn_tag_suggestions = models.CharField(max_length=500, blank=True, default="")
 
     class Meta:
@@ -58,24 +57,13 @@ class Image(models.Model):
         return f"{self.location} {self.content_hash[:8]} ({self.source_label})"
 
     @property
-    def keyword_suggestions_list(self) -> list[str]:
-        """Parsed keyword_suggestions field as a list, excluding already-applied tags."""
-        applied = set(self.tags.values_list("name", flat=True))
-        return [
-            k.strip()
-            for k in self.keyword_suggestions.split(",")
-            if k.strip() and k.strip() not in applied
-        ]
-
-    @property
     def knn_tag_suggestions_list(self) -> list[str]:
         """
         Parsed knn_tag_suggestions field as a list, excluding already-applied tags.
 
-        Separate from keyword_suggestions because the two suggestion sources are
-        different in nature: keyword_suggestions are Florence-2 visual content
-        labels ("dog", "person"); knn_tag_suggestions are the user's own tags
-        inherited from visually similar already-tagged images via DINOv2 kNN.
+        Suggestions are the user's own tags inherited from visually similar
+        already-tagged images via DINOv2 kNN — they encode taste/theme, not
+        objects, so they line up with how the user actually labels things.
         """
         applied = set(self.tags.values_list("name", flat=True))
         return [

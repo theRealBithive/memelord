@@ -292,13 +292,10 @@ def populate_knn_tag_suggestions(
     Fill Image.knn_tag_suggestions by inheriting tags from k visually-similar
     already-tagged images via cosine similarity over DINOv2 embeddings.
 
-    The point of this — and why it lives outside the Florence-2 pipeline — is
-    that *user-applied* tags ("warhammer40k", "cursed") are conceptually
-    different from Florence's visual content labels ("person", "dog"): they
-    encode taste and theme, not object presence. kNN over embeddings is the
-    cheapest way to surface them on new images without ever retraining a model
-    — every new tag the user adds immediately improves what neighbours can
-    inherit.
+    The point: kNN over embeddings is the cheapest way to surface the user's
+    own taste tags ("warhammer40k", "cursed") on new images without ever
+    retraining a model — every new tag the user adds immediately improves
+    what neighbours can inherit.
 
     Anchor matrix is built once per call so this is O(M*N) over numpy, not
     O(M*N) DB hits. At ~1k images this is milliseconds.
@@ -379,44 +376,6 @@ def populate_knn_tag_suggestions(
     return {"updated": updated, "skipped": 0}
 
 
-def suggest_tags_for_pending(data_dir: Path, *, refill: bool = False, limit: int | None = None) -> dict[str, int]:
-    """
-    Run Florence-2 over images whose keyword_suggestions field is empty.
-
-    Loaded once and reused across all images so the (heavyweight) model init
-    cost is amortised. Called both from scraper.run() after a scrape so newly
-    downloaded images get suggestions automatically, and from the suggest_tags
-    management command for one-off / backfill runs.
-    """
-    from core import keywords as kw_mod
-
-    qs = Image.objects.filter(file_deleted=False, is_purged=False)
-    if not refill:
-        qs = qs.filter(keyword_suggestions="")
-    if limit:
-        qs = qs[:limit]
-    images = list(qs)
-    if not images:
-        return {"updated": 0, "skipped": 0}
-
-    total = len(images)
-    logger.info("Generating keyword suggestions for {} images.", total)
-    updated = skipped = 0
-    for i, img in enumerate(images, start=1):
-        path = data_dir / img.file_path
-        if not path.exists():
-            skipped += 1
-            continue
-        suggestions = kw_mod.suggest_keywords(path)
-        img.keyword_suggestions = ",".join(suggestions)
-        img.save(update_fields=["keyword_suggestions"])
-        updated += 1
-        if i % 10 == 0 or i == total:
-            logger.info("Keyword suggestions progress: {}/{}", i, total)
-    logger.info("Keyword suggestions: {} updated, {} skipped (missing file).", updated, skipped)
-    return {"updated": updated, "skipped": skipped}
-
-
 def run(
     config_path: Path,
     data_dir: Path,
@@ -486,7 +445,6 @@ def run(
     if need_classify:
         classify_inbox(data_dir, vision, encoder=encoder, transform=transform, nsfw_clf=nsfw_clf)
 
-    suggest_tags_for_pending(data_dir)
     populate_knn_tag_suggestions()
 
     return counts

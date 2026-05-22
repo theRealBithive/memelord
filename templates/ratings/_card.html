@@ -55,9 +55,9 @@
            data-tag-url="{% url 'update_image_tags' image.content_hash %}"
            data-autocomplete-url="{% url 'tag_autocomplete' %}"
            autocomplete="off">
+    <button type="button" class="tag-modal-open" aria-label="Edit tags">+ tag</button>
     <div class="tag-autocomplete" hidden></div>
-    {% if image.keyword_suggestions_list %}<div class="suggestion-group suggestion-group--florence">{% for kw in image.keyword_suggestions_list %}<button class="tag-suggestion-pill" data-tag="{{ kw }}" data-tag-url="{% url 'update_image_tags' image.content_hash %}">{{ kw }}</button>{% endfor %}</div>{% endif %}
-    {% if image.knn_tag_suggestions_list %}<div class="suggestion-group suggestion-group--knn">{% for kw in image.knn_tag_suggestions_list %}<button class="tag-suggestion-pill tag-suggestion-pill--knn" data-tag="{{ kw }}" data-tag-url="{% url 'update_image_tags' image.content_hash %}">{{ kw }}</button>{% endfor %}</div>{% endif %}
+    {% if image.knn_tag_suggestions_list %}<div class="suggestion-group">{% for kw in image.knn_tag_suggestions_list %}<button class="tag-suggestion-pill" data-tag="{{ kw }}" data-tag-url="{% url 'update_image_tags' image.content_hash %}">{{ kw }}</button>{% endfor %}</div>{% endif %}
   </div>
 
   <div class="btn-row">
