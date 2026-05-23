@@ -199,7 +199,7 @@ def _load_vision_thresholds() -> tuple[int, int]:
 SFW_THRESHOLD_BUCKET, NSFW_THRESHOLD_BUCKET = _load_vision_thresholds()
 
 LOGIN_URL = "/login/"
-LOGIN_REDIRECT_URL = "/rate/inbox/"
+LOGIN_REDIRECT_URL = "/review/"
 LOGOUT_REDIRECT_URL = "/login/"
 
 LANGUAGE_CODE = "en-us"
