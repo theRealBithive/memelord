@@ -160,6 +160,7 @@ def _get_similar_rated(image, k: int = 6) -> list[dict]:
     ]
 
 
+@login_required
 def index(request):
     return redirect("review_corpus")
 

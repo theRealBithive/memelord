@@ -68,9 +68,10 @@ if not DEBUG:
     _placeholder_prefixes = ("django-insecure-", "change-me")
     if any(SECRET_KEY.startswith(p) for p in _placeholder_prefixes):
         from django.core.exceptions import ImproperlyConfigured
+
         raise ImproperlyConfigured(
             "DJANGO_SECRET_KEY must be set to a real secret before running in production. "
-            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(50))\""
+            'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(50))"'
         )
 
 ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
@@ -103,6 +104,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "memelord.middleware.LoginRequiredMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
@@ -189,7 +191,9 @@ def _load_vision_thresholds() -> tuple[int, int]:
         except (TypeError, ValueError):
             return 1
 
-    return _clamp(vision.get("sfw_threshold", 1)), _clamp(vision.get("nsfw_threshold", 1))
+    return _clamp(vision.get("sfw_threshold", 1)), _clamp(
+        vision.get("nsfw_threshold", 1)
+    )
 
 
 SFW_THRESHOLD_BUCKET, NSFW_THRESHOLD_BUCKET = _load_vision_thresholds()
