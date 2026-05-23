@@ -75,6 +75,14 @@
     }
     .import-btn:hover { border-color: #555; color: var(--text); }
 
+    .vision-section { margin-bottom: 2rem; }
+    .vision-form { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+    .vision-row { display: flex; align-items: center; gap: 0.35rem; }
+    .vision-label {
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--muted);
+    }
+
     .schedule-section { margin-bottom: 2rem; }
     #schedule-status { display: flex; flex-direction: column; gap: 0.5rem; }
     .schedule-info { font-size: 0.8rem; color: var(--muted); }
@@ -132,6 +140,11 @@
     <div class="schedule-section">
       <div class="section-title">Auto-scrape</div>
       {% include "ratings/_schedule_status.html" %}
+    </div>
+
+    <div class="vision-section">
+      <div class="section-title">Review thresholds</div>
+      {% include "ratings/_vision_status.html" %}
     </div>
 
     <div class="notif-section">

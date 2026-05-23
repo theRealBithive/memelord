@@ -43,6 +43,37 @@ def purge_image(image: Image) -> None:
     image.save(update_fields=["file_deleted", "is_purged"])
 
 
+def bucket_to_cutoff(bucket: int) -> float:
+    """Map a 1-6 threshold dial to an inclusive probability lower bound.
+
+    Bucket 1 means "show everything" (cutoff 0.0); bucket 6 is the strictest.
+    Images with predicted_score >= cutoff pass the visibility filter. Out-of-
+    range buckets are clamped because the value comes from user-edited TOML.
+    """
+    return (max(1, min(6, int(bucket))) - 1) / 6
+
+
+def get_review_thresholds() -> tuple[int, int]:
+    """Return (sfw_bucket, nsfw_bucket) from the DB singleton, seeding from settings on first access.
+
+    DB-first so UI edits on /config persist immediately; config.toml values
+    only matter on the very first call (or after the row is manually deleted)
+    because get_or_create writes them once and never re-reads.
+    """
+    from django.conf import settings
+
+    from ratings.models import ReviewThresholds
+
+    row, _ = ReviewThresholds.objects.get_or_create(
+        pk=1,
+        defaults={
+            "sfw_threshold": getattr(settings, "SFW_THRESHOLD_BUCKET", 1),
+            "nsfw_threshold": getattr(settings, "NSFW_THRESHOLD_BUCKET", 1),
+        },
+    )
+    return row.sfw_threshold, row.nsfw_threshold
+
+
 def move_image(image: Image, new_location: str, data_dir: Path) -> None:
     """
     Move the image file between inbox/corpus/void directories and update the DB record.
