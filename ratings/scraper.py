@@ -13,7 +13,6 @@ from ratings.models import Image, Source
 from retina import fourchan, imgur, mastodon as mastodon_scraper, pixelfed, tumblr
 
 # Maps Source.type → (toml_section, toml_key, result_key) for list-based sources.
-# Pixelfed is kept separate (single URL, not a list).
 _SOURCE_MAP = [
     (Source.FOURCHAN, "4chan", "boards", "boards"),
     (Source.IMGUR, "imgur", "topics", "topics"),
@@ -56,9 +55,9 @@ def _load_sources(config_path: Path) -> dict:
             rk: [s.name for s in db_sources if s.type == stype]
             for stype, _, _, rk in _SOURCE_MAP
         }
-        result["pixelfed"] = next(
-            (s.name for s in db_sources if s.type == Source.PIXELFED), ""
-        )
+        result["pixelfed_instances"] = [
+            s.name for s in db_sources if s.type == Source.PIXELFED
+        ]
         result["mastodon_accounts"] = [
             s.name for s in db_sources if s.type == Source.MASTODON
         ]
@@ -69,7 +68,8 @@ def _load_sources(config_path: Path) -> dict:
     result = {
         rk: cfg.get(section, {}).get(key, []) for _, section, key, rk in _SOURCE_MAP
     }
-    result["pixelfed"] = cfg.get("pixelfed", {}).get("instance_base", "").strip()
+    pf = cfg.get("pixelfed", {}).get("instance_base", "").strip()
+    result["pixelfed_instances"] = [pf] if pf else []
     result["mastodon_accounts"] = cfg.get("mastodon", {}).get("accounts", [])
     return result
 
@@ -183,7 +183,9 @@ def _process_candidates(
             # that exact file; deleting it would strand the live record with
             # a 404 file_path that classify_inbox can then mis-route to
             # corpus/void via shutil.move's silent FileNotFoundError catch.
-            logger.warning("Duplicate content_hash {} inserted concurrently; skipping.", h[:12])
+            logger.warning(
+                "Duplicate content_hash {} inserted concurrently; skipping.", h[:12]
+            )
             continue
         index.add(h, ph, emb)
         inserted += 1
@@ -252,7 +254,10 @@ def classify_inbox(
             transform = brain.get_transform()
         backfill_paths = [data_dir / img.file_path for img in backfill]
         embeddings, valid_paths = brain.encode(
-            encoder, backfill_paths, transform=transform, progress_label="classify_inbox"
+            encoder,
+            backfill_paths,
+            transform=transform,
+            progress_label="classify_inbox",
         )
         path_to_emb = dict(zip(valid_paths, embeddings))
 
@@ -355,13 +360,20 @@ def populate_knn_tag_suggestions(
         return {"updated": 0, "skipped": 0}
 
     anchor_embs = np.stack(
-        [np.asarray(brain.bytes_to_embedding(bytes(a.embedding)), dtype=np.float32) for a in anchors]
+        [
+            np.asarray(brain.bytes_to_embedding(bytes(a.embedding)), dtype=np.float32)
+            for a in anchors
+        ]
     )
-    anchor_norms = anchor_embs / (np.linalg.norm(anchor_embs, axis=1, keepdims=True) + 1e-12)
+    anchor_norms = anchor_embs / (
+        np.linalg.norm(anchor_embs, axis=1, keepdims=True) + 1e-12
+    )
     anchor_tags = [list(a.tags.values_list("name", flat=True)) for a in anchors]
     anchor_hashes = [a.content_hash for a in anchors]
 
-    qs = Image.objects.filter(file_deleted=False, is_purged=False).exclude(embedding=None)
+    qs = Image.objects.filter(file_deleted=False, is_purged=False).exclude(
+        embedding=None
+    )
     if not refill:
         qs = qs.filter(knn_tag_suggestions="")
     if limit:
@@ -377,7 +389,9 @@ def populate_knn_tag_suggestions(
     )
     updated = 0
     for i, img in enumerate(targets, start=1):
-        target = np.asarray(brain.bytes_to_embedding(bytes(img.embedding)), dtype=np.float32)
+        target = np.asarray(
+            brain.bytes_to_embedding(bytes(img.embedding)), dtype=np.float32
+        )
         t_norm = target / (np.linalg.norm(target) + 1e-12)
         sims = anchor_norms @ t_norm  # cosine similarity, shape (N,)
         order = np.argsort(-sims)
@@ -451,16 +465,19 @@ def run(
             label = label_fmt.format(name)
             logger.info("Scraping {}", label)
             urls = module.iter_image_urls(name)
-            downloaded = module.download_images(urls, inbox_dir, name, skip_dirs=skip_dirs)
+            downloaded = module.download_images(
+                urls, inbox_dir, name, skip_dirs=skip_dirs
+            )
             counts[label] = _process_downloads(
                 downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
             )
 
-    if sources["pixelfed"]:
-        logger.info("Scraping Pixelfed: {}", sources["pixelfed"])
-        items = pixelfed.iter_image_items(sources["pixelfed"])
+    for instance in sources["pixelfed_instances"]:
+        label = f"pixelfed/{instance}"
+        logger.info("Scraping Pixelfed: {}", instance)
+        items = pixelfed.iter_image_items(instance)
         downloaded = pixelfed.download_images(items, inbox_dir, skip_dirs=skip_dirs)
-        counts["pixelfed"] = _process_downloads(
+        counts[label] = _process_downloads(
             downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
         )
 
@@ -483,7 +500,9 @@ def run(
             source_obj.save(update_fields=["cursor"])
 
     if need_classify:
-        classify_inbox(data_dir, vision, encoder=encoder, transform=transform, nsfw_clf=nsfw_clf)
+        classify_inbox(
+            data_dir, vision, encoder=encoder, transform=transform, nsfw_clf=nsfw_clf
+        )
 
     populate_knn_tag_suggestions()
 
