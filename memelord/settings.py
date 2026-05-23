@@ -165,6 +165,35 @@ DINO_DEDUP_COSINE_THRESHOLD = float(
 NSFW_THRESHOLD = float(os.environ.get("NSFW_THRESHOLD", "0.30"))
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", BASE_DIR / "config.toml"))
 
+
+def _load_vision_thresholds() -> tuple[int, int]:
+    """Read 1-6 SFW/NSFW review-queue thresholds from config.toml's [vision] section.
+
+    Loaded here (not lazily) so views and counters get a stable settings value
+    without re-parsing TOML per request. Missing file or section both default
+    to bucket 1 (show all), so an upgraded deployment without an updated
+    config.toml behaves exactly as before.
+    """
+    import tomllib
+
+    try:
+        with open(CONFIG_PATH, "rb") as f:
+            cfg = tomllib.load(f)
+    except (FileNotFoundError, OSError):
+        return 1, 1
+    vision = cfg.get("vision", {})
+
+    def _clamp(value) -> int:
+        try:
+            return max(1, min(6, int(value)))
+        except (TypeError, ValueError):
+            return 1
+
+    return _clamp(vision.get("sfw_threshold", 1)), _clamp(vision.get("nsfw_threshold", 1))
+
+
+SFW_THRESHOLD_BUCKET, NSFW_THRESHOLD_BUCKET = _load_vision_thresholds()
+
 LOGIN_URL = "/login/"
 LOGIN_REDIRECT_URL = "/rate/inbox/"
 LOGOUT_REDIRECT_URL = "/login/"

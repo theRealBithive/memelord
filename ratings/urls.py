@@ -46,6 +46,7 @@ urlpatterns = [
     path("toggle/<str:content_hash>/nsfw/", views.toggle_nsfw, name="toggle_nsfw"),
     path("config/", views.config_view, name="config"),
     path("config/schedule/", views.set_scrape_schedule, name="set_scrape_schedule"),
+    path("config/vision/", views.set_vision_thresholds, name="set_vision_thresholds"),
     path("config/notifications/", views.save_notification_config, name="save_notification_config"),
     path("share/<str:content_hash>/", views.share_image, name="share_image"),
     path("config/add/", views.source_add, name="source_add"),

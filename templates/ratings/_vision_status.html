@@ -1,0 +1,26 @@
+<div id="vision-status">
+  <form class="vision-form"
+        hx-post="{% url 'set_vision_thresholds' %}"
+        hx-target="#vision-status"
+        hx-swap="outerHTML">
+    {% csrf_token %}
+    <label class="vision-row">
+      <span class="vision-label">SFW</span>
+      <select name="sfw_threshold" class="schedule-select">
+        {% for b in vision_buckets %}
+          <option value="{{ b }}"{% if b == vision_sfw %} selected{% endif %}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="vision-row">
+      <span class="vision-label">NSFW</span>
+      <select name="nsfw_threshold" class="schedule-select">
+        {% for b in vision_buckets %}
+          <option value="{{ b }}"{% if b == vision_nsfw %} selected{% endif %}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="src-btn src-toggle">Save</button>
+  </form>
+  <p class="hint">1 = show all, 6 = only the top ~17% of model-predicted images. Hidden items stay in inbox and reappear when you lower the threshold.</p>
+</div>

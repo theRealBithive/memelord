@@ -291,6 +291,12 @@ def classify_inbox(
 
         if taste_clf is not None:
             prob = float(brain.predict_proba(taste_clf, emb))
+            # Persist the prediction even when no auto-move fires — it's what
+            # _review_qs / _counts use to hide low-confidence items, and the
+            # only way to know an image was actually scored vs. never seen by
+            # the classifier (predicted_score IS NULL is the "show anyway" signal).
+            img.predicted_score = prob
+            update_fields.append("predicted_score")
             if prob >= 0.75:
                 move_image(img, Image.CORPUS, data_dir)
                 update_fields.extend(["file_path", "location"])

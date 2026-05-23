@@ -43,6 +43,7 @@ class Image(models.Model):
     is_purged = models.BooleanField(default=False)
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
     embedding = models.BinaryField(null=True, blank=True)
+    predicted_score = models.FloatField(null=True, blank=True, db_index=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="images")
     void_seen_at = models.DateTimeField(null=True, blank=True)
     inbox_seen_at = models.DateTimeField(null=True, blank=True)
@@ -127,6 +128,26 @@ class ScrapeSchedule(models.Model):
 
     interval_hours = models.PositiveSmallIntegerField(default=6)
     enabled = models.BooleanField(default=False)
+
+    def save(self, *args, **kwargs):
+        """Force pk=1 to maintain the singleton invariant."""
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+
+class ReviewThresholds(models.Model):
+    """
+    Singleton (pk=1) for the 1-6 hide thresholds on the SFW/NSFW review queues.
+
+    Stored in the DB rather than read live from config.toml so the user can
+    adjust the dial in the web UI without filesystem access. config.toml's
+    [vision] section seeds this row on first access via get_or_create — that
+    keeps backwards compatibility with deployments that set the threshold
+    declaratively before this model existed.
+    """
+
+    sfw_threshold = models.PositiveSmallIntegerField(default=1)
+    nsfw_threshold = models.PositiveSmallIntegerField(default=1)
 
     def save(self, *args, **kwargs):
         """Force pk=1 to maintain the singleton invariant."""

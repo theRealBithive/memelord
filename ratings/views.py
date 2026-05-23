@@ -9,8 +9,13 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings.models import Image, LogEntry, NotificationConfig, ScrapeSchedule, Source, Tag
-from ratings.utils import move_image as _move_image_util, purge_image as _purge_image_util
+from ratings.models import Image, LogEntry, NotificationConfig, ReviewThresholds, ScrapeSchedule, Source, Tag
+from ratings.utils import (
+    bucket_to_cutoff,
+    get_review_thresholds,
+    move_image as _move_image_util,
+    purge_image as _purge_image_util,
+)
 import ratings.notifiers as notifiers
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
@@ -146,6 +151,26 @@ def index(request):
     return redirect("review_corpus")
 
 
+def _visibility_q(sfw_bucket: int, nsfw_bucket: int, show_nsfw: bool) -> Q:
+    """Combined NSFW + threshold Q used by both _review_qs and _counts.
+
+    Each side ORs in `predicted_score__isnull=True` so images that haven't
+    been scored by classify_inbox yet (fresh scrapes, never-trained users)
+    still appear — otherwise the queue would silently empty after migration.
+    """
+    sfw_cut = bucket_to_cutoff(sfw_bucket)
+    nsfw_cut = bucket_to_cutoff(nsfw_bucket)
+    sfw_visible = Q(is_nsfw=False) & (
+        Q(predicted_score__gte=sfw_cut) | Q(predicted_score__isnull=True)
+    )
+    if not show_nsfw:
+        return sfw_visible
+    nsfw_visible = Q(is_nsfw=True) & (
+        Q(predicted_score__gte=nsfw_cut) | Q(predicted_score__isnull=True)
+    )
+    return sfw_visible | nsfw_visible
+
+
 def _counts(show_nsfw: bool = False) -> dict:
     """
     Aggregate image counts across all queues and locations in a single DB query.
@@ -153,27 +178,39 @@ def _counts(show_nsfw: bool = False) -> dict:
     Used by every page for nav badges; a separate query per badge would be 6×
     the DB round-trips per request. show_nsfw controls whether NSFW images are
     folded into the main counts or kept separate so the user can see SFW and
-    NSFW numbers independently.
+    NSFW numbers independently. The queue counts respect the [vision]
+    threshold so the badge matches what the user will actually see in the
+    review queue — a stale "12 to review" badge that opens onto an empty
+    page would be worse than no badge at all.
     """
+    sfw_bucket, nsfw_bucket = get_review_thresholds()
+    sfw_cut = bucket_to_cutoff(sfw_bucket)
+    nsfw_cut = bucket_to_cutoff(nsfw_bucket)
+    sfw_pred_visible = Q(predicted_score__gte=sfw_cut) | Q(predicted_score__isnull=True)
+    nsfw_pred_visible = Q(predicted_score__gte=nsfw_cut) | Q(predicted_score__isnull=True)
+
     qs = Image.objects.filter(file_deleted=False, is_purged=False)
     queue_filter = Q(
         location__in=[Image.INBOX, Image.CORPUS], score__isnull=True
     )
+    sfw_queue = queue_filter & Q(is_nsfw=False) & sfw_pred_visible
+    nsfw_queue = queue_filter & Q(is_nsfw=True) & nsfw_pred_visible
+
     if show_nsfw:
         return qs.aggregate(
-            queue_count=Count("pk", filter=queue_filter),
+            queue_count=Count("pk", filter=sfw_queue | nsfw_queue),
             void_count=Count("pk", filter=Q(location=Image.VOID)),
             fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True)),
-            nsfw_queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=True)),
+            nsfw_queue_count=Count("pk", filter=nsfw_queue),
             nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
         )
     return qs.aggregate(
-        queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=False)),
+        queue_count=Count("pk", filter=sfw_queue),
         void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=False)),
         fav_count=Count(
             "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=False)
         ),
-        nsfw_queue_count=Count("pk", filter=queue_filter & Q(is_nsfw=True)),
+        nsfw_queue_count=Count("pk", filter=nsfw_queue),
         nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
     )
 
@@ -759,6 +796,40 @@ def train_status(request, task_id: str):
     )
 
 
+def _vision_ctx() -> dict:
+    """Threshold dial state for the /config page (DB singleton via get_or_create)."""
+    sfw, nsfw = get_review_thresholds()
+    return {
+        "vision_sfw": sfw,
+        "vision_nsfw": nsfw,
+        "vision_buckets": range(1, 7),
+    }
+
+
+@login_required
+@require_POST
+def set_vision_thresholds(request):
+    """
+    Persist the SFW/NSFW review-queue hide thresholds from the config page.
+
+    Both values are clamped to [1, 6] so a malformed POST can't disable the
+    review queue with an out-of-range value. update_or_create writes the
+    singleton in one statement.
+    """
+    def _clamp(name: str) -> int:
+        try:
+            return max(1, min(6, int(request.POST.get(name, 1))))
+        except (ValueError, TypeError):
+            return 1
+
+    sfw = _clamp("sfw_threshold")
+    nsfw = _clamp("nsfw_threshold")
+    ReviewThresholds.objects.update_or_create(
+        pk=1, defaults={"sfw_threshold": sfw, "nsfw_threshold": nsfw}
+    )
+    return render(request, "ratings/_vision_status.html", _vision_ctx())
+
+
 def _schedule_ctx() -> dict:
     """
     Build schedule context by joining the user-facing ScrapeSchedule row with the
@@ -791,6 +862,7 @@ def config_view(request):
             **_training_ctx(request),
             **counts,
             **_schedule_ctx(),
+            **_vision_ctx(),
         },
     )
 
@@ -1021,17 +1093,19 @@ def _review_qs(show_nsfw: bool = False):
     either location feed the same queue — an image moved to corpus without a
     score (e.g. by the taste classifier) still needs a manual score before it
     leaves the queue. Unseen images (queue_seen_at IS NULL) sort first in
-    SQLite ASC; then oldest-downloaded.
+    SQLite ASC; then oldest-downloaded. The [vision] threshold (DB singleton
+    via get_review_thresholds) further hides low-confidence images so the
+    user only reviews things the model thinks they'll like.
     """
-    qs = Image.objects.filter(
+    sfw_bucket, nsfw_bucket = get_review_thresholds()
+    return Image.objects.filter(
         location__in=[Image.INBOX, Image.CORPUS],
         score__isnull=True,
         is_purged=False,
         file_deleted=False,
+    ).filter(_visibility_q(sfw_bucket, nsfw_bucket, show_nsfw)).order_by(
+        "queue_seen_at", "downloaded_at"
     )
-    if not show_nsfw:
-        qs = qs.filter(is_nsfw=False)
-    return qs.order_by("queue_seen_at", "downloaded_at")
 
 
 def _review_nsfw_qs(show_nsfw: bool = False):
@@ -1040,14 +1114,20 @@ def _review_nsfw_qs(show_nsfw: bool = False):
 
     show_nsfw is accepted but ignored — this queue is always NSFW-only by
     definition. The parameter exists so qs_fn callers can treat both queues
-    with the same (show_nsfw: bool) → QuerySet signature.
+    with the same (show_nsfw: bool) → QuerySet signature. The NSFW threshold
+    hides low-confidence NSFW items so the queue stays manageable independently
+    of the SFW threshold.
     """
+    _, nsfw_bucket = get_review_thresholds()
+    nsfw_cut = bucket_to_cutoff(nsfw_bucket)
     return Image.objects.filter(
         location__in=[Image.INBOX, Image.CORPUS],
         is_nsfw=True,
         score__isnull=True,
         is_purged=False,
         file_deleted=False,
+    ).filter(
+        Q(predicted_score__gte=nsfw_cut) | Q(predicted_score__isnull=True)
     ).order_by("queue_seen_at", "downloaded_at")
 
 
