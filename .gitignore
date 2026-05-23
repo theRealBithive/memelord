@@ -55,3 +55,4 @@ working_dir/
 *.gif
 
 */config.toml
+janulon-data/memelord.db
