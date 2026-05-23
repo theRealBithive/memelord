@@ -205,118 +205,6 @@ def _counts(show_nsfw: bool = False) -> dict:
     )
 
 
-def _get_uncertain_next(qs) -> Image | None:
-    """
-    Pick a random image from the top-30 most-uncertain inbox candidates.
-
-    "Uncertain" = predicted probability closest to 0.5 — these are the images
-    the classifier learns most from per rating (classic active learning). A
-    random pick from the top-K rather than always the single absolute most-
-    uncertain prevents visually-similar runs that would happen if the same
-    near-50% cluster came up rating after rating without an intervening retrain.
-    """
-    clf = _get_taste_clf()
-    if clf is None:
-        return None
-    candidates = [(h, e) for h, e in qs.values_list("content_hash", "embedding") if e]
-    if not candidates:
-        return None
-    import numpy as np
-
-    embeddings = np.stack(
-        [np.frombuffer(bytes(e), dtype=np.float32) for _, e in candidates]
-    )
-    probas = clf.predict_proba(embeddings)[:, 1]
-    uncertainty_order = np.argsort(np.abs(probas - 0.5))
-    k = min(30, len(candidates))
-    pick_idx = int(np.random.choice(uncertainty_order[:k]))
-    return Image.objects.get(content_hash=candidates[pick_idx][0])
-
-
-def _image_matches_mode(img: Image, mode: str, show_nsfw: bool) -> bool:
-    """
-    Whether an Image is still a valid candidate for the swipe queue of `mode`.
-
-    Used to validate a session-stored preload hash before consuming it — the
-    image could have been rated in another tab, purged, or had its NSFW flag
-    toggled between the GET that produced the preload and the POST that uses it.
-    """
-    if img.file_deleted or img.is_purged:
-        return False
-    if mode == "nsfw_fav":
-        return img.location == Image.CORPUS and img.is_favourite and img.is_nsfw
-    if mode == "fav":
-        return img.location == Image.CORPUS and img.is_favourite
-    if mode.startswith("nsfw_"):
-        target = mode.removeprefix("nsfw_")
-        return img.location == target and img.is_nsfw
-    if not show_nsfw and img.is_nsfw:
-        return False
-    return img.location == mode
-
-
-def _next_image_for_session(
-    request,
-    mode: str,
-    exclude_hash: str | None = None,
-    show_nsfw: bool = False,
-    order: str = "random",
-) -> Image | None:
-    """
-    Return the preloaded image from the session if it's still a valid candidate,
-    otherwise fall back to a fresh _get_next pick.
-
-    The preload mechanism (set in _build_ctx) lets the browser fetch the next
-    image while the user is still looking at the current card; consuming the
-    same hash here is what makes the rate→next-card swap actually instant —
-    the served image hits the preload cache rather than a fresh network round-trip.
-    """
-    stored_hash = request.session.get("preloaded_hash")
-    stored_mode = request.session.get("preloaded_mode")
-    if stored_hash and stored_hash != exclude_hash and stored_mode == mode:
-        img = Image.objects.filter(content_hash=stored_hash).first()
-        if img and _image_matches_mode(img, mode, show_nsfw):
-            return img
-    return _get_next(mode, exclude_hash=exclude_hash, show_nsfw=show_nsfw, order=order)
-
-
-def _get_next(
-    mode: str,
-    exclude_hash: str | None = None,
-    show_nsfw: bool = False,
-    order: str = "random",
-) -> Image | None:
-    """
-    Pick the next image for the swipe-style rating view.
-
-    Default random order intentionally avoids anchoring bias — sequential
-    ordering would cause the user to mentally anticipate the next image rather
-    than judging each one independently. The "uncertain" order opts into
-    active-learning sampling for inbox modes only; it falls back to random
-    when no classifier is trained yet.
-    """
-    qs = Image.objects.filter(file_deleted=False)
-
-    if mode == "nsfw_fav":
-        qs = qs.filter(location=Image.CORPUS, is_favourite=True, is_nsfw=True)
-    elif mode.startswith("nsfw_"):
-        qs = qs.filter(location=mode.removeprefix("nsfw_"), is_nsfw=True)
-    else:
-        qs = qs.filter(location=mode)
-        if not show_nsfw:
-            qs = qs.filter(is_nsfw=False)
-
-    if exclude_hash:
-        qs = qs.exclude(content_hash=exclude_hash)
-
-    if order == "uncertain" and mode in ("inbox", "nsfw_inbox"):
-        result = _get_uncertain_next(qs)
-        if result is not None:
-            return result
-
-    return qs.order_by("?").first()
-
-
 def _fmt_elapsed(seconds: int | None) -> str | None:
     if seconds is None:
         return None
@@ -381,93 +269,8 @@ def _training_ctx(request) -> dict:
     return {"active_task_id": task_id, "training_elapsed": _fmt_elapsed(elapsed)}
 
 
-def _build_ctx(
-    mode: str, image: Image | None, show_nsfw: bool = False, request=None
-) -> dict:
-    """Build the minimal context dict shared by all swipe-mode rating templates."""
-    counts = _counts(show_nsfw)
-    inbox_order = "random"
-    preload_url: str | None = None
-    if request is not None:
-        inbox_order = request.session.get("inbox_order", "random")
-        if image is not None:
-            # Pre-pick the image that should follow this one and stash its hash
-            # in the session — _next_image_for_session consumes it on the next
-            # rating request, and the template renders <link rel="preload"> so
-            # the browser fetches it while the user is still looking at the
-            # current card. Result: rate→next swap is served from cache.
-            next_img = _get_next(
-                mode,
-                exclude_hash=image.content_hash,
-                show_nsfw=show_nsfw,
-                order=inbox_order,
-            )
-            if next_img is not None:
-                preload_url = next_img.file_path
-                request.session["preloaded_hash"] = next_img.content_hash
-                request.session["preloaded_mode"] = mode
-            else:
-                request.session.pop("preloaded_hash", None)
-                request.session.pop("preloaded_mode", None)
-    ctx = {
-        "mode": mode,
-        "image": image,
-        "queue_count": counts.get(f"{mode}_count", 0),
-        "show_nsfw": show_nsfw,
-        "prediction": _taste_prediction(image),
-        "inbox_order": inbox_order,
-        "similar": _get_similar_rated(image) if image else [],
-        "preload_url": preload_url,
-        **counts,
-    }
-    if request is not None:
-        ctx.update(_training_ctx(request))
-    return ctx
-
-
-def _mode_view(request, mode: str):
-    show_nsfw = request.session.get("show_nsfw", False)
-    order = request.session.get("inbox_order", "random")
-    image = _get_next(mode, show_nsfw=show_nsfw, order=order)
-    return render(
-        request, "ratings/rate.html", _build_ctx(mode, image, show_nsfw, request)
-    )
-
-
-@login_required
-@require_POST
-def toggle_inbox_order(request):
-    """Flip inbox ordering between random and uncertain, then re-render the card."""
-    current = request.session.get("inbox_order", "random")
-    request.session["inbox_order"] = "uncertain" if current == "random" else "random"
-    mode = request.POST.get("mode", "inbox")
-    show_nsfw = request.session.get("show_nsfw", False)
-    image = _get_next(mode, show_nsfw=show_nsfw, order=request.session["inbox_order"])
-    return render(
-        request, "ratings/_card.html", _build_ctx(mode, image, show_nsfw, request)
-    )
-
-
 def _move_image(image: Image, new_location: str) -> None:
     _move_image_util(image, new_location, DATA_DIR)
-
-
-def _apply_rating(image: Image, target_location: str, is_fav: bool, now) -> None:
-    """
-    Move image to target location and record the rating atomically.
-
-    update_fields is used instead of a full save() so concurrent writes from
-    other sessions don't clobber unrelated fields (e.g. embedding, phash)
-    that may be updated by a background scrape at the same time.
-    """
-    fields = ["is_favourite", "rated_at"]
-    if image.location != target_location:
-        _move_image(image, target_location)
-        fields += ["file_path", "location"]
-    image.is_favourite = is_fav
-    image.rated_at = now
-    image.save(update_fields=fields)
-    _invalidate_similar_index()
 
 
 def _purge_image(image: Image) -> None:
@@ -493,26 +296,6 @@ def _neighbor_hash(all_hashes: list[str], content_hash: str) -> str | None:
     if idx < len(all_hashes) - 1:
         return all_hashes[idx + 1]
     return all_hashes[idx - 1] if idx > 0 else None
-
-
-@login_required
-def rate_inbox(request):
-    return redirect("review_corpus")
-
-
-@login_required
-def rate_corpus(request):
-    return redirect("review_corpus")
-
-
-@login_required
-def rate_void(request):
-    return redirect("review_void")
-
-
-@login_required
-def rate_nsfw_inbox(request):
-    return redirect("rate_nsfw_corpus")
 
 
 @login_required
@@ -553,48 +336,6 @@ def rate_nsfw_void(request):
             "mode": "nsfw_void",
         },
     )
-
-
-@login_required
-@require_POST
-def submit_rating(request, content_hash: str, action: str):
-    """
-    Handle a swipe/keypress rating action from the swipe-style review flow.
-
-    Returns the HTMX partial with the next image if the request came via htmx,
-    otherwise a full page render for non-JS fallback. mode is passed from the
-    template so this single endpoint serves inbox, corpus, void, fav, and nsfw
-    variants without separate URL patterns for each.
-    """
-    mode = request.POST.get("mode", "inbox")
-    show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash)
-    now = timezone.now()
-
-    if action in ("good", "fav"):
-        _apply_rating(image, Image.CORPUS, action == "fav", now)
-    elif action == "bad":
-        _apply_rating(image, Image.VOID, False, now)
-    elif action == "purge":
-        _purge_image(image)
-    elif action == "unfav":
-        image.is_favourite = False
-        image.save(update_fields=["is_favourite"])
-    elif action == "mark_nsfw":
-        image.is_nsfw = True
-        image.save(update_fields=["is_nsfw"])
-    elif action == "mark_safe":
-        image.is_nsfw = False
-        image.save(update_fields=["is_nsfw"])
-
-    order = request.session.get("inbox_order", "random")
-    next_image = _next_image_for_session(
-        request, mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order
-    )
-    ctx = _build_ctx(mode, next_image, show_nsfw, request)
-    if request.htmx:
-        return render(request, "ratings/_htmx_rating.html", ctx)
-    return render(request, "ratings/rate.html", ctx)
 
 
 @login_required
@@ -1478,21 +1219,9 @@ def toggle_nsfw(request, content_hash: str):
             ctx = _void_review_ctx(content_hash, show_nsfw, request)
         return render(request, "ratings/_void_htmx.html", ctx)
 
-    # Inbox (and any other location)
-    mode = request.POST.get("mode", "inbox")
     image.is_nsfw = not image.is_nsfw
     image.save(update_fields=["is_nsfw"])
-    if not show_nsfw and image.is_nsfw:
-        order = request.session.get("inbox_order", "random")
-        next_image = _next_image_for_session(
-            request, mode, exclude_hash=content_hash, show_nsfw=show_nsfw, order=order
-        )
-        if mode in ("inbox", "nsfw_inbox"):
-            _mark_queue_seen(next_image)
-        ctx = _build_ctx(mode, next_image, show_nsfw, request)
-    else:
-        ctx = _build_ctx(mode, image, show_nsfw, request)
-    return render(request, "ratings/_htmx_rating.html", ctx)
+    return redirect("review_corpus")
 
 
 # ── Void review ───────────────────────────────────────────────────────────────

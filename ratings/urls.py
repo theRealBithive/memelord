@@ -1,30 +1,67 @@
 from django.urls import path
+from django.views.generic.base import RedirectView
+
 from . import views
 
 urlpatterns = [
     path("", views.index, name="index"),
     path("stats/", views.stats, name="stats"),
-    path("rate/inbox/", views.rate_inbox, name="rate_inbox"),
-    path("rate/corpus/", views.rate_corpus, name="rate_corpus"),
-    path("rate/void/", views.rate_void, name="rate_void"),
-    path("rate/nsfw/", views.rate_nsfw_inbox, name="rate_nsfw_inbox"),
-    path("rate/nsfw/inbox/", views.rate_nsfw_inbox, name="rate_nsfw_inbox"),
-    path("rate/nsfw/corpus/", views.rate_nsfw_corpus, name="rate_nsfw_corpus"),
-    path("rate/nsfw/corpus/<str:content_hash>/", views.rate_nsfw_corpus, name="review_nsfw_corpus_image"),
-    path("rate/nsfw/corpus/<str:content_hash>/score/", views.score_nsfw_corpus, name="score_nsfw_corpus"),
-    path("rate/nsfw/corpus/<str:content_hash>/trash/", views.trash_nsfw_corpus, name="trash_nsfw_corpus"),
-    path("rate/nsfw/corpus/<str:content_hash>/purge/", views.purge_nsfw_corpus, name="purge_nsfw_corpus"),
-    path("rate/nsfw/corpus/<str:content_hash>/fav/", views.toggle_fav_nsfw_corpus, name="toggle_fav_nsfw_corpus"),
-    path("rate/nsfw/void/", views.rate_nsfw_void, name="rate_nsfw_void"),
+    # Legacy swipe URLs → current review UI (bookmarks from older releases).
     path(
-        "rate/<str:content_hash>/<str:action>/",
-        views.submit_rating,
-        name="submit_rating",
+        "rate/inbox/",
+        RedirectView.as_view(pattern_name="review_corpus", permanent=True),
     ),
+    path(
+        "rate/corpus/",
+        RedirectView.as_view(pattern_name="review_corpus", permanent=True),
+    ),
+    path(
+        "rate/void/",
+        RedirectView.as_view(pattern_name="review_void", permanent=True),
+    ),
+    path(
+        "rate/nsfw/",
+        RedirectView.as_view(pattern_name="rate_nsfw_corpus", permanent=True),
+    ),
+    path(
+        "rate/nsfw/inbox/",
+        RedirectView.as_view(pattern_name="rate_nsfw_corpus", permanent=True),
+        name="rate_nsfw_inbox",
+    ),
+    path("rate/nsfw/corpus/", views.rate_nsfw_corpus, name="rate_nsfw_corpus"),
+    path(
+        "rate/nsfw/corpus/<str:content_hash>/",
+        views.rate_nsfw_corpus,
+        name="review_nsfw_corpus_image",
+    ),
+    path(
+        "rate/nsfw/corpus/<str:content_hash>/score/",
+        views.score_nsfw_corpus,
+        name="score_nsfw_corpus",
+    ),
+    path(
+        "rate/nsfw/corpus/<str:content_hash>/trash/",
+        views.trash_nsfw_corpus,
+        name="trash_nsfw_corpus",
+    ),
+    path(
+        "rate/nsfw/corpus/<str:content_hash>/purge/",
+        views.purge_nsfw_corpus,
+        name="purge_nsfw_corpus",
+    ),
+    path(
+        "rate/nsfw/corpus/<str:content_hash>/fav/",
+        views.toggle_fav_nsfw_corpus,
+        name="toggle_fav_nsfw_corpus",
+    ),
+    path("rate/nsfw/void/", views.rate_nsfw_void, name="rate_nsfw_void"),
     path("nsfw-toggle/", views.nsfw_toggle, name="nsfw_toggle"),
-    path("inbox/order/toggle/", views.toggle_inbox_order, name="toggle_inbox_order"),
     path("gallery/", views.gallery, name="gallery"),
-    path("gallery/<str:content_hash>/action/", views.gallery_action, name="gallery_action"),
+    path(
+        "gallery/<str:content_hash>/action/",
+        views.gallery_action,
+        name="gallery_action",
+    ),
     path("tags/", views.tag_list, name="tag_list"),
     path("tags/autocomplete/", views.tag_autocomplete, name="tag_autocomplete"),
     path("tags/<int:pk>/rename/", views.tag_rename, name="tag_rename"),
@@ -33,21 +70,39 @@ urlpatterns = [
     # Void grid — must be before the corpus wildcard routes.
     path("review/void/", views.review_void, name="review_void"),
     path("review/void/bulk/", views.void_bulk_rescue, name="void_bulk_rescue"),
-    path("review/void/<str:content_hash>/", views.review_void, name="review_void_image"),
-    path("review/void/<str:content_hash>/action/", views.void_review_action, name="void_review_action"),
-    path("review/void/<str:content_hash>/grid-action/", views.void_grid_action, name="void_grid_action"),
+    path(
+        "review/void/<str:content_hash>/", views.review_void, name="review_void_image"
+    ),
+    path(
+        "review/void/<str:content_hash>/action/",
+        views.void_review_action,
+        name="void_review_action",
+    ),
+    path(
+        "review/void/<str:content_hash>/grid-action/",
+        views.void_grid_action,
+        name="void_grid_action",
+    ),
     # Corpus review
     path("review/", views.review_corpus, name="review_corpus"),
     path("review/<str:content_hash>/", views.review_corpus, name="review_corpus_image"),
     path("review/<str:content_hash>/score/", views.score_corpus, name="score_corpus"),
     path("review/<str:content_hash>/trash/", views.trash_corpus, name="trash_corpus"),
     path("review/<str:content_hash>/purge/", views.purge_corpus, name="purge_corpus"),
-    path("review/<str:content_hash>/fav/", views.toggle_fav_corpus, name="toggle_fav_corpus"),
+    path(
+        "review/<str:content_hash>/fav/",
+        views.toggle_fav_corpus,
+        name="toggle_fav_corpus",
+    ),
     path("toggle/<str:content_hash>/nsfw/", views.toggle_nsfw, name="toggle_nsfw"),
     path("config/", views.config_view, name="config"),
     path("config/schedule/", views.set_scrape_schedule, name="set_scrape_schedule"),
     path("config/vision/", views.set_vision_thresholds, name="set_vision_thresholds"),
-    path("config/notifications/", views.save_notification_config, name="save_notification_config"),
+    path(
+        "config/notifications/",
+        views.save_notification_config,
+        name="save_notification_config",
+    ),
     path("share/<str:content_hash>/", views.share_image, name="share_image"),
     path("config/add/", views.source_add, name="source_add"),
     path("config/import/", views.source_import, name="source_import"),
