@@ -9,7 +9,15 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings.models import Image, LogEntry, NotificationConfig, ReviewThresholds, ScrapeSchedule, Source, Tag
+from ratings.models import (
+    Image,
+    LogEntry,
+    NotificationConfig,
+    ReviewThresholds,
+    ScrapeSchedule,
+    Source,
+    Tag,
+)
 from ratings.queue_rules import (
     bucket_to_cutoff,
     get_review_thresholds,
@@ -43,6 +51,7 @@ def _get_taste_clf():
     mtime = WEIGHTS_PATH.stat().st_mtime
     if _taste_clf_cache is None or mtime != _taste_clf_mtime:
         from core import brain
+
         _taste_clf_cache = brain.load_classifier(WEIGHTS_PATH)
         _taste_clf_mtime = mtime
     return _taste_clf_cache
@@ -56,6 +65,7 @@ def _taste_prediction(image) -> int | None:
     if clf is None:
         return None
     from core import brain
+
     emb = brain.bytes_to_embedding(bytes(image.embedding))
     return round(float(brain.predict_proba(clf, emb)) * 100)
 
@@ -141,8 +151,7 @@ def _get_similar_rated(image, k: int = 6) -> list[dict]:
         return []
     hashes = [h for h, _ in picks]
     images = {
-        img.content_hash: img
-        for img in Image.objects.filter(content_hash__in=hashes)
+        img.content_hash: img for img in Image.objects.filter(content_hash__in=hashes)
     }
     return [
         {"image": images[h], "similarity": round(s * 100)}
@@ -172,9 +181,7 @@ def _counts(show_nsfw: bool = False) -> dict:
     nsfw_pred_visible = pred_score_visible(bucket_to_cutoff(nsfw_bucket))
 
     qs = Image.objects.filter(file_deleted=False, is_purged=False)
-    queue_filter = Q(
-        location__in=[Image.INBOX, Image.CORPUS], score__isnull=True
-    )
+    queue_filter = Q(location__in=[Image.INBOX, Image.CORPUS], score__isnull=True)
     sfw_queue = queue_filter & Q(is_nsfw=False) & sfw_pred_visible
     nsfw_queue = queue_filter & Q(is_nsfw=True) & nsfw_pred_visible
 
@@ -210,9 +217,7 @@ def _get_uncertain_next(qs) -> Image | None:
     clf = _get_taste_clf()
     if clf is None:
         return None
-    candidates = [
-        (h, e) for h, e in qs.values_list("content_hash", "embedding") if e
-    ]
+    candidates = [(h, e) for h, e in qs.values_list("content_hash", "embedding") if e]
     if not candidates:
         return None
     import numpy as np
@@ -328,6 +333,33 @@ def _elapsed_from_session(request) -> int | None:
     return int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
 
 
+def _clear_training_session(request, task_id: str | None = None) -> None:
+    """Drop training session keys only when ``task_id`` matches the stored job (or is omitted)."""
+    session_task = request.session.get("training_task_id")
+    if task_id is not None and session_task != task_id:
+        return
+    request.session.pop("training_task_id", None)
+    request.session.pop("training_started_at", None)
+
+
+def _training_task_stale(request, task_id: str) -> bool:
+    """
+    Return True when the session's training task is no longer running in django-q.
+
+    Used on ordinary page loads so a finished or lost worker job does not leave
+    the nav spinner stuck until someone happens to poll train_status.
+    """
+    from django_q.tasks import fetch
+
+    task = fetch(task_id)
+    if task is None:
+        return True
+    if task.stopped is not None:
+        return True
+    elapsed = _elapsed_from_session(request)
+    return elapsed is not None and elapsed > 14400
+
+
 def _training_ctx(request) -> dict:
     """
     Build the training-progress context fragment for templates.
@@ -341,11 +373,10 @@ def _training_ctx(request) -> dict:
     task_id = request.session.get("training_task_id")
     if not task_id:
         return {"active_task_id": None, "training_elapsed": None}
-    elapsed = _elapsed_from_session(request)
-    if elapsed is not None and elapsed > 14400:
-        request.session.pop("training_task_id", None)
-        request.session.pop("training_started_at", None)
+    if _training_task_stale(request, task_id):
+        _clear_training_session(request, task_id)
         return {"active_task_id": None, "training_elapsed": None}
+    elapsed = _elapsed_from_session(request)
     return {"active_task_id": task_id, "training_elapsed": _fmt_elapsed(elapsed)}
 
 
@@ -397,7 +428,9 @@ def _mode_view(request, mode: str):
     show_nsfw = request.session.get("show_nsfw", False)
     order = request.session.get("inbox_order", "random")
     image = _get_next(mode, show_nsfw=show_nsfw, order=order)
-    return render(request, "ratings/rate.html", _build_ctx(mode, image, show_nsfw, request))
+    return render(
+        request, "ratings/rate.html", _build_ctx(mode, image, show_nsfw, request)
+    )
 
 
 @login_required
@@ -409,7 +442,9 @@ def toggle_inbox_order(request):
     mode = request.POST.get("mode", "inbox")
     show_nsfw = request.session.get("show_nsfw", False)
     image = _get_next(mode, show_nsfw=show_nsfw, order=request.session["inbox_order"])
-    return render(request, "ratings/_card.html", _build_ctx(mode, image, show_nsfw, request))
+    return render(
+        request, "ratings/_card.html", _build_ctx(mode, image, show_nsfw, request)
+    )
 
 
 def _move_image(image: Image, new_location: str) -> None:
@@ -501,8 +536,9 @@ def rate_nsfw_void(request):
     """
     show_nsfw = request.session.get("show_nsfw", False)
     images = list(
-        Image.objects.filter(location=Image.VOID, is_nsfw=True, file_deleted=False)
-        .order_by("void_seen_at", "-rated_at")[:500]
+        Image.objects.filter(
+            location=Image.VOID, is_nsfw=True, file_deleted=False
+        ).order_by("void_seen_at", "-rated_at")[:500]
     )
     return render(
         request,
@@ -594,13 +630,13 @@ def stats(request):
         pass
 
     last_train_task = (
-        Task.objects.filter(func="ratings.tasks.run_train")
-        .order_by("-stopped")
-        .first()
+        Task.objects.filter(func="ratings.tasks.run_train").order_by("-stopped").first()
     )
     last_train_info: dict | None = None
     if last_train_task is not None:
-        result = last_train_task.result if isinstance(last_train_task.result, dict) else {}
+        result = (
+            last_train_task.result if isinstance(last_train_task.result, dict) else {}
+        )
         # success=True from django-q only means the worker returned without raising —
         # run_train catches its own exceptions and returns {"ok": False, "error": ...},
         # so the in-app notion of "succeeded" needs both flags.
@@ -620,7 +656,9 @@ def stats(request):
             "error": error,
         }
 
-    gallery_qs = Image.objects.filter(location=Image.CORPUS, file_deleted=False, score__isnull=False)
+    gallery_qs = Image.objects.filter(
+        location=Image.CORPUS, file_deleted=False, score__isnull=False
+    )
     if not show_nsfw:
         gallery_qs = gallery_qs.filter(is_nsfw=False)
 
@@ -632,11 +670,15 @@ def stats(request):
     score_dist_max = max((row["n"] for row in score_dist), default=1)
 
     source_breakdown = list(
-        gallery_qs.values("source_label").annotate(n=Count("content_hash")).order_by("-n")
+        gallery_qs.values("source_label")
+        .annotate(n=Count("content_hash"))
+        .order_by("-n")
     )
 
     seven_days_ago = timezone.now() - timedelta(days=7)
-    scraped_7d = Image.objects.filter(downloaded_at__gte=seven_days_ago, file_deleted=False).count()
+    scraped_7d = Image.objects.filter(
+        downloaded_at__gte=seven_days_ago, file_deleted=False
+    ).count()
     rated_7d = Image.objects.filter(
         rated_at__gte=seven_days_ago,
         location__in=[Image.CORPUS, Image.VOID],
@@ -728,18 +770,23 @@ def trigger_train(request):
     runs in a background worker. The session stores the task ID so the polling
     template knows which job to watch via train_status.
     """
-    from django_q.tasks import async_task
+    from django_q.tasks import async_task, fetch
 
-    if request.session.get("training_task_id"):
-        ctx = _training_ctx(request)
-        return render(
-            request,
-            "ratings/_train_pending.html",
-            {
-                "task_id": ctx["active_task_id"],
-                "elapsed": ctx["training_elapsed"],
-            },
-        )
+    existing_id = request.session.get("training_task_id")
+    if existing_id:
+        task = fetch(existing_id)
+        if task is not None and task.stopped is None:
+            ctx = _training_ctx(request)
+            return render(
+                request,
+                "ratings/_train_pending.html",
+                {
+                    "task_id": ctx["active_task_id"],
+                    "elapsed": ctx["training_elapsed"],
+                },
+            )
+        _clear_training_session(request, existing_id)
+
     task_id = async_task("ratings.tasks.run_train")
     request.session["training_task_id"] = task_id
     request.session["training_started_at"] = timezone.now().isoformat()
@@ -759,9 +806,34 @@ def train_status(request, task_id: str):
     """
     from django_q.tasks import fetch
 
+    session_task = request.session.get("training_task_id")
     task = fetch(task_id)
-    if task is None or task.stopped is None:
-        elapsed = _elapsed_from_session(request)
+
+    if task is None:
+        if session_task == task_id:
+            _clear_training_session(request, task_id)
+            return render(
+                request,
+                "ratings/_train_result.html",
+                {
+                    "ok": False,
+                    "error": "Training task not found (worker may have restarted).",
+                    "corpus_n": 0,
+                    "void_n": 0,
+                },
+            )
+        elapsed = _elapsed_from_session(request) if session_task else None
+        return render(
+            request,
+            "ratings/_train_pending.html",
+            {
+                "task_id": session_task or task_id,
+                "elapsed": _fmt_elapsed(elapsed),
+            },
+        )
+
+    if task.stopped is None:
+        elapsed = _elapsed_from_session(request) if session_task == task_id else None
         return render(
             request,
             "ratings/_train_pending.html",
@@ -771,8 +843,8 @@ def train_status(request, task_id: str):
             },
         )
 
-    request.session.pop("training_task_id", None)
-    request.session.pop("training_started_at", None)
+    if session_task == task_id:
+        _clear_training_session(request, task_id)
 
     result = task.result or {}
     return render(
@@ -781,8 +853,12 @@ def train_status(request, task_id: str):
         {
             "ok": result.get("ok", False),
             "error": result.get("error", "Unknown error."),
-            "corpus_n": Image.objects.filter(location=Image.CORPUS, file_deleted=False).count(),
-            "void_n": Image.objects.filter(location=Image.VOID, file_deleted=False).count(),
+            "corpus_n": Image.objects.filter(
+                location=Image.CORPUS, file_deleted=False
+            ).count(),
+            "void_n": Image.objects.filter(
+                location=Image.VOID, file_deleted=False
+            ).count(),
         },
     )
 
@@ -807,6 +883,7 @@ def set_vision_thresholds(request):
     review queue with an out-of-range value. update_or_create writes the
     singleton in one statement.
     """
+
     def _clamp(name: str) -> int:
         try:
             return max(1, min(6, int(request.POST.get(name, 1))))
@@ -911,7 +988,9 @@ def source_add(request):
         return render(
             request,
             "ratings/_source_error.html",
-            {"error": "Mastodon handle must include an instance, e.g. @user@mastodon.social"},
+            {
+                "error": "Mastodon handle must include an instance, e.g. @user@mastodon.social"
+            },
         )
 
     source, created = Source.objects.get_or_create(type=stype, name=name)
@@ -1089,13 +1168,15 @@ def _review_qs(show_nsfw: bool = False):
     user only reviews things the model thinks they'll like.
     """
     sfw_bucket, nsfw_bucket = get_review_thresholds()
-    return Image.objects.filter(
-        location__in=[Image.INBOX, Image.CORPUS],
-        score__isnull=True,
-        is_purged=False,
-        file_deleted=False,
-    ).filter(visibility_q(sfw_bucket, nsfw_bucket, show_nsfw)).order_by(
-        "queue_seen_at", "downloaded_at"
+    return (
+        Image.objects.filter(
+            location__in=[Image.INBOX, Image.CORPUS],
+            score__isnull=True,
+            is_purged=False,
+            file_deleted=False,
+        )
+        .filter(visibility_q(sfw_bucket, nsfw_bucket, show_nsfw))
+        .order_by("queue_seen_at", "downloaded_at")
     )
 
 
@@ -1110,15 +1191,17 @@ def _review_nsfw_qs(show_nsfw: bool = False):
     of the SFW threshold.
     """
     _, nsfw_bucket = get_review_thresholds()
-    return Image.objects.filter(
-        location__in=[Image.INBOX, Image.CORPUS],
-        is_nsfw=True,
-        score__isnull=True,
-        is_purged=False,
-        file_deleted=False,
-    ).filter(
-        pred_score_visible(bucket_to_cutoff(nsfw_bucket))
-    ).order_by("queue_seen_at", "downloaded_at")
+    return (
+        Image.objects.filter(
+            location__in=[Image.INBOX, Image.CORPUS],
+            is_nsfw=True,
+            score__isnull=True,
+            is_purged=False,
+            file_deleted=False,
+        )
+        .filter(pred_score_visible(bucket_to_cutoff(nsfw_bucket)))
+        .order_by("queue_seen_at", "downloaded_at")
+    )
 
 
 def _review_ctx(
@@ -1544,7 +1627,9 @@ def void_grid_action(request, content_hash: str):
     item from the DOM without a page reload.
     """
     action = request.POST.get("action", "")
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.VOID, file_deleted=False)
+    image = get_object_or_404(
+        Image, content_hash=content_hash, location=Image.VOID, file_deleted=False
+    )
     if action == "purge":
         _purge_image(image)
         return JsonResponse({"purged": True})
@@ -1572,7 +1657,9 @@ def void_bulk_rescue(request):
     rescued = 0
     for h in hashes:
         try:
-            img = Image.objects.get(content_hash=h, location=Image.VOID, file_deleted=False)
+            img = Image.objects.get(
+                content_hash=h, location=Image.VOID, file_deleted=False
+            )
         except Image.DoesNotExist:
             continue
         _move_image(img, Image.CORPUS)
@@ -1720,7 +1807,9 @@ def gallery_action(request, content_hash: str):
             _move_image(image, Image.VOID)
             image.is_favourite = False
             image.rated_at = now
-            image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+            image.save(
+                update_fields=["file_path", "location", "is_favourite", "rated_at"]
+            )
         return JsonResponse({"deleted": True})
 
     if action == "fav":
@@ -1739,7 +1828,9 @@ def gallery_action(request, content_hash: str):
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
 
-    return JsonResponse({"score": image.score, "fav": image.is_favourite, "nsfw": image.is_nsfw})
+    return JsonResponse(
+        {"score": image.score, "fav": image.is_favourite, "nsfw": image.is_nsfw}
+    )
 
 
 @login_required
@@ -1757,7 +1848,11 @@ def share_image(request, content_hash):
     image_path = DATA_DIR / image.file_path
     media_url = request.build_absolute_uri(settings.MEDIA_URL + image.file_path)
     errors = []
-    if request.POST.get("mattermost") and cfg.mattermost_enabled and cfg.mattermost_token:
+    if (
+        request.POST.get("mattermost")
+        and cfg.mattermost_enabled
+        and cfg.mattermost_token
+    ):
         try:
             notifiers.send_to_mattermost(cfg, image_path, image.source_label or "")
         except Exception as exc:
@@ -1779,11 +1874,15 @@ def save_notification_config(request):
     cfg.mattermost_base_url = request.POST.get("mattermost_base_url", "").strip()
     cfg.mattermost_token = request.POST.get("mattermost_token", "").strip()
     cfg.mattermost_channel_id = request.POST.get("mattermost_channel_id", "").strip()
-    cfg.mattermost_message_prefix = request.POST.get("mattermost_message_prefix", "").strip()
+    cfg.mattermost_message_prefix = request.POST.get(
+        "mattermost_message_prefix", ""
+    ).strip()
     cfg.signal_enabled = request.POST.get("signal_enabled") == "1"
     cfg.signal_api_url = request.POST.get("signal_api_url", "").strip()
     cfg.signal_sender = request.POST.get("signal_sender", "").strip()
     cfg.signal_recipients = request.POST.get("signal_recipients", "").strip()
     cfg.signal_message_prefix = request.POST.get("signal_message_prefix", "").strip()
     cfg.save()
-    return render(request, "ratings/_notification_config.html", {"notification_cfg": cfg})
+    return render(
+        request, "ratings/_notification_config.html", {"notification_cfg": cfg}
+    )
