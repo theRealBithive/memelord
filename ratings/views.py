@@ -237,12 +237,20 @@ def _training_task_stale(request, task_id: str) -> bool:
 
     Used on ordinary page loads so a finished or lost worker job does not leave
     the nav spinner stuck until someone happens to poll train_status.
+
+    fetch() only returns completed tasks (written to django_q_task after the
+    worker finishes). While the task is queued or running it lives in django_q_ormq
+    and fetch() returns None — that does NOT mean the task is lost. We use elapsed
+    time as the discriminator: None from fetch() is only stale once the elapsed
+    time exceeds the cluster timeout (14400s), at which point the worker would have
+    killed it anyway.
     """
     from django_q.tasks import fetch
 
     task = fetch(task_id)
     if task is None:
-        return True
+        elapsed = _elapsed_from_session(request)
+        return elapsed is None or elapsed > 14400
     if task.stopped is not None:
         return True
     elapsed = _elapsed_from_session(request)
@@ -553,15 +561,27 @@ def train_status(request, task_id: str):
 
     if task is None:
         if session_task == task_id:
-            _clear_training_session(request, task_id)
+            elapsed = _elapsed_from_session(request)
+            if elapsed is None or elapsed > 14400:
+                # Elapsed time meets or exceeds the cluster timeout — worker is gone.
+                _clear_training_session(request, task_id)
+                return render(
+                    request,
+                    "ratings/_train_result.html",
+                    {
+                        "ok": False,
+                        "error": "Training task not found (worker may have restarted).",
+                        "corpus_n": 0,
+                        "void_n": 0,
+                    },
+                )
+            # Task not yet in django_q_task → still queued or running in OrmQ.
             return render(
                 request,
-                "ratings/_train_result.html",
+                "ratings/_train_pending.html",
                 {
-                    "ok": False,
-                    "error": "Training task not found (worker may have restarted).",
-                    "corpus_n": 0,
-                    "void_n": 0,
+                    "task_id": task_id,
+                    "elapsed": _fmt_elapsed(elapsed),
                 },
             )
         elapsed = _elapsed_from_session(request) if session_task else None
