@@ -1066,6 +1066,13 @@ def _trash_impl(request, content_hash: str, qs_fn, ctx_fn):
         content_hash,
     )
     _move_image(image, Image.VOID)
+    if image.file_deleted:
+        # move_image flags file_deleted when the source file is missing; do not
+        # rewrite location to void anyway or the row vanishes from both review
+        # and trash grids while the file is still gone.
+        ctx = ctx_fn(next_hash, show_nsfw, request)
+        _mark_queue_seen(ctx.get("image"))
+        return render(request, "ratings/_review_htmx.html", ctx)
     image.is_favourite = False
     image.rated_at = timezone.now()
     image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
@@ -1234,7 +1241,7 @@ def _void_review_qs(show_nsfw: bool = False):
     Newest-trashed secondary order means recently discarded images appear first
     after the unseen batch, making it easy to undo an accidental trash.
     """
-    qs = Image.objects.filter(location=Image.VOID, file_deleted=False)
+    qs = Image.objects.filter(location=Image.VOID, file_deleted=False, is_purged=False)
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
     return qs.order_by("void_seen_at", "-rated_at")
