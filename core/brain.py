@@ -173,10 +173,11 @@ def predict_proba(
 ) -> np.ndarray:
     """
     Returns P(corpus) — the probability the image belongs in the positive
-    class. Used by classify_inbox() to auto-sort inbox images: ≥0.75 goes to
-    corpus, ≤0.25 to void, anything in between stays for manual review.
-    The 1-d reshape allows callers to pass a single (768,) vector without
-    wrapping it in a batch dimension themselves.
+    class. Used by classify_inbox() to auto-sort inbox images; the cutoffs
+    that turn this probability into a route (corpus / void / leave alone)
+    live in ratings.queue_rules so they stay aligned with the review-queue
+    visibility filter. The 1-d reshape allows callers to pass a single
+    (768,) vector without wrapping it in a batch dimension themselves.
     """
     if embedding.ndim == 1:
         embedding = embedding.reshape(1, -1)

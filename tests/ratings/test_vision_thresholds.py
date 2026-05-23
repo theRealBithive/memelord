@@ -12,7 +12,7 @@ django.setup()
 from django.test import TestCase, override_settings
 
 from ratings.models import Image, ReviewThresholds
-from ratings.utils import bucket_to_cutoff, get_review_thresholds
+from ratings.queue_rules import bucket_to_cutoff, get_review_thresholds
 
 
 def test_bucket_to_cutoff_known_buckets():
