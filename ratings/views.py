@@ -701,9 +701,9 @@ def stats(request):
         ).values_list("downloaded_at", "rated_at")
     )
     avg_inbox_hours: int | None = None
-    if inbox_durations:
-        total_s = sum((r - d).total_seconds() for d, r in inbox_durations if r > d)
-        avg_inbox_hours = round(total_s / len(inbox_durations) / 3600)
+    valid_durations = [(r - d).total_seconds() for d, r in inbox_durations if r > d]
+    if valid_durations:
+        avg_inbox_hours = round(sum(valid_durations) / len(valid_durations) / 3600)
 
     return render(
         request,
@@ -1840,13 +1840,12 @@ def share_image(request, content_hash):
     Share an image to Mattermost and/or Signal.
 
     Sends synchronously — both APIs are expected to be on the same LAN so
-    latency is negligible. The image URL is built from the request so it works
-    regardless of the deployment domain.
+    latency is negligible. Both channels receive the image bytes directly
+    because /media/ is @login_required.
     """
     image = get_object_or_404(Image, content_hash=content_hash)
     cfg, _ = NotificationConfig.objects.get_or_create(pk=1)
     image_path = DATA_DIR / image.file_path
-    media_url = request.build_absolute_uri(settings.MEDIA_URL + image.file_path)
     errors = []
     if (
         request.POST.get("mattermost")
@@ -1859,7 +1858,7 @@ def share_image(request, content_hash):
             errors.append(f"Mattermost: {exc}")
     if request.POST.get("signal") and cfg.signal_enabled and cfg.signal_api_url:
         try:
-            notifiers.send_to_signal(cfg, media_url, image.source_label or "")
+            notifiers.send_to_signal(cfg, image_path, image.source_label or "")
         except Exception as exc:
             errors.append(f"Signal: {exc}")
     return render(request, "ratings/_share_toast.html", {"errors": errors})
