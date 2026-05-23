@@ -227,6 +227,7 @@ def classify_inbox(
     stranding low-prediction images that the classifier already considered trash.
     Per-image save() means partial progress is durable.
     """
+    from ratings.queue_rules import AUTO_PROMOTE_THRESHOLD, AUTO_TRASH_THRESHOLD
     from ratings.utils import move_image
 
     need_vision = vision.weights_path and vision.weights_path.exists()
@@ -297,11 +298,11 @@ def classify_inbox(
             # the classifier (predicted_score IS NULL is the "show anyway" signal).
             img.predicted_score = prob
             update_fields.append("predicted_score")
-            if prob >= 0.75:
+            if prob >= AUTO_PROMOTE_THRESHOLD:
                 move_image(img, Image.CORPUS, data_dir)
                 update_fields.extend(["file_path", "location"])
                 to_corpus += 1
-            elif prob <= 0.25:
+            elif prob <= AUTO_TRASH_THRESHOLD:
                 move_image(img, Image.VOID, data_dir)
                 update_fields.extend(["file_path", "location"])
                 to_void += 1

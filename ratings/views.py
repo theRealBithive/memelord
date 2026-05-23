@@ -10,9 +10,13 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from ratings.models import Image, LogEntry, NotificationConfig, ReviewThresholds, ScrapeSchedule, Source, Tag
-from ratings.utils import (
+from ratings.queue_rules import (
     bucket_to_cutoff,
     get_review_thresholds,
+    pred_score_visible,
+    visibility_q,
+)
+from ratings.utils import (
     move_image as _move_image_util,
     purge_image as _purge_image_util,
 )
@@ -151,34 +155,6 @@ def index(request):
     return redirect("review_corpus")
 
 
-def _pred_score_visible(cutoff: float) -> Q:
-    """Per-side predicted_score predicate shared by every review-queue filter.
-
-    Three escape hatches keep an image in the queue:
-    - predicted_score >= cutoff: the classifier's confidence clears the dial.
-    - predicted_score IS NULL: image was never scored (fresh scrape, no weights
-      file yet) — show it so the queue isn't silently empty on first install.
-    - location = CORPUS: classify_inbox auto-promotes at prob >= 0.75, but
-      bucket_to_cutoff(6) ≈ 0.833, so images in [0.75, 0.833) would otherwise
-      vanish from /review/ forever at dial=6. Anything in corpus with score=NULL
-      has already been judged worth the user's time and must always be reachable.
-    """
-    return (
-        Q(predicted_score__gte=cutoff)
-        | Q(predicted_score__isnull=True)
-        | Q(location=Image.CORPUS)
-    )
-
-
-def _visibility_q(sfw_bucket: int, nsfw_bucket: int, show_nsfw: bool) -> Q:
-    """Combined NSFW + threshold Q used by both _review_qs and _counts."""
-    sfw_visible = Q(is_nsfw=False) & _pred_score_visible(bucket_to_cutoff(sfw_bucket))
-    if not show_nsfw:
-        return sfw_visible
-    nsfw_visible = Q(is_nsfw=True) & _pred_score_visible(bucket_to_cutoff(nsfw_bucket))
-    return sfw_visible | nsfw_visible
-
-
 def _counts(show_nsfw: bool = False) -> dict:
     """
     Aggregate image counts across all queues and locations in a single DB query.
@@ -192,8 +168,8 @@ def _counts(show_nsfw: bool = False) -> dict:
     page would be worse than no badge at all.
     """
     sfw_bucket, nsfw_bucket = get_review_thresholds()
-    sfw_pred_visible = _pred_score_visible(bucket_to_cutoff(sfw_bucket))
-    nsfw_pred_visible = _pred_score_visible(bucket_to_cutoff(nsfw_bucket))
+    sfw_pred_visible = pred_score_visible(bucket_to_cutoff(sfw_bucket))
+    nsfw_pred_visible = pred_score_visible(bucket_to_cutoff(nsfw_bucket))
 
     qs = Image.objects.filter(file_deleted=False, is_purged=False)
     queue_filter = Q(
@@ -1118,7 +1094,7 @@ def _review_qs(show_nsfw: bool = False):
         score__isnull=True,
         is_purged=False,
         file_deleted=False,
-    ).filter(_visibility_q(sfw_bucket, nsfw_bucket, show_nsfw)).order_by(
+    ).filter(visibility_q(sfw_bucket, nsfw_bucket, show_nsfw)).order_by(
         "queue_seen_at", "downloaded_at"
     )
 
@@ -1141,7 +1117,7 @@ def _review_nsfw_qs(show_nsfw: bool = False):
         is_purged=False,
         file_deleted=False,
     ).filter(
-        _pred_score_visible(bucket_to_cutoff(nsfw_bucket))
+        pred_score_visible(bucket_to_cutoff(nsfw_bucket))
     ).order_by("queue_seen_at", "downloaded_at")
 
 
