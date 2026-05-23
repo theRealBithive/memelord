@@ -151,23 +151,31 @@ def index(request):
     return redirect("review_corpus")
 
 
-def _visibility_q(sfw_bucket: int, nsfw_bucket: int, show_nsfw: bool) -> Q:
-    """Combined NSFW + threshold Q used by both _review_qs and _counts.
+def _pred_score_visible(cutoff: float) -> Q:
+    """Per-side predicted_score predicate shared by every review-queue filter.
 
-    Each side ORs in `predicted_score__isnull=True` so images that haven't
-    been scored by classify_inbox yet (fresh scrapes, never-trained users)
-    still appear — otherwise the queue would silently empty after migration.
+    Three escape hatches keep an image in the queue:
+    - predicted_score >= cutoff: the classifier's confidence clears the dial.
+    - predicted_score IS NULL: image was never scored (fresh scrape, no weights
+      file yet) — show it so the queue isn't silently empty on first install.
+    - location = CORPUS: classify_inbox auto-promotes at prob >= 0.75, but
+      bucket_to_cutoff(6) ≈ 0.833, so images in [0.75, 0.833) would otherwise
+      vanish from /review/ forever at dial=6. Anything in corpus with score=NULL
+      has already been judged worth the user's time and must always be reachable.
     """
-    sfw_cut = bucket_to_cutoff(sfw_bucket)
-    nsfw_cut = bucket_to_cutoff(nsfw_bucket)
-    sfw_visible = Q(is_nsfw=False) & (
-        Q(predicted_score__gte=sfw_cut) | Q(predicted_score__isnull=True)
+    return (
+        Q(predicted_score__gte=cutoff)
+        | Q(predicted_score__isnull=True)
+        | Q(location=Image.CORPUS)
     )
+
+
+def _visibility_q(sfw_bucket: int, nsfw_bucket: int, show_nsfw: bool) -> Q:
+    """Combined NSFW + threshold Q used by both _review_qs and _counts."""
+    sfw_visible = Q(is_nsfw=False) & _pred_score_visible(bucket_to_cutoff(sfw_bucket))
     if not show_nsfw:
         return sfw_visible
-    nsfw_visible = Q(is_nsfw=True) & (
-        Q(predicted_score__gte=nsfw_cut) | Q(predicted_score__isnull=True)
-    )
+    nsfw_visible = Q(is_nsfw=True) & _pred_score_visible(bucket_to_cutoff(nsfw_bucket))
     return sfw_visible | nsfw_visible
 
 
@@ -184,10 +192,8 @@ def _counts(show_nsfw: bool = False) -> dict:
     page would be worse than no badge at all.
     """
     sfw_bucket, nsfw_bucket = get_review_thresholds()
-    sfw_cut = bucket_to_cutoff(sfw_bucket)
-    nsfw_cut = bucket_to_cutoff(nsfw_bucket)
-    sfw_pred_visible = Q(predicted_score__gte=sfw_cut) | Q(predicted_score__isnull=True)
-    nsfw_pred_visible = Q(predicted_score__gte=nsfw_cut) | Q(predicted_score__isnull=True)
+    sfw_pred_visible = _pred_score_visible(bucket_to_cutoff(sfw_bucket))
+    nsfw_pred_visible = _pred_score_visible(bucket_to_cutoff(nsfw_bucket))
 
     qs = Image.objects.filter(file_deleted=False, is_purged=False)
     queue_filter = Q(
@@ -459,10 +465,19 @@ def _purge_image(image: Image) -> None:
 
 
 def _neighbor_hash(all_hashes: list[str], content_hash: str) -> str | None:
-    """Next hash in list, or previous if last, or None if single item."""
+    """Next hash in list, or previous if last, or None if single item.
+
+    When content_hash isn't in the queue at all (another tab rated it, or it
+    was filtered out between the GET and POST), fall back to the head of the
+    queue rather than treating the missing item as if it were at index 0 — the
+    previous behaviour silently teleported the user one position in (returning
+    `all_hashes[1]`) instead of landing them somewhere predictable.
+    """
     if not all_hashes:
         return None
-    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
+    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash)
+    if idx is None:
+        return all_hashes[0]
     if idx < len(all_hashes) - 1:
         return all_hashes[idx + 1]
     return all_hashes[idx - 1] if idx > 0 else None
@@ -1119,7 +1134,6 @@ def _review_nsfw_qs(show_nsfw: bool = False):
     of the SFW threshold.
     """
     _, nsfw_bucket = get_review_thresholds()
-    nsfw_cut = bucket_to_cutoff(nsfw_bucket)
     return Image.objects.filter(
         location__in=[Image.INBOX, Image.CORPUS],
         is_nsfw=True,
@@ -1127,7 +1141,7 @@ def _review_nsfw_qs(show_nsfw: bool = False):
         is_purged=False,
         file_deleted=False,
     ).filter(
-        Q(predicted_score__gte=nsfw_cut) | Q(predicted_score__isnull=True)
+        _pred_score_visible(bucket_to_cutoff(nsfw_bucket))
     ).order_by("queue_seen_at", "downloaded_at")
 
 
@@ -1206,14 +1220,17 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
 
     next_hash is captured before scoring because scoring changes queue ordering
     — the image disappears from its current position in the list once scored.
+    Uses _neighbor_hash so end-of-queue navigation matches _trash_impl and
+    _purge_impl (previous image on the last item, not a teleport to position 1).
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(
         Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
     )
-    all_hashes = list(qs_fn(show_nsfw).values_list("content_hash", flat=True))
-    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash, 0)
-    next_hash = all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None
+    next_hash = _neighbor_hash(
+        list(qs_fn(show_nsfw).values_list("content_hash", flat=True)),
+        content_hash,
+    )
     try:
         score_val = int(request.POST.get("score", 0))
         if 1 <= score_val <= 6:
@@ -1224,6 +1241,7 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
             image.score = score_val
             image.rated_at = timezone.now()
             image.save(update_fields=fields)
+            _invalidate_similar_index()
     except (ValueError, TypeError):
         pass
     ctx = ctx_fn(next_hash, show_nsfw, request)
@@ -1250,6 +1268,7 @@ def _trash_impl(request, content_hash: str, qs_fn, ctx_fn):
     image.is_favourite = False
     image.rated_at = timezone.now()
     image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
+    _invalidate_similar_index()
     ctx = ctx_fn(next_hash, show_nsfw, request)
     _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
