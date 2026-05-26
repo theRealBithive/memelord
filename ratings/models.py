@@ -24,30 +24,19 @@ class Image(models.Model):
     to DATA_DIR so the entire data volume can be moved without a migration.
     """
 
-    INBOX = "inbox"
-    CORPUS = "corpus"
-    VOID = "void"
-    LOCATION_CHOICES = [(INBOX, "inbox"), (CORPUS, "corpus"), (VOID, "void")]
-
     content_hash = models.CharField(primary_key=True, max_length=64)
     file_path = models.CharField(max_length=2048)  # relative to DATA_DIR
     source_url = models.CharField(max_length=2048, null=True, blank=True)
     source_label = models.CharField(max_length=255)
-    location = models.CharField(max_length=32, default=INBOX, choices=LOCATION_CHOICES)
     downloaded_at = models.DateTimeField(auto_now_add=True)
     rated_at = models.DateTimeField(null=True, blank=True)
-    is_favourite = models.BooleanField(default=False)
     is_nsfw = models.BooleanField(default=False)
     score = models.IntegerField(null=True, blank=True)
-    file_deleted = models.BooleanField(default=False)
     is_purged = models.BooleanField(default=False)
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
     embedding = models.BinaryField(null=True, blank=True)
     predicted_score = models.FloatField(null=True, blank=True, db_index=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="images")
-    void_seen_at = models.DateTimeField(null=True, blank=True)
-    inbox_seen_at = models.DateTimeField(null=True, blank=True)
-    corpus_seen_at = models.DateTimeField(null=True, blank=True)
     queue_seen_at = models.DateTimeField(null=True, blank=True)
     knn_tag_suggestions = models.CharField(max_length=500, blank=True, default="")
 
@@ -55,7 +44,7 @@ class Image(models.Model):
         ordering = ["downloaded_at"]
 
     def __str__(self) -> str:
-        return f"{self.location} {self.content_hash[:8]} ({self.source_label})"
+        return f"{self.content_hash[:8]} ({self.source_label})"
 
     @property
     def knn_tag_suggestions_list(self) -> list[str]:
@@ -88,7 +77,8 @@ class LogEntry(models.Model):
 
 class Source(models.Model):
     """
-    User-configured scrape source (a 4chan board, Imgur topic, Tumblr blog, or Pixelfed instance).
+    User-configured scrape source (a 4chan board, Imgur topic, Tumblr blog, or
+    Mastodon/Pixelfed account handle).
 
     Sources in the DB take precedence over config.toml entries — the DB is
     the live config that the UI edits, while config.toml serves as the seed
@@ -109,10 +99,12 @@ class Source(models.Model):
     ]
 
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
-    name = models.CharField(max_length=255)  # board / topic / blog / instance URL / account handle
+    name = models.CharField(max_length=255)  # board / topic / blog / account handle
     enabled = models.BooleanField(default=True)
     is_nsfw = models.BooleanField(default=False)
     added_at = models.DateTimeField(auto_now_add=True)
+    # Highest status ID seen on the last scrape — lets Mastodon/Pixelfed account
+    # scrapes resume forward instead of re-walking the whole timeline each run.
     cursor = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:
@@ -155,33 +147,52 @@ class ReviewThresholds(models.Model):
         super().save(*args, **kwargs)
 
 
-class NotificationConfig(models.Model):
+class NotificationChannel(models.Model):
     """
-    Singleton (pk=1) storing credentials for Mattermost and Signal sharing.
+    A named sharing destination — one Mattermost channel or one set of Signal recipients.
 
-    Mattermost uses a Personal Access Token so posts appear from the user's own
-    account rather than a bot. Signal requires signal-cli-rest-api running locally
-    or on the LAN — this model stores the endpoint URL and sender/recipient numbers.
+    Named channels ("Aurea", "TownSquare", "Simon") replace the old singleton
+    NotificationConfig so the user can send an image to specific people instead
+    of always broadcasting to everyone at once. The service-specific fields are
+    present on every row but only the fields relevant to the chosen service are used;
+    the others stay blank.
     """
 
-    # Mattermost
-    mattermost_enabled = models.BooleanField(default=False)
-    mattermost_base_url = models.CharField(max_length=255, blank=True)
-    mattermost_token = models.CharField(max_length=255, blank=True)
-    mattermost_channel_id = models.CharField(max_length=64, blank=True)
-    mattermost_message_prefix = models.CharField(max_length=255, blank=True)
+    MATTERMOST = "mattermost"
+    SIGNAL = "signal"
+    SERVICE_CHOICES = [
+        (MATTERMOST, "Mattermost"),
+        (SIGNAL, "Signal"),
+    ]
 
-    # Signal
-    signal_enabled = models.BooleanField(default=False)
+    name = models.CharField(max_length=100, unique=True)
+    service = models.CharField(max_length=20, choices=SERVICE_CHOICES)
+    enabled = models.BooleanField(default=True)
+
+    # Mattermost fields
+    mm_base_url = models.CharField(max_length=255, blank=True)
+    mm_token = models.CharField(max_length=255, blank=True)
+    mm_channel_id = models.CharField(max_length=64, blank=True)
+    mm_message_prefix = models.CharField(max_length=255, blank=True)
+
+    # Signal fields
     signal_api_url = models.CharField(max_length=255, blank=True)
     signal_sender = models.CharField(max_length=32, blank=True)
     signal_recipients = models.TextField(blank=True)  # comma-separated phone numbers
     signal_message_prefix = models.CharField(max_length=255, blank=True)
 
     class Meta:
-        verbose_name = "notification config"
+        ordering = ["name"]
+        verbose_name = "notification channel"
 
-    def save(self, *args, **kwargs):
-        """Force pk=1 to maintain the singleton invariant."""
-        self.pk = 1
-        super().save(*args, **kwargs)
+    def __str__(self) -> str:
+        return f"{self.name} ({self.service})"
+
+    @property
+    def is_configured(self) -> bool:
+        """Return True when the channel has enough credentials to actually send."""
+        if self.service == self.MATTERMOST:
+            return bool(self.mm_token and self.mm_base_url and self.mm_channel_id)
+        if self.service == self.SIGNAL:
+            return bool(self.signal_api_url and self.signal_sender and self.signal_recipients)
+        return False

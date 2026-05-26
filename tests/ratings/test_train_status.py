@@ -66,6 +66,13 @@ class TrainStatusSessionTests(TestCase):
 
     @patch("django_q.tasks.fetch")
     def test_missing_task_clears_session_when_ids_match(self, mock_fetch) -> None:
+        # Backdate the start time so elapsed > 14400s — the code only treats a
+        # None fetch result as "lost" once the cluster timeout has passed.
+        session = self.client.session
+        session["training_started_at"] = (
+            timezone.now() - timedelta(hours=5)
+        ).isoformat()
+        session.save()
         mock_fetch.return_value = None
 
         response = self.client.get(reverse("train_status", args=["active-task"]))
@@ -146,9 +153,13 @@ class TrainingCtxStaleTests(TestCase):
 
     @patch("django_q.tasks.fetch", return_value=None)
     def test_training_ctx_clears_lost_task_on_page_load(self, mock_fetch) -> None:
+        # Backdate so elapsed > 14400s — _training_task_stale only returns True
+        # for a None fetch result once the cluster timeout has elapsed.
         session = self.client.session
         session["training_task_id"] = "lost-task"
-        session["training_started_at"] = timezone.now().isoformat()
+        session["training_started_at"] = (
+            timezone.now() - timedelta(hours=5)
+        ).isoformat()
         session.save()
 
         response = self.client.get(reverse("stats"))

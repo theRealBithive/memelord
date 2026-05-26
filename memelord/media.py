@@ -9,7 +9,7 @@ from django.http import FileResponse, Http404
 
 from ratings.models import Image
 
-ALLOWED_PREFIXES = ("inbox/", "corpus/", "void/")
+ALLOWED_PREFIXES = ("images/",)
 
 # Thumbnails are stored under DATA_DIR/thumbs/ mirroring the original structure.
 # 400px covers retina gallery grids without serving multi-megabyte originals.
@@ -32,7 +32,7 @@ def _resolve_media_file(file_path: str) -> Path:
     full = (settings.MEDIA_ROOT / normalized).resolve()
     if not full.is_relative_to(root) or not full.is_file():
         raise Http404()
-    if Image.objects.filter(file_path=normalized, file_deleted=True).exists():
+    if Image.objects.filter(file_path=normalized, is_purged=True).exists():
         raise Http404()
     return full
 
@@ -41,7 +41,7 @@ def _thumbnail_path(normalized: str) -> Path:
     """
     Thumbnails sit in DATA_DIR/thumbs/ at the same relative path but with a
     .jpg extension. Mirroring the structure makes cache invalidation trivial:
-    delete thumbs/corpus/foo.jpg when the original moves or is deleted.
+    delete thumbs/images/foo.jpg when the original is purged.
     """
     p = Path(normalized)
     return settings.MEDIA_ROOT / _THUMB_DIR / p.parent / (p.stem + ".jpg")
@@ -64,7 +64,7 @@ def _generate_thumbnail(source: Path, dest: Path) -> None:
 
 @login_required
 def serve_media(request, file_path: str) -> FileResponse:
-    """Serve an image from inbox/corpus/void for authenticated users only."""
+    """Serve an image from images/ for authenticated users only."""
     full = _resolve_media_file(file_path)
     content_type, _ = mimetypes.guess_type(str(full))
     return FileResponse(
@@ -79,7 +79,7 @@ def serve_thumbnail(request, file_path: str) -> FileResponse:
     Serve a cached 400px thumbnail. Generated on first request and stored in
     DATA_DIR/thumbs/ so subsequent requests skip PIL entirely. The original
     file is still validated through _resolve_media_file so auth and
-    file_deleted checks apply to thumbnails the same way as full-size media.
+    is_purged checks apply to thumbnails the same way as full-size media.
     """
     full = _resolve_media_file(file_path)
     normalized = _normalize_media_path(file_path)

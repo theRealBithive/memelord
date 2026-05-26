@@ -15,23 +15,19 @@ from core import brain, dedup
 from ratings.models import Image
 
 
-def _create_image(
-    *, file_deleted: bool = False, is_purged: bool = False, with_signals: bool = True
-) -> Image:
+def _create_image(*, is_purged: bool = False, with_signals: bool = True) -> Image:
     """Insert an Image row with the optional dedup signals filled in.
 
     Signals are stored on every row by the scraper at insert time, so the
-    realistic shape is "phash + embedding present" — only file_deleted /
-    is_purged vary between rows.
+    realistic shape is "phash + embedding present" — only is_purged varies.
     """
     h = uuid.uuid4().hex
     return Image.objects.create(
         content_hash=h,
-        file_path=f"inbox/{h}.png",
+        file_path=f"images/{h}.png",
         source_label="t",
         phash=("a1b2c3d4e5f6a7b8" if with_signals else ""),
         embedding=(brain.embedding_to_bytes(np.zeros(768, dtype=np.float32)) if with_signals else None),
-        file_deleted=file_deleted,
         is_purged=is_purged,
     )
 
@@ -42,14 +38,11 @@ class DedupIndexFromDbTests(TestCase):
         # we build only contains rows we inserted. TestCase rolls back at end.
         Image.objects.all().delete()
 
-    def test_includes_live_and_purged_excludes_lost_files(self) -> None:
-        """from_db keeps live rows AND purged ones (so a re-trashed URL stays
-        deduped) but skips file_deleted=True / is_purged=False, which represents
-        an image lost from disk without a deliberate purge — that hash should be
-        re-downloadable."""
+    def test_includes_live_and_purged(self) -> None:
+        """from_db loads all rows — both live and purged — so re-scraping a
+        purged URL is permanently blocked by its content_hash."""
         live = _create_image()
-        purged = _create_image(file_deleted=True, is_purged=True)
-        _create_image(file_deleted=True, is_purged=False)  # lost — must be excluded
+        purged = _create_image(is_purged=True)
 
         index = dedup.DedupIndex.from_db()
 

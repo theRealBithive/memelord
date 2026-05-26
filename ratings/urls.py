@@ -17,7 +17,7 @@ urlpatterns = [
     ),
     path(
         "rate/void/",
-        RedirectView.as_view(pattern_name="review_void", permanent=True),
+        RedirectView.as_view(pattern_name="below_cutoff", permanent=True),
     ),
     path(
         "rate/nsfw/",
@@ -40,23 +40,13 @@ urlpatterns = [
         name="score_nsfw_corpus",
     ),
     path(
-        "rate/nsfw/corpus/<str:content_hash>/trash/",
-        views.trash_nsfw_corpus,
-        name="trash_nsfw_corpus",
-    ),
-    path(
         "rate/nsfw/corpus/<str:content_hash>/purge/",
         views.purge_nsfw_corpus,
         name="purge_nsfw_corpus",
     ),
-    path(
-        "rate/nsfw/corpus/<str:content_hash>/fav/",
-        views.toggle_fav_nsfw_corpus,
-        name="toggle_fav_nsfw_corpus",
-    ),
-    path("rate/nsfw/void/", views.rate_nsfw_void, name="rate_nsfw_void"),
     path("nsfw-toggle/", views.nsfw_toggle, name="nsfw_toggle"),
     path("gallery/", views.gallery, name="gallery"),
+    path("below-cutoff/", views.below_cutoff, name="below_cutoff"),
     path(
         "gallery/<str:content_hash>/action/",
         views.gallery_action,
@@ -67,42 +57,19 @@ urlpatterns = [
     path("tags/<int:pk>/rename/", views.tag_rename, name="tag_rename"),
     path("tags/<int:pk>/delete/", views.tag_delete, name="tag_delete"),
     path("tags/<str:content_hash>/", views.update_image_tags, name="update_image_tags"),
-    # Void grid — must be before the corpus wildcard routes.
-    path("review/void/", views.review_void, name="review_void"),
-    path("review/void/bulk/", views.void_bulk_rescue, name="void_bulk_rescue"),
-    path(
-        "review/void/<str:content_hash>/", views.review_void, name="review_void_image"
-    ),
-    path(
-        "review/void/<str:content_hash>/action/",
-        views.void_review_action,
-        name="void_review_action",
-    ),
-    path(
-        "review/void/<str:content_hash>/grid-action/",
-        views.void_grid_action,
-        name="void_grid_action",
-    ),
     # Corpus review
     path("review/", views.review_corpus, name="review_corpus"),
     path("review/<str:content_hash>/", views.review_corpus, name="review_corpus_image"),
     path("review/<str:content_hash>/score/", views.score_corpus, name="score_corpus"),
-    path("review/<str:content_hash>/trash/", views.trash_corpus, name="trash_corpus"),
     path("review/<str:content_hash>/purge/", views.purge_corpus, name="purge_corpus"),
-    path(
-        "review/<str:content_hash>/fav/",
-        views.toggle_fav_corpus,
-        name="toggle_fav_corpus",
-    ),
     path("toggle/<str:content_hash>/nsfw/", views.toggle_nsfw, name="toggle_nsfw"),
     path("config/", views.config_view, name="config"),
     path("config/schedule/", views.set_scrape_schedule, name="set_scrape_schedule"),
     path("config/vision/", views.set_vision_thresholds, name="set_vision_thresholds"),
-    path(
-        "config/notifications/",
-        views.save_notification_config,
-        name="save_notification_config",
-    ),
+    path("config/channels/add/", views.channel_add, name="channel_add"),
+    path("config/channels/<int:pk>/save/", views.channel_save, name="channel_save"),
+    path("config/channels/<int:pk>/toggle/", views.channel_toggle, name="channel_toggle"),
+    path("config/channels/<int:pk>/delete/", views.channel_delete, name="channel_delete"),
     path("share/<str:content_hash>/", views.share_image, name="share_image"),
     path("config/add/", views.source_add, name="source_add"),
     path("config/import/", views.source_import, name="source_import"),

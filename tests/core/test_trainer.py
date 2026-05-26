@@ -17,24 +17,13 @@ django.setup()
 from core import brain, trainer
 from ratings.models import Image as ImageModel
 
-_TEST_DB = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": ":memory:",
-    }
-}
 
-
-@override_settings(DATABASES=_TEST_DB)
 class TrainerTests(TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self._tmpdir.name)
-        for loc in ("corpus", "void", "inbox"):
-            (self.data_dir / loc).mkdir()
-        self.settings_override = override_settings(
-            DATA_DIR=self.data_dir, DATABASES=_TEST_DB
-        )
+        (self.data_dir / "images").mkdir()
+        self.settings_override = override_settings(DATA_DIR=self.data_dir)
         self.settings_override.enable()
 
     def tearDown(self) -> None:
@@ -48,27 +37,82 @@ class TrainerTests(TestCase):
 
     def test_collect_image_paths_empty(self) -> None:
         """collect_image_paths returns empty when no DB rows."""
-        corpus, void = trainer.collect_image_paths(self.data_dir)
-        self.assertEqual(corpus, [])
-        self.assertEqual(void, [])
+        good, bad = trainer.collect_image_paths(self.data_dir)
+        self.assertEqual(good, [])
+        self.assertEqual(bad, [])
+
+    def test_trashed_image_collected_as_negative(self) -> None:
+        """Score 0 (trash) is kept on disk and collected into the negative set."""
+        h = uuid.uuid4().hex
+        path = f"images/{h}.jpg"
+        self._write_image(path)
+        ImageModel.objects.create(
+            content_hash=h, file_path=path, source_label="t", score=0
+        )
+        good, bad = trainer.collect_image_paths(self.data_dir)
+        self.assertEqual(good, [])
+        self.assertIn(str(self.data_dir / path), [str(p) for p in bad])
+
+    def _make_scored(self, score: int) -> str:
+        h = uuid.uuid4().hex
+        path = f"images/{h}.jpg"
+        self._write_image(path)
+        ImageModel.objects.create(
+            content_hash=h, file_path=path, source_label="t", score=score
+        )
+        return h
+
+    def test_positive_sample_weights_formula(self) -> None:
+        """Score 5-6 → 3.0, score 3-4 → 1.0; negatives are not in the positive map."""
+        for score in (3, 4, 5, 6):
+            self._make_scored(score)
+        for score in (0, 1, 2):
+            self._make_scored(score)
+
+        weights = trainer._get_sample_weights(self.data_dir)
+
+        for img in ImageModel.objects.filter(score__gte=3):
+            w = weights[str(self.data_dir / img.file_path)]
+            expected = 3.0 if img.score >= 5 else 1.0
+            self.assertAlmostEqual(w, expected, msg=f"score={img.score}")
+
+        for img in ImageModel.objects.filter(score__lte=2):
+            self.assertNotIn(str(self.data_dir / img.file_path), weights)
+
+    def test_negative_sample_weights_formula(self) -> None:
+        """Score 0 (trash) → 3.0, score 1-2 → 1.0; positives not in the negative map."""
+        for score in (0, 1, 2):
+            self._make_scored(score)
+        for score in (3, 5):
+            self._make_scored(score)
+
+        weights = trainer._get_negative_weights(self.data_dir)
+
+        for img in ImageModel.objects.filter(score__lte=2):
+            w = weights[str(self.data_dir / img.file_path)]
+            expected = 3.0 if img.score == 0 else 1.0
+            self.assertAlmostEqual(w, expected, msg=f"score={img.score}")
+
+        for img in ImageModel.objects.filter(score__gte=3):
+            self.assertNotIn(str(self.data_dir / img.file_path), weights)
 
     @patch.object(brain, "get_encoder")
     @patch.object(brain, "encode")
     def test_run_saves_taste_weights(self, mock_encode, mock_get_encoder) -> None:
         """run() fits taste classifier and saves weights."""
-        pos = self._write_image("corpus/pos.png")
-        neg = self._write_image("void/neg.png")
+        pos = self._write_image("images/pos.png")
+        neg = self._write_image("images/neg.png")
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
-            file_path="corpus/pos.png",
+            file_path="images/pos.png",
             source_label="t",
-            location=ImageModel.CORPUS,
+            score=5,
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
-            file_path="void/neg.png",
+            file_path="images/neg.png",
             source_label="t",
-            location=ImageModel.VOID,
+            score=1,
         )
         mock_get_encoder.return_value = None
         embeddings = np.array([[0.1] * 768, [0.2] * 768], dtype=np.float32)
@@ -84,42 +128,40 @@ class TrainerTests(TestCase):
         self, mock_encode, mock_get_encoder
     ) -> None:
         """run() saves NSFW classifier when both classes exist."""
-        self._write_image("corpus/pos.png")
-        self._write_image("void/neg.png")
-        self._write_image("inbox/safe.png")
-        self._write_image("inbox/nsfw.png")
+        self._write_image("images/pos.png")
+        self._write_image("images/neg.png")
+        self._write_image("images/safe.png")
+        self._write_image("images/nsfw.png")
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
-            file_path="corpus/pos.png",
+            file_path="images/pos.png",
             source_label="t",
-            location=ImageModel.CORPUS,
+            score=5,
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
-            file_path="void/neg.png",
+            file_path="images/neg.png",
             source_label="t",
-            location=ImageModel.VOID,
+            score=1,
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
-            file_path="inbox/safe.png",
+            file_path="images/safe.png",
             source_label="t",
-            location=ImageModel.INBOX,
             is_nsfw=False,
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
-            file_path="inbox/nsfw.png",
+            file_path="images/nsfw.png",
             source_label="t",
-            location=ImageModel.INBOX,
             is_nsfw=True,
         )
         mock_get_encoder.return_value = None
         all_paths = [
-            self.data_dir / "corpus/pos.png",
-            self.data_dir / "void/neg.png",
-            self.data_dir / "inbox/safe.png",
-            self.data_dir / "inbox/nsfw.png",
+            self.data_dir / "images/pos.png",
+            self.data_dir / "images/neg.png",
+            self.data_dir / "images/safe.png",
+            self.data_dir / "images/nsfw.png",
         ]
         mock_encode.return_value = (np.random.randn(4, 768).astype(np.float32), all_paths)
 

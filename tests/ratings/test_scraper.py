@@ -11,7 +11,6 @@ from PIL import Image as PilImage
 
 from core import brain, dedup
 from ratings import scraper
-from ratings.models import Image
 
 
 class ScraperDedupUnitTests(SimpleTestCase):
@@ -20,7 +19,7 @@ class ScraperDedupUnitTests(SimpleTestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self._tmpdir.name)
-        (self.data_dir / "inbox").mkdir()
+        (self.data_dir / "images").mkdir()
 
     def tearDown(self) -> None:
         self._tmpdir.cleanup()
@@ -34,7 +33,7 @@ class ScraperDedupUnitTests(SimpleTestCase):
 
     def test_sha_filter_deletes_exact_duplicate(self) -> None:
         """SHA duplicate removes file and skips insert."""
-        path = self.data_dir / "inbox" / f"{uuid.uuid4().hex}.png"
+        path = self.data_dir / "images" / f"{uuid.uuid4().hex}.png"
         PilImage.new("RGB", (8, 8), color=(1, 2, 3)).save(path)
         h = dedup.content_hash_for_file(path)
         index = dedup.DedupIndex(content_hashes={h})
@@ -48,10 +47,9 @@ class ScraperDedupUnitTests(SimpleTestCase):
         self, mock_encode: MagicMock, mock_image_model: MagicMock
     ) -> None:
         """New image passes dedup and is inserted with phash and embedding."""
-        mock_image_model.INBOX = Image.INBOX
         emb = np.zeros((1, 768), dtype=np.float32)
 
-        path = self.data_dir / "inbox" / f"{uuid.uuid4().hex}.png"
+        path = self.data_dir / "images" / f"{uuid.uuid4().hex}.png"
         PilImage.new("RGB", (16, 16), color=(50, 100, 150)).save(path)
         mock_encode.return_value = (emb, [path])
 
@@ -68,7 +66,6 @@ class ScraperDedupUnitTests(SimpleTestCase):
         self.assertEqual(n, 1)
         mock_image_model.objects.create.assert_called_once()
         kwargs = mock_image_model.objects.create.call_args.kwargs
-        self.assertEqual(kwargs["location"], Image.INBOX)
         self.assertFalse(kwargs["is_nsfw"])
         self.assertTrue(kwargs["phash"])
         self.assertIsNotNone(kwargs["embedding"])
@@ -79,7 +76,7 @@ class ScraperDedupUnitTests(SimpleTestCase):
         self, mock_encode: MagicMock, mock_image_model: MagicMock
     ) -> None:
         """Without NSFW classifier, is_nsfw stays False."""
-        path = self.data_dir / "inbox" / f"{uuid.uuid4().hex}.png"
+        path = self.data_dir / "images" / f"{uuid.uuid4().hex}.png"
         PilImage.new("RGB", (16, 16)).save(path)
         mock_encode.return_value = (np.zeros((1, 768), dtype=np.float32), [path])
         scraper._process_downloads(

@@ -1,222 +1,173 @@
-# Memelord Webapp — Plan
+# Memelord 2.0 — Overhaul Plan
 
-## Goal
+## Vision
 
-Replace the CLI + Mastodon posting workflow with a mobile-first Django webapp where the operator manually rates images (good / bad / fav) to build training data for the DINOv2 classifier. Scraping and training stay; Mastodon posting goes away.
-
-**Fresh start**: existing `janulon.db` and `data/corpus/`, `data/void/` are discarded. Everything gets re-scraped and re-rated from zero.
+Replace the binary corpus/trash mental model with a pure 1–6 numeric taste score. Replace the single-channel share button with named, multi-channel destinations. Remove accumulated dead code, sanity-check the test suite, and validate the Pixelfed scraper. The tag system and gallery are good — keep them, polish the edges.
 
 ---
 
-## Tech Stack
+## 1. Rating Model Overhaul
 
-| Layer | Choice | Reason |
+### 1a. Flat filesystem — no more inbox/corpus/void directories
+
+2.0 is a clean break. The filesystem separation was only meaningful when `location` encoded the rating — `corpus/` = good, `void/` = bad. With scores in the DB, the file path just needs to point to the file; it doesn't need to encode any meaning.
+
+- All images scrape to `data/images/<hash>.<ext>`. One flat directory.
+- `Image.location` field is **deleted entirely**. `score IS NULL` means unrated; `score IS NOT NULL` means rated. No other distinction is needed.
+- `_move_image()` and `ratings/utils.py`'s move logic are **deleted entirely**. Rating an image is a pure DB write — no filesystem operation, no `file_deleted` edge cases.
+- `file_path` is set once at scrape time and never touched again.
+- Trainer queries change from `location__in=[CORPUS]` to `score__gte=3` (positive) and `score__lte=2` (negative).
+- **No migration needed** — 2.0 is a fresh start. Existing data is wiped and re-scraped.
+
+**Remove:** `inbox/`, `corpus/`, `void/` directories, `Image.location` field, `_move_image()`, `ratings/utils.py` (if move logic is its only content), `file_deleted` field, `is_purged` field, `void_seen_at`, `inbox_seen_at`, `corpus_seen_at` timestamp fields, all `location=` queryset filters throughout views.
+
+### 1b. Remove `is_favourite` — score=6 is the favourite
+
+`is_favourite` is redundant with 1–6 scoring. A score of 6 IS a favourite. The only reason the field existed was the old good/fav binary didn't have enough resolution.
+
+- No migration needed — fresh start in 2.0.
+- Remove `is_favourite` from model, views, gallery `fav_only` filter, share logic, and training.
+- Update training weights: `score 5–6 → weight 3.0`, `score 3–4 → weight 1.0`, `score 1–2 → weight 0.0` (excluded from positive training set, treated as negative examples). This makes the score directly meaningful to the ML model instead of the binary fav signal.
+
+### 1c. User-defined visibility cutoff (already 80% there)
+
+The existing `ReviewThresholds` sfw/nsfw mechanism is solid. In 2.0:
+
+- Rename/reframe in the UI as "visibility cutoff" — "show me images scored ≥ X".
+- Gallery `min_score` filter already does this — expose it prominently in the UI.
+- Add a **Below Cutoff** view (replaces void grid) that shows all scored images with `score < cutoff`. From there the user can re-score upward or purge. This is the mental replacement for "rescue from trash" — just re-score the image.
+
+---
+
+## 2. Multi-Channel Share UX
+
+### 2a. New `NotificationChannel` model (replaces `NotificationConfig` singleton)
+
+```python
+class NotificationChannel(models.Model):
+    name = models.CharField(max_length=100, unique=True)   # "Aurea", "TownSquare", "Simon"
+    service = models.CharField(max_length=20, choices=[("mattermost", "Mattermost"), ("signal", "Signal")])
+    enabled = models.BooleanField(default=True)
+    # Mattermost
+    mm_base_url = models.CharField(max_length=255, blank=True)
+    mm_token = models.CharField(max_length=255, blank=True)
+    mm_channel_id = models.CharField(max_length=64, blank=True)
+    mm_message_prefix = models.CharField(max_length=255, blank=True)
+    # Signal
+    signal_api_url = models.CharField(max_length=255, blank=True)
+    signal_sender = models.CharField(max_length=32, blank=True)
+    signal_recipients = models.TextField(blank=True)      # comma-separated
+    signal_message_prefix = models.CharField(max_length=255, blank=True)
+```
+
+**Migration from `NotificationConfig`:** if Mattermost was configured, create a channel named "Mattermost"; if Signal was configured, create a channel named "Signal". User can rename them immediately after upgrading.
+
+### 2b. Share UI redesign
+
+Replace the auto-fire share button with a named channel picker:
+
+- Share button opens a compact popover (or inline drawer) listing all `enabled=True` channels as labelled checkboxes.
+- Default: all channels checked (or remember last session selection per image).
+- One submit fires sends to all selected channels.
+- Toast: "Sent to Aurea, TownSquare" on success, per-channel errors if any fail.
+- Mobile-friendly: the picker must be reachable with a thumb in single-hand use.
+
+### 2c. `notifiers.py` refactor
+
+`send_to_mattermost(cfg, ...)` and `send_to_signal(cfg, ...)` now accept a `NotificationChannel` instead of `NotificationConfig`. Function bodies are unchanged — only the field names on `cfg` adjust. No logic changes.
+
+### 2d. Config page channel list
+
+Replace the single Mattermost + Signal block with a channel list: add / edit / delete named channels. Each channel card has its own enable toggle, service selector, and service-specific fields (collapsed by default, expandable inline).
+
+---
+
+## 3. Pixelfed Scraper Audit
+
+`retina/pixelfed.py` currently fetches a public timeline from an instance URL. This pulls boosts and posts from any account on the instance — including book covers and unrelated content.
+
+- Audit what the current scraper actually fetches (instance public timeline vs. local timeline vs. specific account).
+- Add support for targeting a specific account handle (e.g. `@user@pixelfed.social`) within the `Source.name` field — already used for Mastodon handles, same pattern.
+- Add optional hashtag filter within the instance.
+- Test against at least one real Pixelfed account and document expected output.
+- If the current URL-only mode is fundamentally unreliable, deprecate it and require account-level config.
+
+---
+
+## 4. Dead Code Removal
+
+Audit and remove after the model changes land:
+
+- All void/trash views, templates, URL patterns.
+- `is_favourite` field and all references once the migration backfill is done.
+- `void_seen_at`, `inbox_seen_at`, `corpus_seen_at` timestamp fields — only `rated_at` and `queue_seen_at` are needed.
+- `NotificationConfig` model + singleton logic once `NotificationChannel` is live.
+- `ratings/tests.py` (empty stub — all real tests live in `tests/`).
+- `knn_suggestions.py` management command — review if still needed or superseded by in-view kNN.
+- `queue_rules.py`: `AUTO_PROMOTE_THRESHOLD` / `AUTO_TRASH_THRESHOLD` logic routes inbox → void, which no longer exists. The auto-promote-to-corpus path stays; auto-trash must become "score 1 and move to corpus".
+- Old `config.toml` source-import button — sources are fully DB-managed; the import path is a one-time bootstrap that confuses returning users. Document it as a CLI-only first-run tool, remove from the UI.
+
+---
+
+## 5. Test Suite Sanity Check
+
+Current coverage is solid for core ML and some feature slices but has real gaps:
+
+**Update existing tests:**
+- `test_trash.py` → replace with `test_below_cutoff.py` covering score-based filtering and the Below Cutoff view.
+- `test_notifiers.py` → update for `NotificationChannel` instead of `NotificationConfig`.
+- `test_vision_thresholds.py` → keep, update descriptions to match new naming ("visibility cutoff").
+
+**Add new tests:**
+- View tests for score submission (`POST /score/<hash>`) + navigation advancement.
+- View tests for the Below Cutoff view (filtering, re-scoring from there).
+- `test_channels.py` — `NotificationChannel` CRUD, share dispatch to multiple channels, partial failure handling (one channel fails, others succeed).
+- Test for updated training weight formula (score→weight mapping in `core/trainer.py`).
+- `test_pixelfed.py` — update for account-level scraping once that's fixed.
+
+**Run target:** `pytest -v -m "not integration"` must be green after each phase before merging.
+
+---
+
+## 6. UX Polish
+
+These are alongside the relevant feature phase, not separate work:
+
+- **Keyboard shortcuts:** keys `1`–`6` score and advance in review (verify works cleanly with score-only model). `s` opens the share picker. `n` toggles NSFW. `d` = purge (hard delete). Remove shortcuts tied to the old good/fav/bad model.
+- **Gallery pagination:** the current 500-item hard DOM cap is a bottleneck at scale — add cursor-based pages or infinite scroll so large corpora don't degrade page load.
+- **Stats page:** update to make score distribution the primary chart; remove void-count stat once void is gone. Add a "below cutoff" count instead.
+- **Config page copy:** rename all instances of "Trash" → "Below Cutoff", "Void" → "Below Cutoff" in labels and placeholder text.
+- **Review card:** remove the fav-star button once `is_favourite` is gone — pressing `6` is the equivalent.
+- **NSFW/SFW dual queue:** working well, keep it. Make sure SFW and NSFW threshold dials survive the model rename cleanly.
+- **CLAUDE.md update:** reflect new architecture once 2.0 ships (remove void references, add NotificationChannel, update rating model docs).
+
+---
+
+## Implementation Order
+
+Execute in phases, each mergeable independently:
+
+Each phase ends with: **run `pytest -v -m "not integration"`**, delete or update any tests that no longer apply, add tests for new behaviour, and refactor anything the phase exposed as awkward. No phase is done until the suite is green and the new code is clean.
+
+| Phase | Scope | Risk |
 |---|---|---|
-| Backend | Django 5.x | Batteries: ORM, auth, admin, static/media |
-| Frontend interaction | HTMX | No page reloads without a JS framework; pairs with Django templates |
-| Gestures | ~30 lines vanilla JS | Swipe left/right/up/down on mobile |
-| Database | SQLite (fresh) | No infra change; Django ORM replaces Peewee |
-| Auth | Django `django.contrib.auth` | Single superuser, login required on all views |
-
-Keep entirely: `core/brain.py`, `core/trainer.py`, `core/caption.py`, `retina/`
-
-Replace: `core/db.py` (Peewee → Django ORM), `main.py` (CLI → Django views + management commands)
-
-Remove: `core/mastodon.py`, Mastodon config, `peewee`, `mastodon-py`, `schedule` dependencies
+| **P1** | `NotificationChannel` model + config UI + notifiers refactor | Low — additive |
+| **P2** | Share UI redesign (channel picker popover) | Low — UI only, depends on P1 |
+| **P3** | Rating model overhaul: drop `location`, `is_favourite`, all move logic; flat `data/images/`; Below Cutoff view; fresh DB | High — do on a branch, wipe data first |
+| **P4** | Training weight formula update (score → weight) | Low — isolated in `core/trainer.py` |
+| **P5** | Pixelfed scraper audit + account-handle targeting | Medium — needs real-world testing |
+| **P6** | Dead code sweep | Low — cleanup only |
+| **P7** | Final test pass + full refactor review | Low |
 
 ---
 
-## Data Model
+## What Stays Unchanged
 
-Single Django model replaces the Peewee `Image` model. Drop all Mastodon fields.
-
-```python
-# ratings/models.py
-class Image(models.Model):
-    INBOX   = "inbox"
-    CORPUS  = "corpus"
-    VOID    = "void"
-    LOCATION_CHOICES = [(INBOX, "inbox"), (CORPUS, "corpus"), (VOID, "void")]
-
-    content_hash  = models.CharField(primary_key=True, max_length=64)
-    file_path     = models.CharField(max_length=2048)       # relative to DATA_DIR
-    source_url    = models.CharField(max_length=2048, null=True, blank=True)
-    source_label  = models.CharField(max_length=255)
-    location      = models.CharField(max_length=32, default=INBOX, choices=LOCATION_CHOICES)
-    downloaded_at = models.DateTimeField(auto_now_add=True)
-    rated_at      = models.DateTimeField(null=True, blank=True)
-    is_favourite  = models.BooleanField(default=False)      # extra weight in training
-    file_deleted  = models.BooleanField(default=False)
-```
-
-### Rating → location + weight mapping
-
-| User action | `location` | `is_favourite` | Training weight |
-|---|---|---|---|
-| Good | corpus | False | 1.0 |
-| Fav | corpus | True | 3.0 |
-| Bad | void | False | 1.0 |
-
-`core/trainer.py` needs a small update: instead of pulling Mastodon engagement weights it reads `is_favourite` from the DB to compute `sample_weight`.
-
----
-
-## Three Rating Modes
-
-### 1. Mixed — new inbox images
-Queue: `location='inbox'`, ordered by `downloaded_at` ascending (oldest first, clears the backlog)
-
-Buttons: **Bad** (left) / **Fav** (up) / **Good** (right)
-
-After rating: image moves to corpus or void, next inbox image loads.
-
-Done state: "Inbox empty — scrape more or train the model."
-
-### 2. Corpus review — re-rate existing good images
-Queue: `location='corpus'`, random order
-
-Buttons: **Remove** (left, → void) / **Upgrade Fav** (up, toggle is_favourite) / **Keep** (right, no-op) / **Skip** (down, no-op)
-
-Use case: quality control pass, catching false positives the classifier let through before training was good.
-
-### 3. Trash rescue — recover void images
-Queue: `location='void'`, random order
-
-Buttons: **Keep trashed** (left, no-op) / **Rescue Fav** (up, → corpus + fav) / **Rescue Good** (right, → corpus) / **Skip** (down, no-op)
-
-Use case: the classifier (or an earlier bad rating) wrongly rejected something worth keeping.
-
-### Mode switching
-A persistent nav strip at the top (always visible):
-
-```
-[ Mixed (42) ] [ Corpus (318) ] [ Trash (891) ]
-```
-
-Counts update live via HTMX polling or after each rating swap.
-
----
-
-## UI Layout
-
-```
-┌─────────────────────────────┐
-│  Mixed (42) Corpus  Trash   │  ← mode nav
-├─────────────────────────────┤
-│                             │
-│                             │
-│          [image]            │
-│                             │
-│                             │
-├───────┬─────────┬───────────┤
-│ ✕ BAD │  ★ FAV  │  ✓ GOOD  │
-└───────┴─────────┴───────────┘
-```
-
-- Full-screen image, object-fit: cover
-- Three large tap zones (44px min touch target)
-- Swipe gestures mirror buttons: left=bad, right=good, up=fav, down=skip (corpus/trash modes)
-- After each rating: HTMX swaps `#card` with next image partial — no page reload
-- Keyboard shortcuts for desktop: ← bad, → good, ↑ fav, ↓ skip
-
----
-
-## HTMX Flow
-
-```
-GET /rate/inbox/          → renders rate.html with first inbox image
-GET /rate/corpus/         → renders rate.html with random corpus image
-GET /rate/void/           → renders rate.html with random void image
-
-POST /rate/<hash>/good/   → corpus, rated_at=now, return _next_image.html partial
-POST /rate/<hash>/bad/    → void,   rated_at=now, return _next_image.html partial
-POST /rate/<hash>/fav/    → corpus, is_favourite=True, rated_at=now, return partial
-POST /rate/<hash>/skip/   → no DB change, return next partial
-
-All POSTs:  hx-post, hx-target="#card", hx-swap="outerHTML"
-Done state: partial returns done.html fragment with scrape/train buttons
-```
-
----
-
-## Django Project Structure
-
-```
-memelord/
-├── manage.py
-├── memelord/                    # Django project package
-│   ├── settings.py
-│   ├── urls.py
-│   └── wsgi.py
-├── ratings/                     # Main app
-│   ├── models.py
-│   ├── views.py                 # mode views + submit_rating + train + scrape
-│   ├── urls.py
-│   ├── templates/ratings/
-│   │   ├── base.html            # mobile viewport, HTMX script, nav
-│   │   ├── rate.html            # full-screen card + buttons
-│   │   ├── _next_image.html     # HTMX partial (the swappable card)
-│   │   └── _done.html           # empty queue state
-│   └── management/commands/
-│       ├── scrape.py            # thin wrapper around retina/ scrapers
-│       └── train.py             # thin wrapper around core/trainer.py
-├── core/                        # unchanged except trainer.py ORM update
-├── retina/                      # unchanged
-├── static/
-│   └── swipe.js                 # touch + keyboard → HTMX requests
-└── media → data/                # MEDIA_ROOT points at data/
-```
-
----
-
-## Settings
-
-```python
-# memelord/settings.py (key additions)
-DATA_DIR     = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
-MEDIA_ROOT   = DATA_DIR
-MEDIA_URL    = "/media/"
-WEIGHTS_PATH = DATA_DIR / "Janulon_weights.pkl"
-LOGIN_URL    = "/login/"
-```
-
----
-
-## Implementation Phases
-
-### Phase 1 — Django scaffold + auth
-- `django-admin startproject memelord .`
-- `python manage.py startapp ratings`
-- Settings: DATA_DIR, MEDIA_ROOT, `login_required` decorator on all views
-- Login/logout views (Django built-in), create superuser
-- Smoke-test: `/login/` → redirect → `/rate/inbox/`
-
-### Phase 2 — Image model
-- Write `ratings/models.py` and run `makemigrations` / `migrate` (fresh DB)
-- Update `core/trainer.py`: replace `db.get_posted_engagement_weights()` with Django ORM query on `Image.objects.filter(location='corpus')`
-- Remove `peewee`, `mastodon-py`, `schedule` from `pyproject.toml`; add `django`, `django-htmx`
-
-### Phase 3 — Mixed mode rating UI
-- `rate.html`, `_next_image.html`, `_done.html` templates
-- Views: `rate_inbox` (GET), `submit_rating` (POST `/rate/<hash>/<action>/`)
-- File move logic (inbox → corpus/void dir + DB update)
-- `swipe.js` for touch and keyboard events
-- Test end-to-end on mobile browser
-
-### Phase 4 — Corpus review + trash rescue modes
-- `rate_corpus` and `rate_void` views (same template, different queryset + button config)
-- Pass `mode` context var to template to render correct button labels and actions
-- Skip action (no DB write, just returns next partial)
-- Mode nav strip with live counts
-
-### Phase 5 — Trainer + scraper integration
-- `management/commands/train.py` wrapping `core/trainer.py`
-- `management/commands/scrape.py` wrapping `retina/` scrapers + DB insert
-- `/train/` and `/scrape/` HTMX endpoints (run synchronously, return status snippet)
-- "Train model" and "Scrape more" buttons on done screen + stats page
-
-### Phase 6 — Polish
-- Stats page: corpus / void / inbox counts, last trained timestamp, top favs grid
-- Django admin for bulk image management
-- Docker: update `docker-compose.yml` to run `gunicorn memelord.wsgi`
-- Update `CLAUDE.md` with new commands (`manage.py runserver`, `manage.py scrape`, etc.)
+- Tag system (working well).
+- Gallery (working well) — only add pagination and remove `fav_only` filter once `is_favourite` is gone.
+- Core ML pipeline (`core/brain.py`, `core/trainer.py` structure) — only the weight formula changes.
+- NSFW/SFW split queue — keep.
+- Django-Q background training, scrape scheduling — keep as-is.
+- `core/dedup.py`, `core/phash.py` — keep as-is.
+- All retina scrapers except Pixelfed audit.
+- kNN similar-image panel in review card — keep.

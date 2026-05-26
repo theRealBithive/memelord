@@ -71,6 +71,7 @@
     }
     .score-bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
     .score-bar-fill { height: 100%; border-radius: 4px; }
+    .score-bar-fill--0 { background: #ef4444; }
     .score-bar-fill--1 { background: #71717a; }
     .score-bar-fill--2 { background: #60a5fa; }
     .score-bar-fill--3 { background: #4ade80; }
@@ -149,13 +150,9 @@
           <div class="big">{{ gallery_total }}</div>
           <div class="label">Gallery</div>
         </a>
-        <a href="{% url 'gallery' %}?fav=1" class="stat-card c-fav">
-          <div class="big">{{ fav_count }}</div>
-          <div class="label">Favs</div>
-        </a>
-        <a href="{% url 'review_void' %}" class="stat-card c-trash">
-          <div class="big">{{ void_count }}</div>
-          <div class="label">Trash</div>
+        <a href="{% url 'below_cutoff' %}" class="stat-card c-trash">
+          <div class="big">{{ below_cutoff_count }}</div>
+          <div class="label">Below Cutoff</div>
         </a>
       </div>
     </div>
@@ -191,7 +188,7 @@
       {% endif %}
       <div class="meta-row">
         <span>Training data</span>
-        <span class="meta-val">{{ gallery_total }} gallery + {{ void_count }} trash</span>
+        <span class="meta-val">{{ gallery_total }} scored + {{ below_cutoff_count }} below cutoff</span>
       </div>
       <div class="action-row">
         <button class="done-btn done-btn-scrape"

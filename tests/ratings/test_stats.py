@@ -31,9 +31,9 @@ class StatsAvgInboxHoursTests(TestCase):
         h = uuid.uuid4().hex
         Image.objects.create(
             content_hash=h,
-            file_path=f"corpus/{h}.jpg",
+            file_path=f"images/{h}.jpg",
             source_label="test",
-            location=Image.CORPUS,
+            score=4,
             rated_at=now,
         )
         Image.objects.filter(content_hash=h).update(
@@ -42,9 +42,9 @@ class StatsAvgInboxHoursTests(TestCase):
         bad = uuid.uuid4().hex
         Image.objects.create(
             content_hash=bad,
-            file_path=f"corpus/{bad}.jpg",
+            file_path=f"images/{bad}.jpg",
             source_label="test",
-            location=Image.CORPUS,
+            score=4,
             rated_at=now - timedelta(hours=1),
         )
         Image.objects.filter(content_hash=bad).update(downloaded_at=now)

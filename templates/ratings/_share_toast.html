@@ -2,8 +2,12 @@
   <span class="share-toast share-toast--error" id="share-toast">
     {% for e in errors %}{{ e }}{% if not forloop.last %} · {% endif %}{% endfor %}
   </span>
+{% elif sent %}
+  <span class="share-toast share-toast--ok" id="share-toast">
+    ↗ {{ sent|join:", " }}
+  </span>
 {% else %}
-  <span class="share-toast share-toast--ok" id="share-toast">Shared ✓</span>
+  <span class="share-toast share-toast--error" id="share-toast">No channels selected</span>
 {% endif %}
 <script>
   (function(){

@@ -57,9 +57,8 @@ def _make_image(*, predicted: float | None, is_nsfw: bool = False) -> Image:
     content_hash = uuid.uuid4().hex
     return Image.objects.create(
         content_hash=content_hash,
-        file_path=f"inbox/{content_hash}.jpg",
+        file_path=f"images/{content_hash}.jpg",
         source_label="test",
-        location=Image.INBOX,
         is_nsfw=is_nsfw,
         predicted_score=predicted,
     )
@@ -123,37 +122,11 @@ class ReviewQueueThresholdFilterTests(TestCase):
         hashes = set(_review_qs(show_nsfw=False).values_list("content_hash", flat=True))
         self.assertEqual(hashes, {a.content_hash, b.content_hash, c.content_hash})
 
-    def test_unscored_corpus_image_always_visible_at_max_dial(self) -> None:
-        """Auto-promoted corpus images (prob >= 0.75, score IS NULL) must stay
-        visible at every dial setting. bucket_to_cutoff(6) ≈ 0.833, so a row
-        with predicted_score in [0.75, 0.833) would otherwise be stranded —
-        unrated, in corpus, invisible to /review/ forever."""
-        from ratings.views import _review_qs, _review_nsfw_qs
-
-        dead_zone = _make_image(predicted=0.78)
-        dead_zone.location = Image.CORPUS
-        dead_zone.file_path = f"corpus/{dead_zone.content_hash}.jpg"
-        dead_zone.save(update_fields=["location", "file_path"])
-
-        dead_zone_nsfw = _make_image(predicted=0.78, is_nsfw=True)
-        dead_zone_nsfw.location = Image.CORPUS
-        dead_zone_nsfw.file_path = f"corpus/{dead_zone_nsfw.content_hash}.jpg"
-        dead_zone_nsfw.save(update_fields=["location", "file_path"])
-
-        self._set_thresholds(sfw=6, nsfw=6)
-
-        sfw_hashes = set(_review_qs(show_nsfw=False).values_list("content_hash", flat=True))
-        self.assertIn(dead_zone.content_hash, sfw_hashes)
-
-        nsfw_hashes = set(_review_nsfw_qs().values_list("content_hash", flat=True))
-        self.assertIn(dead_zone_nsfw.content_hash, nsfw_hashes)
-
-    def test_dial_still_hides_low_confidence_inbox_at_max(self) -> None:
-        """The corpus escape hatch must not leak into inbox — inbox rows with
-        low predicted_score are still the whole point of the dial."""
+    def test_dial_hides_low_confidence_at_max(self) -> None:
+        """Images with low predicted_score are hidden at the strictest dial setting."""
         from ratings.views import _review_qs
 
-        hide = _make_image(predicted=0.1)  # stays in inbox by default
+        hide = _make_image(predicted=0.1)
         self._set_thresholds(sfw=6, nsfw=1)
 
         hashes = set(_review_qs(show_nsfw=False).values_list("content_hash", flat=True))

@@ -17,6 +17,10 @@
 
   {% include "ratings/_review_card.html" %}
 
+  <script id="share-channels-data" type="application/json">
+  [{% for ch in share_channels %}{"pk": {{ ch.pk }}, "name": "{{ ch.name|escapejs }}"}{% if not forloop.last %}, {% endif %}{% endfor %}]
+  </script>
+  <script src="{% static 'share-sheet.js' %}" defer></script>
   <script src="{% static 'review.js' %}" defer></script>
   <script src="{% static 'tags.js' %}" defer></script>
 </body>

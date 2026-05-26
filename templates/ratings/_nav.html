@@ -3,18 +3,13 @@
     Rate<span class="badge" id="badge-queue">{{ queue_count }}</span>
   </a>
   <a href="{% url 'gallery' %}" class="nav-tab {% if mode == 'gallery' %}active{% endif %}">Gallery</a>
-  <a href="{% url 'review_void' %}" class="nav-tab {% if mode == 'void' %}active{% endif %}">
-    Trash<span class="badge" id="badge-void">{{ void_count }}</span>
+  <a href="{% url 'below_cutoff' %}" class="nav-tab {% if mode == 'below_cutoff' %}active{% endif %}">
+    Below<span class="badge" id="badge-below">{{ below_cutoff_count }}</span>
   </a>
   {% if not show_nsfw %}
   <a href="{% url 'rate_nsfw_corpus' %}" class="nav-tab {% if mode == 'nsfw_corpus' %}active{% endif %}">
     NSFW<span class="badge" id="badge-nsfw-queue">{{ nsfw_queue_count }}</span>
   </a>
-  {% if 'nsfw' in mode %}
-  <a href="{% url 'rate_nsfw_void' %}" class="nav-tab {% if mode == 'nsfw_void' %}active{% endif %}">
-    <span class="nav-label-long">NSFW Trash</span><span class="nav-label-short">N.Trash</span><span class="badge" id="badge-nsfw-void">{{ nsfw_void_count }}</span>
-  </a>
-  {% endif %}
   {% endif %}
   <a href="{% url 'stats' %}" class="nav-tab nav-tab--secondary">Stats</a>
   <a href="{% url 'logs' %}" class="nav-tab nav-tab--secondary">Logs</a>
@@ -39,21 +34,11 @@
       {% if mode == "corpus" %}
       <div class="help-row"><span>Prev / Next</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
       <div class="help-row"><span>Score</span><kbd>1–6</kbd></div>
-      <div class="help-row"><span>Fav</span><kbd>F</kbd></div>
-      <div class="help-row"><span>Trash</span><kbd>Del</kbd></div>
       <div class="help-row"><span>Mark NSFW</span><kbd>N</kbd></div>
-      {% elif mode == "void" %}
-      <div class="help-row"><span>Prev / Next</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
-      <div class="help-row"><span>Mark NSFW</span><kbd>N</kbd></div>
-      {% elif mode == "gallery" %}
+      <div class="help-row"><span>Share</span><kbd>S</kbd></div>
+      {% elif mode == "below_cutoff" or mode == "gallery" %}
       <div class="help-row"><span>Prev / Next</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
       <div class="help-row"><span>Close</span><kbd>Esc</kbd></div>
-      {% else %}
-      <div class="help-row"><span>Bad</span><kbd>←</kbd></div>
-      <div class="help-row"><span>Good</span><kbd>→</kbd></div>
-      <div class="help-row"><span>Fav</span><kbd>↑</kbd></div>
-      <div class="help-row"><span>Skip</span><kbd>↓</kbd></div>
-      <div class="help-row"><span>Mark NSFW</span><kbd>N</kbd></div>
       {% endif %}
     </div>
   </div>

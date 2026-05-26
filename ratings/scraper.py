@@ -1,4 +1,4 @@
-"""Orchestrates retina/ scrapers → Django Image inbox."""
+"""Orchestrates retina/ scrapers → Django Image store."""
 
 import hashlib
 import tomllib
@@ -55,7 +55,7 @@ def _load_sources(config_path: Path) -> dict:
             rk: [s.name for s in db_sources if s.type == stype]
             for stype, _, _, rk in _SOURCE_MAP
         }
-        result["pixelfed_instances"] = [
+        result["pixelfed_accounts"] = [
             s.name for s in db_sources if s.type == Source.PIXELFED
         ]
         result["mastodon_accounts"] = [
@@ -68,8 +68,9 @@ def _load_sources(config_path: Path) -> dict:
     result = {
         rk: cfg.get(section, {}).get(key, []) for _, section, key, rk in _SOURCE_MAP
     }
-    pf = cfg.get("pixelfed", {}).get("instance_base", "").strip()
-    result["pixelfed_instances"] = [pf] if pf else []
+    result["pixelfed_accounts"] = [
+        a.strip() for a in cfg.get("pixelfed", {}).get("accounts", []) if a.strip()
+    ]
     result["mastodon_accounts"] = cfg.get("mastodon", {}).get("accounts", [])
     return result
 
@@ -82,9 +83,10 @@ def import_from_config(config_path: Path) -> int:
         for name in cfg.get(section, {}).get(key, []):
             if name and Source.objects.get_or_create(type=stype, name=name)[1]:
                 created += 1
-    pf = cfg.get("pixelfed", {}).get("instance_base", "").strip()
-    if pf and Source.objects.get_or_create(type=Source.PIXELFED, name=pf)[1]:
-        created += 1
+    for acct in cfg.get("pixelfed", {}).get("accounts", []):
+        acct = acct.strip()
+        if acct and Source.objects.get_or_create(type=Source.PIXELFED, name=acct)[1]:
+            created += 1
     for acct in cfg.get("mastodon", {}).get("accounts", []):
         acct = acct.strip()
         if acct and Source.objects.get_or_create(type=Source.MASTODON, name=acct)[1]:
@@ -168,7 +170,6 @@ def _process_candidates(
                 file_path=str(path.relative_to(data_dir)),
                 source_url=source_url or None,
                 source_label=source_label,
-                location=Image.INBOX,
                 is_nsfw=is_nsfw,
                 phash=ph,
                 embedding=brain.embedding_to_bytes(emb),
@@ -179,10 +180,7 @@ def _process_candidates(
             # and this create. Django runs in autocommit so the failed INSERT
             # auto-rolls-back at the DB level — no atomic() needed. Do NOT
             # unlink path here: filenames are deterministic per URL, so both
-            # threads wrote to the same path. The winning record references
-            # that exact file; deleting it would strand the live record with
-            # a 404 file_path that classify_inbox can then mis-route to
-            # corpus/void via shutil.move's silent FileNotFoundError catch.
+            # threads wrote to the same path; the winning record owns the file.
             logger.warning(
                 "Duplicate content_hash {} inserted concurrently; skipping.", h[:12]
             )
@@ -212,7 +210,7 @@ def _process_downloads(
     )
 
 
-def classify_inbox(
+def classify_images(
     data_dir: Path,
     vision: VisionConfig,
     *,
@@ -221,27 +219,23 @@ def classify_inbox(
     nsfw_clf=None,
 ) -> None:
     """
-    Auto-sort inbox with taste classifier; tag NSFW; backfill phash/embedding.
+    Run taste classifier + NSFW tagger on all unscored images; backfill phash/embedding.
 
-    Reuses each image's stored embedding when available — re-encoding the whole
-    inbox from disk was an all-or-nothing batch that took ~100s on CPU and lost
-    every move if the worker was killed mid-encode (container restart / OOM),
-    stranding low-prediction images that the classifier already considered trash.
-    Per-image save() means partial progress is durable.
+    Reuses each image's stored embedding when available — re-encoding from disk
+    is expensive and partial progress is durable because we save per-image.
+    predicted_score IS NULL is the "show anyway" signal for fresh images that
+    have never been through the classifier; once set it drives the visibility dial.
     """
-    from ratings.queue_rules import AUTO_PROMOTE_THRESHOLD, AUTO_TRASH_THRESHOLD
-    from ratings.utils import move_image
-
     need_vision = vision.weights_path and vision.weights_path.exists()
     need_nsfw = bool(vision.nsfw_weights_path and vision.nsfw_weights_path.exists())
     if not need_vision and not need_nsfw and nsfw_clf is None:
         return
 
-    images = list(Image.objects.filter(location=Image.INBOX, file_deleted=False))
+    images = list(Image.objects.filter(is_purged=False, score__isnull=True))
     if not images:
         return
 
-    logger.info("Auto-classifying {} inbox images.", len(images))
+    logger.info("Auto-classifying {} images.", len(images))
 
     # Only encode images missing an embedding or phash — the common case is
     # that everything was encoded at scrape time and we can read from the DB.
@@ -257,7 +251,7 @@ def classify_inbox(
             encoder,
             backfill_paths,
             transform=transform,
-            progress_label="classify_inbox",
+            progress_label="classify_images",
         )
         path_to_emb = dict(zip(valid_paths, embeddings))
 
@@ -268,7 +262,7 @@ def classify_inbox(
     if nsfw_clf is None and need_nsfw:
         nsfw_clf = brain.load_classifier(vision.nsfw_weights_path)
 
-    to_corpus = to_void = nsfw_tagged = 0
+    nsfw_tagged = 0
     for img in images:
         path = data_dir / img.file_path
         update_fields: list[str] = []
@@ -297,31 +291,16 @@ def classify_inbox(
 
         if taste_clf is not None:
             prob = float(brain.predict_proba(taste_clf, emb))
-            # Persist the prediction even when no auto-move fires — it's what
-            # _review_qs / _counts use to hide low-confidence items, and the
-            # only way to know an image was actually scored vs. never seen by
-            # the classifier (predicted_score IS NULL is the "show anyway" signal).
             img.predicted_score = prob
             update_fields.append("predicted_score")
-            if prob >= AUTO_PROMOTE_THRESHOLD:
-                move_image(img, Image.CORPUS, data_dir)
-                update_fields.extend(["file_path", "location"])
-                to_corpus += 1
-            elif prob <= AUTO_TRASH_THRESHOLD:
-                move_image(img, Image.VOID, data_dir)
-                update_fields.extend(["file_path", "location"])
-                to_void += 1
 
         if update_fields:
             img.save(update_fields=list(dict.fromkeys(update_fields)))
 
-    remaining = len(images) - to_corpus - to_void
     logger.info(
-        "Classified: {} → corpus, {} → void, {} NSFW-tagged, {} remain in inbox.",
-        to_corpus,
-        to_void,
+        "Classified: {} NSFW-tagged, {} total processed.",
         nsfw_tagged,
-        remaining,
+        len(images),
     )
 
 
@@ -350,7 +329,7 @@ def populate_knn_tag_suggestions(
     from core import brain
 
     anchors = list(
-        Image.objects.filter(file_deleted=False, is_purged=False, tags__isnull=False)
+        Image.objects.filter(is_purged=False, tags__isnull=False)
         .exclude(embedding=None)
         .distinct()
         .prefetch_related("tags")
@@ -371,9 +350,7 @@ def populate_knn_tag_suggestions(
     anchor_tags = [list(a.tags.values_list("name", flat=True)) for a in anchors]
     anchor_hashes = [a.content_hash for a in anchors]
 
-    qs = Image.objects.filter(file_deleted=False, is_purged=False).exclude(
-        embedding=None
-    )
+    qs = Image.objects.filter(is_purged=False).exclude(embedding=None)
     if not refill:
         qs = qs.filter(knn_tag_suggestions="")
     if limit:
@@ -435,17 +412,15 @@ def run(
     data_dir: Path,
     vision: VisionConfig | None = None,
 ) -> dict[str, int]:
-    """Scrape all enabled sources into data_dir/inbox/. Returns per-source new-image counts."""
+    """Scrape all enabled sources into data_dir/images/. Returns per-source new-image counts."""
     if vision is None:
         vision = VisionConfig()
 
     cfg = _load_config(config_path)
     sources = _load_sources(config_path)
-    inbox_dir = data_dir / "inbox"
-    inbox_dir.mkdir(parents=True, exist_ok=True)
-    skip_dirs = [
-        data_dir / d for d in ("corpus", "void", "inbox") if (data_dir / d).exists()
-    ]
+    images_dir = data_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    skip_dirs = [images_dir]
     index = dedup.DedupIndex.from_db()
 
     encoder = brain.get_encoder()
@@ -466,20 +441,29 @@ def run(
             logger.info("Scraping {}", label)
             urls = module.iter_image_urls(name)
             downloaded = module.download_images(
-                urls, inbox_dir, name, skip_dirs=skip_dirs
+                urls, images_dir, name, skip_dirs=skip_dirs
             )
             counts[label] = _process_downloads(
                 downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
             )
 
-    for instance in sources["pixelfed_instances"]:
-        label = f"pixelfed/{instance}"
-        logger.info("Scraping Pixelfed: {}", instance)
-        items = pixelfed.iter_image_items(instance)
-        downloaded = pixelfed.download_images(items, inbox_dir, skip_dirs=skip_dirs)
-        counts[label] = _process_downloads(
+    pixelfed_token = cfg.get("pixelfed", {}).get("access_token", "").strip() or None
+    for account in sources["pixelfed_accounts"]:
+        logger.info("Scraping Pixelfed: {}", account)
+        source_obj = Source.objects.filter(type=Source.PIXELFED, name=account).first()
+        since_id = source_obj.cursor if source_obj else None
+        items, new_cursor = pixelfed.iter_image_items(
+            account, since_id=since_id, access_token=pixelfed_token
+        )
+        downloaded = pixelfed.download_images(
+            items, images_dir, account, skip_dirs=skip_dirs
+        )
+        counts[f"pixelfed/{account}"] = _process_downloads(
             downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
         )
+        if new_cursor and source_obj:
+            source_obj.cursor = new_cursor
+            source_obj.save(update_fields=["cursor"])
 
     mastodon_token = cfg.get("mastodon", {}).get("access_token", "").strip() or None
     for account in sources["mastodon_accounts"]:
@@ -490,7 +474,7 @@ def run(
             account, since_id=since_id, access_token=mastodon_token
         )
         downloaded = mastodon_scraper.download_images(
-            items, inbox_dir, account, skip_dirs=skip_dirs
+            items, images_dir, account, skip_dirs=skip_dirs
         )
         counts[f"mastodon/{account}"] = _process_downloads(
             downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
@@ -500,7 +484,7 @@ def run(
             source_obj.save(update_fields=["cursor"])
 
     if need_classify:
-        classify_inbox(
+        classify_images(
             data_dir, vision, encoder=encoder, transform=transform, nsfw_clf=nsfw_clf
         )
 

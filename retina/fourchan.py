@@ -134,7 +134,7 @@ def download_images(
                 break
         if in_sets:
             skipped_sets += 1
-            logger.debug("Skipped (already in corpus/void): {}", filename)
+            logger.debug("Skipped (already rated): {}", filename)
             continue
         if skip_paths and str(path.resolve()) in skip_paths:
             skipped_db += 1
@@ -155,7 +155,7 @@ def download_images(
             logger.warning("Failed to download {}: {}", filename, e)
     if skipped_output or skipped_sets or skipped_db:
         logger.info(
-            "Skipped {} (already in output), {} (already in corpus/void), {} (path in DB)",
+            "Skipped {} (already in output), {} (already rated), {} (path in DB)",
             skipped_output,
             skipped_sets,
             skipped_db,

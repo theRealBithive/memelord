@@ -12,7 +12,7 @@ from sklearn.linear_model import LogisticRegression
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
-# Supported image extensions for corpus/void
+# Supported image extensions
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 EMBEDDING_DIM = 768
@@ -65,7 +65,7 @@ def encode(
     job is alive — a silent ViT-B/14 forward pass over thousands of images on
     CPU can take 30+ minutes, which previously looked indistinguishable from a
     crashed worker. progress_label disambiguates concurrent encode passes (e.g.
-    "train", "classify_inbox") in the log stream.
+    "train", "scrape") in the log stream.
 
     Returns:
         (embeddings, valid_paths) — embeddings shape (N, 768) float32, and the
@@ -172,12 +172,11 @@ def predict_proba(
     embedding: np.ndarray,
 ) -> np.ndarray:
     """
-    Returns P(corpus) — the probability the image belongs in the positive
-    class. Used by classify_inbox() to auto-sort inbox images; the cutoffs
-    that turn this probability into a route (corpus / void / leave alone)
-    live in ratings.queue_rules so they stay aligned with the review-queue
-    visibility filter. The 1-d reshape allows callers to pass a single
-    (768,) vector without wrapping it in a batch dimension themselves.
+    Returns P(liked) — probability the image belongs in the positive class.
+    Used by classify_images() to assign predicted_score; the visibility dial
+    thresholds in config are compared against this value to hide low-confidence
+    images from the review queue. The 1-d reshape allows callers to pass a
+    single (768,) vector without wrapping it in a batch dimension themselves.
     """
     if embedding.ndim == 1:
         embedding = embedding.reshape(1, -1)

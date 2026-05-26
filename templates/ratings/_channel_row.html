@@ -1,0 +1,58 @@
+<div class="notif-service" id="channel-{{ channel.pk }}">
+  <div class="notif-service-header">
+    <span class="notif-service-name">{{ channel.name }}</span>
+    <span class="notif-type-badge notif-type-{{ channel.service }}">{{ channel.get_service_display }}</span>
+    {% if channel.enabled and channel.is_configured %}
+      <span class="notif-badge notif-badge--on">● on</span>
+    {% elif channel.enabled %}
+      <span class="notif-badge notif-badge--warn">● unconfigured</span>
+    {% else %}
+      <span class="notif-badge notif-badge--off">● off</span>
+    {% endif %}
+  </div>
+
+  <form hx-post="{% url 'channel_save' channel.pk %}"
+        hx-target="#channel-{{ channel.pk }}"
+        hx-swap="outerHTML">
+    {% csrf_token %}
+    <div class="notif-fields">
+      <input class="notif-input" type="text" name="name"
+             value="{{ channel.name }}" placeholder="Channel name" required>
+      {% if channel.service == "mattermost" %}
+        <input class="notif-input" type="url" name="mm_base_url"
+               value="{{ channel.mm_base_url }}" placeholder="https://chat.example.com">
+        <input class="notif-input" type="text" name="mm_token"
+               value="{{ channel.mm_token }}" placeholder="Personal Access Token" autocomplete="off">
+        <input class="notif-input" type="text" name="mm_channel_id"
+               value="{{ channel.mm_channel_id }}" placeholder="Channel ID">
+        <input class="notif-input" type="text" name="mm_message_prefix"
+               value="{{ channel.mm_message_prefix }}" placeholder="Message prefix (optional)">
+      {% elif channel.service == "signal" %}
+        <p class="hint">Requires <a href="https://github.com/bbernhard/signal-cli-rest-api" target="_blank" rel="noopener" style="color:inherit">signal-cli-rest-api</a> on your network.</p>
+        <input class="notif-input" type="url" name="signal_api_url"
+               value="{{ channel.signal_api_url }}" placeholder="http://localhost:8080">
+        <input class="notif-input" type="text" name="signal_sender"
+               value="{{ channel.signal_sender }}" placeholder="Your number (+49…)">
+        <input class="notif-input" type="text" name="signal_recipients"
+               value="{{ channel.signal_recipients }}" placeholder="Recipients, comma-separated">
+        <input class="notif-input" type="text" name="signal_message_prefix"
+               value="{{ channel.signal_message_prefix }}" placeholder="Message prefix (optional)">
+      {% endif %}
+    </div>
+    <div class="notif-actions">
+      <button type="submit" class="src-btn src-toggle">Save</button>
+      <button type="button" class="src-btn src-toggle"
+              hx-post="{% url 'channel_toggle' channel.pk %}"
+              hx-target="#channel-{{ channel.pk }}"
+              hx-swap="outerHTML">
+        {% if channel.enabled %}Disable{% else %}Enable{% endif %}
+      </button>
+      <button type="button" class="src-btn src-delete"
+              hx-post="{% url 'channel_delete' channel.pk %}"
+              hx-target="#channel-{{ channel.pk }}"
+              hx-swap="outerHTML">
+        Delete
+      </button>
+    </div>
+  </form>
+</div>

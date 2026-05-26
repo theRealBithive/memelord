@@ -11,15 +11,7 @@
     {% else %}
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
-    <span class="review-position">{{ position }} / {{ total }}{% if image.score %} · <span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if image.is_favourite %} ★{% endif %}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
-    <button class="nsfw-toggle-btn{% if image.is_nsfw %} nsfw-toggle-btn--on{% endif %}"
-            hx-post="{% url 'toggle_nsfw' image.content_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML"
-            hx-vals='{"mode": "{{ mode }}"}'
-            title="{% if image.is_nsfw %}Marked NSFW — click to clear{% else %}Click to mark NSFW{% endif %}">
-      🔞{% if image.is_nsfw %} nsfw{% endif %}
-    </button>
+    <span class="review-position">{{ position }} / {{ total }}{% if image.score %} · <span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
     {% include "ratings/_share_button.html" %}
   </div>
 
@@ -35,6 +27,15 @@
   </div>
 
   <div class="score-row">
+    <button class="review-trash-btn"
+            data-score="0"
+            hx-post="{% url score_url image.content_hash %}"
+            hx-target="#review-card"
+            hx-swap="outerHTML"
+            hx-vals='{"score": "0"}'
+            title="Trash — below the scale; kept on disk as the strongest negative example">
+      <span class="review-trash-icon">🗑</span>
+    </button>
     {% for s in scores %}
     <button class="score-btn score-btn--{{ s }}{% if image.score == s %} score-active{% endif %}"
             data-score="{{ s }}"
@@ -45,21 +46,14 @@
       <span class="score-num">{{ s }}</span>
     </button>
     {% endfor %}
-    <button class="review-fav-btn{% if image.is_favourite %} review-fav-btn--on{% endif %}"
-            data-action="fav"
-            hx-post="{% url fav_url image.content_hash %}"
+    <button class="review-nsfw-btn{% if image.is_nsfw %} review-nsfw-btn--on{% endif %}"
+            data-action="nsfw"
+            hx-post="{% url 'toggle_nsfw' image.content_hash %}"
             hx-target="#review-card"
             hx-swap="outerHTML"
-            title="{% if image.is_favourite %}Unfavourite{% else %}Favourite{% endif %}">
-      <span class="review-fav-icon">★</span>
-    </button>
-    <button class="trash-btn"
-            data-action="trash"
-            hx-post="{% url trash_url image.content_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML">
-      <span class="trash-icon">🗑</span>
-      <span class="trash-label">TRASH</span>
+            hx-vals='{"mode": "{{ mode }}"}'
+            title="{% if image.is_nsfw %}Marked NSFW — click to clear{% else %}Click to mark NSFW{% endif %}">
+      <span class="review-nsfw-icon">🔞</span>
     </button>
     <button class="purge-btn"
             data-action="purge"

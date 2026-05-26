@@ -12,7 +12,7 @@ from django.views.decorators.http import require_POST
 from ratings.models import (
     Image,
     LogEntry,
-    NotificationConfig,
+    NotificationChannel,
     ReviewThresholds,
     ScrapeSchedule,
     Source,
@@ -24,10 +24,7 @@ from ratings.queue_rules import (
     pred_score_visible,
     visibility_q,
 )
-from ratings.utils import (
-    move_image as _move_image_util,
-    purge_image as _purge_image_util,
-)
+from ratings.utils import purge_image as _purge_image_util
 import ratings.notifiers as notifiers
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
@@ -90,11 +87,7 @@ def _get_similar_index() -> dict | None:
         return _similar_index_cache
 
     rows = list(
-        Image.objects.filter(
-            location__in=[Image.CORPUS, Image.VOID],
-            file_deleted=False,
-            is_purged=False,
-        )
+        Image.objects.filter(is_purged=False, score__isnull=False)
         .exclude(embedding=None)
         .values_list("content_hash", "embedding")
     )
@@ -181,27 +174,21 @@ def _counts(show_nsfw: bool = False) -> dict:
     sfw_pred_visible = pred_score_visible(bucket_to_cutoff(sfw_bucket))
     nsfw_pred_visible = pred_score_visible(bucket_to_cutoff(nsfw_bucket))
 
-    qs = Image.objects.filter(file_deleted=False, is_purged=False)
-    queue_filter = Q(location__in=[Image.INBOX, Image.CORPUS], score__isnull=True)
-    sfw_queue = queue_filter & Q(is_nsfw=False) & sfw_pred_visible
-    nsfw_queue = queue_filter & Q(is_nsfw=True) & nsfw_pred_visible
+    qs = Image.objects.filter(is_purged=False)
+    sfw_queue = Q(score__isnull=True, is_nsfw=False) & sfw_pred_visible
+    nsfw_queue = Q(score__isnull=True, is_nsfw=True) & nsfw_pred_visible
+    below_q = Q(score__isnull=False, score__lte=2)
 
     if show_nsfw:
         return qs.aggregate(
             queue_count=Count("pk", filter=sfw_queue | nsfw_queue),
-            void_count=Count("pk", filter=Q(location=Image.VOID)),
-            fav_count=Count("pk", filter=Q(location=Image.CORPUS, is_favourite=True)),
+            below_cutoff_count=Count("pk", filter=below_q),
             nsfw_queue_count=Count("pk", filter=nsfw_queue),
-            nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
         )
     return qs.aggregate(
         queue_count=Count("pk", filter=sfw_queue),
-        void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=False)),
-        fav_count=Count(
-            "pk", filter=Q(location=Image.CORPUS, is_favourite=True, is_nsfw=False)
-        ),
+        below_cutoff_count=Count("pk", filter=below_q & Q(is_nsfw=False)),
         nsfw_queue_count=Count("pk", filter=nsfw_queue),
-        nsfw_void_count=Count("pk", filter=Q(location=Image.VOID, is_nsfw=True)),
     )
 
 
@@ -277,10 +264,6 @@ def _training_ctx(request) -> dict:
     return {"active_task_id": task_id, "training_elapsed": _fmt_elapsed(elapsed)}
 
 
-def _move_image(image: Image, new_location: str) -> None:
-    _move_image_util(image, new_location, DATA_DIR)
-
-
 def _purge_image(image: Image) -> None:
     """Local wrapper around the utility purge so cache invalidation stays centralised."""
     _purge_image_util(image)
@@ -318,32 +301,6 @@ def rate_nsfw_corpus(request, content_hash: str | None = None):
         return render(request, "ratings/_review_htmx.html", ctx)
     return render(request, "ratings/review.html", ctx)
 
-
-@login_required
-def rate_nsfw_void(request):
-    """
-    NSFW trash grid — same layout as the regular void grid but filtered to
-    is_nsfw=True. Reuses the same action endpoints since they operate on any
-    void image regardless of NSFW status.
-    """
-    show_nsfw = request.session.get("show_nsfw", False)
-    images = list(
-        Image.objects.filter(
-            location=Image.VOID, is_nsfw=True, file_deleted=False
-        ).order_by("void_seen_at", "-rated_at")[:500]
-    )
-    return render(
-        request,
-        "ratings/void_grid.html",
-        {
-            **_counts(show_nsfw),
-            **_training_ctx(request),
-            "images": images,
-            "total": len(images),
-            "show_nsfw": show_nsfw,
-            "mode": "nsfw_void",
-        },
-    )
 
 
 @login_required
@@ -406,9 +363,7 @@ def stats(request):
             "error": error,
         }
 
-    gallery_qs = Image.objects.filter(
-        location=Image.CORPUS, file_deleted=False, score__isnull=False
-    )
+    gallery_qs = Image.objects.filter(score__isnull=False)
     if not show_nsfw:
         gallery_qs = gallery_qs.filter(is_nsfw=False)
 
@@ -426,13 +381,9 @@ def stats(request):
     )
 
     seven_days_ago = timezone.now() - timedelta(days=7)
-    scraped_7d = Image.objects.filter(
-        downloaded_at__gte=seven_days_ago, file_deleted=False
-    ).count()
+    scraped_7d = Image.objects.filter(downloaded_at__gte=seven_days_ago).count()
     rated_7d = Image.objects.filter(
-        rated_at__gte=seven_days_ago,
-        location__in=[Image.CORPUS, Image.VOID],
-        file_deleted=False,
+        rated_at__gte=seven_days_ago, score__isnull=False
     ).count()
 
     tag_breakdown = list(
@@ -446,9 +397,8 @@ def stats(request):
     # timedeltas natively and fetching (downloaded_at, rated_at) pairs is
     # cheap at corpus scale.
     inbox_durations = list(
-        Image.objects.filter(
-            location=Image.CORPUS, rated_at__isnull=False, file_deleted=False
-        ).values_list("downloaded_at", "rated_at")
+        Image.objects.filter(score__isnull=False, rated_at__isnull=False)
+        .values_list("downloaded_at", "rated_at")
     )
     avg_inbox_hours: int | None = None
     valid_durations = [(r - d).total_seconds() for d, r in inbox_durations if r > d]
@@ -571,8 +521,6 @@ def train_status(request, task_id: str):
                     {
                         "ok": False,
                         "error": "Training task not found (worker may have restarted).",
-                        "corpus_n": 0,
-                        "void_n": 0,
                     },
                 )
             # Task not yet in django_q_task → still queued or running in OrmQ.
@@ -615,12 +563,8 @@ def train_status(request, task_id: str):
         {
             "ok": result.get("ok", False),
             "error": result.get("error", "Unknown error."),
-            "corpus_n": Image.objects.filter(
-                location=Image.CORPUS, file_deleted=False
-            ).count(),
-            "void_n": Image.objects.filter(
-                location=Image.VOID, file_deleted=False
-            ).count(),
+            "corpus_n": Image.objects.filter(score__isnull=False).count(),
+            "below_cutoff_n": Image.objects.filter(score__lte=2).count(),
         },
     )
 
@@ -680,7 +624,7 @@ def _schedule_ctx() -> dict:
 
 @login_required
 def config_view(request):
-    """Render the configuration page combining sources, schedule, and training status."""
+    """Render the configuration page combining sources, schedule, channels, and training status."""
     show_nsfw = request.session.get("show_nsfw", False)
     counts = _counts(show_nsfw)
     return render(
@@ -693,6 +637,7 @@ def config_view(request):
             **counts,
             **_schedule_ctx(),
             **_vision_ctx(),
+            **_channel_list_ctx(),
         },
     )
 
@@ -740,19 +685,15 @@ def source_add(request):
         return render(
             request, "ratings/_source_error.html", {"error": "Name is required."}
         )
-    if stype == Source.PIXELFED and not name.startswith("http"):
+    # Mastodon and Pixelfed both target an account via the same @user@instance
+    # handle (both speak the Mastodon-compatible API), so they validate alike.
+    if stype in (Source.MASTODON, Source.PIXELFED) and "@" not in name.lstrip("@"):
+        service = dict(Source.TYPE_CHOICES)[stype]
+        host = "pixelfed.social" if stype == Source.PIXELFED else "mastodon.social"
         return render(
             request,
             "ratings/_source_error.html",
-            {"error": "Pixelfed value must be a URL (https://…)."},
-        )
-    if stype == Source.MASTODON and "@" not in name.lstrip("@"):
-        return render(
-            request,
-            "ratings/_source_error.html",
-            {
-                "error": "Mastodon handle must include an instance, e.g. @user@mastodon.social"
-            },
+            {"error": f"{service} handle must include an instance, e.g. @user@{host}"},
         )
 
     source, created = Source.objects.get_or_create(type=stype, name=name)
@@ -919,24 +860,16 @@ def _browse_ctx(
 
 def _review_qs(show_nsfw: bool = False):
     """
-    Build the ordered queue for the primary corpus review flow.
+    Build the ordered queue for the primary review flow.
 
-    Filters both inbox and corpus with score__isnull so unscored items from
-    either location feed the same queue — an image moved to corpus without a
-    score (e.g. by the taste classifier) still needs a manual score before it
-    leaves the queue. Unseen images (queue_seen_at IS NULL) sort first in
-    SQLite ASC; then oldest-downloaded. The [vision] threshold (DB singleton
-    via get_review_thresholds) further hides low-confidence images so the
-    user only reviews things the model thinks they'll like.
+    Unscored images (score IS NULL) feed the queue. Unseen images
+    (queue_seen_at IS NULL) sort first in SQLite ASC; then oldest-downloaded.
+    The [vision] threshold further hides low-confidence images so the user
+    only reviews things the model thinks they'll like.
     """
     sfw_bucket, nsfw_bucket = get_review_thresholds()
     return (
-        Image.objects.filter(
-            location__in=[Image.INBOX, Image.CORPUS],
-            score__isnull=True,
-            is_purged=False,
-            file_deleted=False,
-        )
+        Image.objects.filter(score__isnull=True, is_purged=False)
         .filter(visibility_q(sfw_bucket, nsfw_bucket, show_nsfw))
         .order_by("queue_seen_at", "downloaded_at")
     )
@@ -948,19 +881,11 @@ def _review_nsfw_qs(show_nsfw: bool = False):
 
     show_nsfw is accepted but ignored — this queue is always NSFW-only by
     definition. The parameter exists so qs_fn callers can treat both queues
-    with the same (show_nsfw: bool) → QuerySet signature. The NSFW threshold
-    hides low-confidence NSFW items so the queue stays manageable independently
-    of the SFW threshold.
+    with the same (show_nsfw: bool) → QuerySet signature.
     """
     _, nsfw_bucket = get_review_thresholds()
     return (
-        Image.objects.filter(
-            location__in=[Image.INBOX, Image.CORPUS],
-            is_nsfw=True,
-            score__isnull=True,
-            is_purged=False,
-            file_deleted=False,
-        )
+        Image.objects.filter(is_nsfw=True, score__isnull=True, is_purged=False)
         .filter(pred_score_visible(bucket_to_cutoff(nsfw_bucket)))
         .order_by("queue_seen_at", "downloaded_at")
     )
@@ -979,8 +904,6 @@ def _review_ctx(
         extra={
             "scores": range(1, 7),
             "score_url": "score_corpus",
-            "fav_url": "toggle_fav_corpus",
-            "trash_url": "trash_corpus",
             "purge_url": "purge_corpus",
             "image_url": "review_corpus_image",
         },
@@ -1000,8 +923,6 @@ def _review_nsfw_ctx(
         extra={
             "scores": range(1, 7),
             "score_url": "score_nsfw_corpus",
-            "fav_url": "toggle_fav_nsfw_corpus",
-            "trash_url": "trash_nsfw_corpus",
             "purge_url": "purge_nsfw_corpus",
             "image_url": "review_nsfw_corpus_image",
         },
@@ -1041,27 +962,23 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
 
     next_hash is captured before scoring because scoring changes queue ordering
     — the image disappears from its current position in the list once scored.
-    Uses _neighbor_hash so end-of-queue navigation matches _trash_impl and
-    _purge_impl (previous image on the last item, not a teleport to position 1).
+    Uses _neighbor_hash so end-of-queue navigation matches _purge_impl
+    (previous image on the last item, not a teleport to position 1).
     """
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(
-        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
-    )
+    image = get_object_or_404(Image, content_hash=content_hash, score__isnull=True)
     next_hash = _neighbor_hash(
         list(qs_fn(show_nsfw).values_list("content_hash", flat=True)),
         content_hash,
     )
     try:
-        score_val = int(request.POST.get("score", 0))
-        if 1 <= score_val <= 6:
-            fields = ["score", "rated_at"]
-            if image.location == Image.INBOX:
-                _move_image(image, Image.CORPUS)
-                fields += ["file_path", "location"]
+        # 0 is "trash" — below the 1-6 scale; still a real rating, so it leaves
+        # the queue and counts as the strongest negative training sample.
+        score_val = int(request.POST.get("score", -1))
+        if 0 <= score_val <= 6:
             image.score = score_val
             image.rated_at = timezone.now()
-            image.save(update_fields=fields)
+            image.save(update_fields=["score", "rated_at"])
             _invalidate_similar_index()
     except (ValueError, TypeError):
         pass
@@ -1070,67 +987,15 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
-def _trash_impl(request, content_hash: str, qs_fn, ctx_fn):
-    """
-    Shared trash logic for both the normal and NSFW review queues.
-
-    Neighbour is captured before the move so the queue ordering is stable
-    when we compute prev/next for the context.
-    """
-    show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(
-        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
-    )
-    next_hash = _neighbor_hash(
-        list(qs_fn(show_nsfw).values_list("content_hash", flat=True)),
-        content_hash,
-    )
-    _move_image(image, Image.VOID)
-    if image.file_deleted:
-        # move_image flags file_deleted when the source file is missing; do not
-        # rewrite location to void anyway or the row vanishes from both review
-        # and trash grids while the file is still gone.
-        ctx = ctx_fn(next_hash, show_nsfw, request)
-        _mark_queue_seen(ctx.get("image"))
-        return render(request, "ratings/_review_htmx.html", ctx)
-    image.is_favourite = False
-    image.rated_at = timezone.now()
-    image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
-    _invalidate_similar_index()
-    ctx = ctx_fn(next_hash, show_nsfw, request)
-    _mark_queue_seen(ctx.get("image"))
-    return render(request, "ratings/_review_htmx.html", ctx)
-
-
-def _toggle_fav_impl(request, content_hash: str, qs_fn, ctx_fn):
-    """
-    Shared fav-toggle for both the normal and NSFW review queues.
-
-    We stay on the same image after a fav toggle so the user can see the star
-    update without losing their place in the queue.
-    """
-    show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(
-        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
-    )
-    image.is_favourite = not image.is_favourite
-    image.save(update_fields=["is_favourite"])
-    ctx = ctx_fn(content_hash, show_nsfw, request)
-    _mark_queue_seen(ctx.get("image"))
-    return render(request, "ratings/_review_htmx.html", ctx)
-
-
 def _purge_impl(request, content_hash: str, qs_fn, ctx_fn):
     """
     Shared purge logic for both the normal and NSFW review queues.
 
-    Like _trash_impl, the neighbour is captured first so we know where to
-    navigate after the image is hard-deleted from disk.
+    The neighbour is captured first so we know where to navigate after the
+    image is hard-deleted from disk.
     """
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(
-        Image, content_hash=content_hash, location__in=[Image.INBOX, Image.CORPUS]
-    )
+    image = get_object_or_404(Image, content_hash=content_hash)
     next_hash = _neighbor_hash(
         list(qs_fn(show_nsfw).values_list("content_hash", flat=True)),
         content_hash,
@@ -1149,18 +1014,6 @@ def score_corpus(request, content_hash: str):
 
 @login_required
 @require_POST
-def trash_corpus(request, content_hash: str):
-    return _trash_impl(request, content_hash, _review_qs, _review_ctx)
-
-
-@login_required
-@require_POST
-def toggle_fav_corpus(request, content_hash: str):
-    return _toggle_fav_impl(request, content_hash, _review_qs, _review_ctx)
-
-
-@login_required
-@require_POST
 def purge_corpus(request, content_hash: str):
     return _purge_impl(request, content_hash, _review_qs, _review_ctx)
 
@@ -1173,18 +1026,6 @@ def score_nsfw_corpus(request, content_hash: str):
 
 @login_required
 @require_POST
-def trash_nsfw_corpus(request, content_hash: str):
-    return _trash_impl(request, content_hash, _review_nsfw_qs, _review_nsfw_ctx)
-
-
-@login_required
-@require_POST
-def toggle_fav_nsfw_corpus(request, content_hash: str):
-    return _toggle_fav_impl(request, content_hash, _review_nsfw_qs, _review_nsfw_ctx)
-
-
-@login_required
-@require_POST
 def purge_nsfw_corpus(request, content_hash: str):
     return _purge_impl(request, content_hash, _review_nsfw_qs, _review_nsfw_ctx)
 
@@ -1193,93 +1034,90 @@ def purge_nsfw_corpus(request, content_hash: str):
 @require_POST
 def toggle_nsfw(request, content_hash: str):
     """
-    Toggle is_nsfw on any image, then navigate appropriately for the current mode.
+    Toggle is_nsfw on an unscored image, then navigate appropriately for the current mode.
 
     Navigation logic differs per queue:
-    - Normal corpus: marking NSFW only removes the image when show_nsfw is False
+    - Normal queue: marking NSFW only removes the image when show_nsfw is False
       (otherwise it stays visible in the queue).
-    - NSFW corpus: marking safe always navigates away — the image is by definition
+    - NSFW queue: marking safe always navigates away — the image is by definition
       no longer in the NSFW queue regardless of show_nsfw.
-    - Void: same show_nsfw rule as normal corpus.
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
-    location = image.location
+    mode = request.POST.get("mode", "corpus")
 
-    if location in (Image.INBOX, Image.CORPUS):
-        mode = request.POST.get("mode", "corpus")
-        if mode == "nsfw_corpus":
-            neighbor = _neighbor_hash(
-                list(_review_nsfw_qs().values_list("content_hash", flat=True)),
-                content_hash,
-            )
-            image.is_nsfw = not image.is_nsfw
-            image.save(update_fields=["is_nsfw"])
-            ctx = _review_nsfw_ctx(
-                content_hash if image.is_nsfw else neighbor, show_nsfw, request
-            )
-        else:
-            # Capture neighbour BEFORE saving so ordering is stable.
-            neighbor = _neighbor_hash(
-                list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
-                content_hash,
-            )
-            image.is_nsfw = not image.is_nsfw
-            image.save(update_fields=["is_nsfw"])
-            if not show_nsfw and image.is_nsfw:
-                ctx = _review_ctx(neighbor, show_nsfw, request)
-            else:
-                ctx = _review_ctx(content_hash, show_nsfw, request)
-        _mark_queue_seen(ctx.get("image"))
-        return render(request, "ratings/_review_htmx.html", ctx)
-
-    if location == Image.VOID:
+    if mode == "nsfw_corpus":
         neighbor = _neighbor_hash(
-            list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True)),
+            list(_review_nsfw_qs().values_list("content_hash", flat=True)),
+            content_hash,
+        )
+        image.is_nsfw = not image.is_nsfw
+        image.save(update_fields=["is_nsfw"])
+        ctx = _review_nsfw_ctx(
+            content_hash if image.is_nsfw else neighbor, show_nsfw, request
+        )
+    else:
+        neighbor = _neighbor_hash(
+            list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
             content_hash,
         )
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
         if not show_nsfw and image.is_nsfw:
-            ctx = _void_review_ctx(neighbor, show_nsfw, request)
+            ctx = _review_ctx(neighbor, show_nsfw, request)
         else:
-            ctx = _void_review_ctx(content_hash, show_nsfw, request)
-        return render(request, "ratings/_void_htmx.html", ctx)
-
-    image.is_nsfw = not image.is_nsfw
-    image.save(update_fields=["is_nsfw"])
-    return redirect("review_corpus")
+            ctx = _review_ctx(content_hash, show_nsfw, request)
+    _mark_queue_seen(ctx.get("image"))
+    return render(request, "ratings/_review_htmx.html", ctx)
 
 
-# ── Void review ───────────────────────────────────────────────────────────────
-
-
-def _void_review_qs(show_nsfw: bool = False):
+@login_required
+def below_cutoff(request):
     """
-    Queue of void images ordered unseen-first, then newest-trashed.
+    Low-scored image grid — shows images with score ≤ 2.
 
-    Newest-trashed secondary order means recently discarded images appear first
-    after the unseen batch, making it easy to undo an accidental trash.
+    Replaces the old void grid. Images here have been manually rated 1–2; the
+    user can re-score or purge them from the gallery lightbox.
     """
-    qs = Image.objects.filter(location=Image.VOID, file_deleted=False, is_purged=False)
+    show_nsfw = request.session.get("show_nsfw", False)
+    sort = request.GET.get("sort", "newest")
+    if sort not in ("newest", "oldest", "random"):
+        sort = "newest"
+    active_tag = request.GET.get("tag", "").strip().lower()
+
+    qs = Image.objects.filter(score__isnull=False, score__lte=2, is_purged=False)
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
-    return qs.order_by("void_seen_at", "-rated_at")
+    if active_tag:
+        qs = qs.filter(tags__name=active_tag)
 
+    if sort == "random":
+        qs = qs.order_by("?")
+    elif sort == "oldest":
+        qs = qs.order_by("downloaded_at")
+    else:
+        qs = qs.order_by("-downloaded_at")
 
-def _mark_void_seen(image: Image | None) -> None:
-    """Stamp void_seen_at once; unseen images sort first in the void queue."""
-    if image is not None and image.void_seen_at is None:
-        image.void_seen_at = timezone.now()
-        image.save(update_fields=["void_seen_at"])
+    images = list(qs.prefetch_related("tags")[:500])
+    all_tags = list(Tag.objects.values_list("name", flat=True))
 
-
-def _void_review_ctx(
-    content_hash: str | None, show_nsfw: bool = False, request=None
-) -> dict:
-    """Build browse context for the void review queue."""
-    return _browse_ctx(
-        _void_review_qs(show_nsfw), content_hash, "void", show_nsfw, request
+    return render(
+        request,
+        "ratings/gallery.html",
+        {
+            **_counts(show_nsfw),
+            **_training_ctx(request),
+            "images": images,
+            "total": len(images),
+            "min_score": 1,
+            "sort": sort,
+            "scores": range(1, 7),
+            "show_nsfw": show_nsfw,
+            "mode": "below_cutoff",
+            "is_below_cutoff": True,
+            "all_tags": all_tags,
+            "active_tag": active_tag,
+        },
     )
 
 
@@ -1303,19 +1141,11 @@ def gallery(request):
     if sort not in ("newest", "oldest", "random"):
         sort = "newest"
 
-    fav_only = request.GET.get("fav") == "1"
     active_tag = request.GET.get("tag", "").strip().lower()
 
-    qs = Image.objects.filter(
-        location=Image.CORPUS,
-        file_deleted=False,
-        score__isnull=False,
-        score__gte=min_score,
-    )
+    qs = Image.objects.filter(score__isnull=False, score__gte=min_score, is_purged=False)
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
-    if fav_only:
-        qs = qs.filter(is_favourite=True)
     if active_tag:
         qs = qs.filter(tags__name=active_tag)
 
@@ -1339,7 +1169,6 @@ def gallery(request):
             "total": len(images),
             "min_score": min_score,
             "sort": sort,
-            "fav_only": fav_only,
             "scores": range(1, 7),
             "show_nsfw": show_nsfw,
             "mode": "gallery",
@@ -1348,124 +1177,6 @@ def gallery(request):
         },
     )
 
-
-@login_required
-def review_void(request, content_hash: str | None = None):
-    """
-    Void grid view — shows all trash images at once for bulk selection and rescue.
-
-    content_hash is ignored (kept for URL compat); the grid always shows the full
-    void queue. Images are ordered unseen-first so recently trashed items appear at
-    the top for quick undo.
-    """
-    show_nsfw = request.session.get("show_nsfw", False)
-    images = list(_void_review_qs(show_nsfw)[:500])
-    return render(
-        request,
-        "ratings/void_grid.html",
-        {
-            **_counts(show_nsfw),
-            **_training_ctx(request),
-            "images": images,
-            "total": len(images),
-            "show_nsfw": show_nsfw,
-            "mode": "void",
-        },
-    )
-
-
-@login_required
-@require_POST
-def void_grid_action(request, content_hash: str):
-    """
-    JSON endpoint for single-image actions from the void grid lightbox.
-
-    Returns {"rescued": True} or {"purged": True} so the JS can remove the
-    item from the DOM without a page reload.
-    """
-    action = request.POST.get("action", "")
-    image = get_object_or_404(
-        Image, content_hash=content_hash, location=Image.VOID, file_deleted=False
-    )
-    if action == "purge":
-        _purge_image(image)
-        return JsonResponse({"purged": True})
-    if action in ("rescue", "rescue_fav"):
-        _move_image(image, Image.CORPUS)
-        image.is_favourite = action == "rescue_fav"
-        image.rated_at = timezone.now()
-        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
-        return JsonResponse({"rescued": True})
-    return JsonResponse({"error": "unknown action"}, status=400)
-
-
-@login_required
-@require_POST
-def void_bulk_rescue(request):
-    """
-    Rescue multiple void images to corpus in one request.
-
-    Accepts a list of hashes via repeated 'hashes' POST values. Capped at 500
-    to prevent accidental mass operations. The fav=1 param marks all rescued
-    images as favourites.
-    """
-    hashes = request.POST.getlist("hashes")[:500]
-    fav = request.POST.get("fav") == "1"
-    rescued = 0
-    for h in hashes:
-        try:
-            img = Image.objects.get(
-                content_hash=h, location=Image.VOID, file_deleted=False
-            )
-        except Image.DoesNotExist:
-            continue
-        _move_image(img, Image.CORPUS)
-        img.is_favourite = fav
-        img.rated_at = timezone.now()
-        img.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
-        rescued += 1
-    return JsonResponse({"rescued": rescued})
-
-
-@login_required
-@require_POST
-def void_review_action(request, content_hash: str):
-    """
-    Handle rescue/purge/nsfw actions in the void review queue.
-
-    Neighbour is captured before any state changes so the navigation target
-    is stable regardless of which action removes the image from the queue.
-    """
-    show_nsfw = request.session.get("show_nsfw", False)
-    action = request.POST.get("action", "")
-    image = get_object_or_404(Image, content_hash=content_hash, location=Image.VOID)
-
-    next_hash = _neighbor_hash(
-        list(_void_review_qs(show_nsfw).values_list("content_hash", flat=True)),
-        content_hash,
-    )
-
-    if action == "purge":
-        _purge_image(image)
-        ctx = _void_review_ctx(next_hash, show_nsfw, request)
-    elif action in ("rescue", "rescue_fav"):
-        _move_image(image, Image.CORPUS)
-        image.is_favourite = action == "rescue_fav"
-        image.rated_at = timezone.now()
-        image.save(update_fields=["file_path", "location", "is_favourite", "rated_at"])
-        ctx = _void_review_ctx(next_hash, show_nsfw, request)
-    elif action == "mark_nsfw":
-        image.is_nsfw = not image.is_nsfw
-        image.save(update_fields=["is_nsfw"])
-        if not show_nsfw and image.is_nsfw:
-            ctx = _void_review_ctx(next_hash, show_nsfw, request)
-        else:
-            ctx = _void_review_ctx(content_hash, show_nsfw, request)
-    else:
-        ctx = _void_review_ctx(content_hash, show_nsfw, request)
-
-    _mark_void_seen(ctx.get("image"))
-    return render(request, "ratings/_void_htmx.html", ctx)
 
 
 @login_required
@@ -1560,22 +1271,14 @@ def gallery_action(request, content_hash: str):
     now = timezone.now()
 
     if action == "trash":
-        if image.location == Image.CORPUS:
-            _move_image(image, Image.VOID)
-            image.is_favourite = False
-            image.rated_at = now
-            image.save(
-                update_fields=["file_path", "location", "is_favourite", "rated_at"]
-            )
+        _purge_image(image)
         return JsonResponse({"deleted": True})
 
-    if action == "fav":
-        image.is_favourite = not image.is_favourite
-        image.save(update_fields=["is_favourite"])
-    elif action == "score":
+    if action == "score":
         try:
-            score_val = int(request.POST.get("score", 0))
-            if 1 <= score_val <= 6:
+            # 0 = trash (strongest negative); -1 default keeps a missing param a no-op.
+            score_val = int(request.POST.get("score", -1))
+            if 0 <= score_val <= 6:
                 image.score = score_val
                 image.rated_at = now
                 image.save(update_fields=["score", "rated_at"])
@@ -1585,60 +1288,99 @@ def gallery_action(request, content_hash: str):
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
 
-    return JsonResponse(
-        {"score": image.score, "fav": image.is_favourite, "nsfw": image.is_nsfw}
-    )
+    return JsonResponse({"score": image.score, "nsfw": image.is_nsfw})
 
 
 @login_required
 @require_POST
 def share_image(request, content_hash):
     """
-    Share an image to Mattermost and/or Signal.
+    Share an image to one or more named NotificationChannels.
 
-    Sends synchronously — both APIs are expected to be on the same LAN so
-    latency is negligible. Both channels receive the image bytes directly
-    because /media/ is @login_required.
+    The caller POSTs a list of channel PKs (channels[]=1&channels[]=3).
+    Sending is synchronous — both APIs are expected to be on the same LAN so
+    latency is negligible. The image bytes are uploaded directly because
+    /media/ is @login_required and therefore unreachable for message recipients.
     """
     image = get_object_or_404(Image, content_hash=content_hash)
-    cfg, _ = NotificationConfig.objects.get_or_create(pk=1)
     image_path = DATA_DIR / image.file_path
-    errors = []
-    if (
-        request.POST.get("mattermost")
-        and cfg.mattermost_enabled
-        and cfg.mattermost_token
-    ):
+    selected_pks = request.POST.getlist("channels")
+    channels = NotificationChannel.objects.filter(pk__in=selected_pks, enabled=True)
+    sent, errors = [], []
+    for ch in channels:
         try:
-            notifiers.send_to_mattermost(cfg, image_path, image.source_label or "")
+            if ch.service == NotificationChannel.MATTERMOST:
+                notifiers.send_to_mattermost(ch, image_path, image.source_label or "")
+            elif ch.service == NotificationChannel.SIGNAL:
+                notifiers.send_to_signal(ch, image_path, image.source_label or "")
+            sent.append(ch.name)
         except Exception as exc:
-            errors.append(f"Mattermost: {exc}")
-    if request.POST.get("signal") and cfg.signal_enabled and cfg.signal_api_url:
-        try:
-            notifiers.send_to_signal(cfg, image_path, image.source_label or "")
-        except Exception as exc:
-            errors.append(f"Signal: {exc}")
-    return render(request, "ratings/_share_toast.html", {"errors": errors})
+            errors.append(f"{ch.name}: {exc}")
+    return render(request, "ratings/_share_toast.html", {"sent": sent, "errors": errors})
+
+
+def _channel_list_ctx() -> dict:
+    """Channel list context for the config page sharing section."""
+    return {"channels": list(NotificationChannel.objects.all())}
 
 
 @login_required
 @require_POST
-def save_notification_config(request):
-    """Persist Mattermost and Signal notification settings from the Config UI."""
-    cfg, _ = NotificationConfig.objects.get_or_create(pk=1)
-    cfg.mattermost_enabled = request.POST.get("mattermost_enabled") == "1"
-    cfg.mattermost_base_url = request.POST.get("mattermost_base_url", "").strip()
-    cfg.mattermost_token = request.POST.get("mattermost_token", "").strip()
-    cfg.mattermost_channel_id = request.POST.get("mattermost_channel_id", "").strip()
-    cfg.mattermost_message_prefix = request.POST.get(
-        "mattermost_message_prefix", ""
-    ).strip()
-    cfg.signal_enabled = request.POST.get("signal_enabled") == "1"
-    cfg.signal_api_url = request.POST.get("signal_api_url", "").strip()
-    cfg.signal_sender = request.POST.get("signal_sender", "").strip()
-    cfg.signal_recipients = request.POST.get("signal_recipients", "").strip()
-    cfg.signal_message_prefix = request.POST.get("signal_message_prefix", "").strip()
-    cfg.save()
-    return render(
-        request, "ratings/_notification_config.html", {"notification_cfg": cfg}
+def channel_add(request):
+    """Create a new NotificationChannel from the config page form."""
+    name = request.POST.get("name", "").strip()
+    service = request.POST.get("service", "").strip()
+    if not name:
+        return render(
+            request, "ratings/_channel_error.html", {"error": "Name is required."}
+        )
+    if service not in dict(NotificationChannel.SERVICE_CHOICES):
+        return render(
+            request, "ratings/_channel_error.html", {"error": "Invalid service."}
+        )
+    ch, _ = NotificationChannel.objects.get_or_create(
+        name=name, defaults={"service": service}
     )
+    return render(
+        request,
+        "ratings/_channel_list.html",
+        {**_channel_list_ctx(), "added_pk": ch.pk},
+    )
+
+
+@login_required
+@require_POST
+def channel_save(request, pk: int):
+    """Persist credential fields for an existing channel."""
+    ch = get_object_or_404(NotificationChannel, pk=pk)
+    ch.name = request.POST.get("name", ch.name).strip() or ch.name
+    if ch.service == NotificationChannel.MATTERMOST:
+        ch.mm_base_url = request.POST.get("mm_base_url", "").strip()
+        ch.mm_token = request.POST.get("mm_token", "").strip()
+        ch.mm_channel_id = request.POST.get("mm_channel_id", "").strip()
+        ch.mm_message_prefix = request.POST.get("mm_message_prefix", "").strip()
+    elif ch.service == NotificationChannel.SIGNAL:
+        ch.signal_api_url = request.POST.get("signal_api_url", "").strip()
+        ch.signal_sender = request.POST.get("signal_sender", "").strip()
+        ch.signal_recipients = request.POST.get("signal_recipients", "").strip()
+        ch.signal_message_prefix = request.POST.get("signal_message_prefix", "").strip()
+    ch.save()
+    return render(request, "ratings/_channel_row.html", {"channel": ch})
+
+
+@login_required
+@require_POST
+def channel_toggle(request, pk: int):
+    """Toggle enabled on a channel without removing its credentials."""
+    ch = get_object_or_404(NotificationChannel, pk=pk)
+    ch.enabled = not ch.enabled
+    ch.save(update_fields=["enabled"])
+    return render(request, "ratings/_channel_row.html", {"channel": ch})
+
+
+@login_required
+@require_POST
+def channel_delete(request, pk: int):
+    """Permanently delete a notification channel."""
+    get_object_or_404(NotificationChannel, pk=pk).delete()
+    return HttpResponse("")
