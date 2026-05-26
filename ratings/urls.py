@@ -76,6 +76,7 @@ urlpatterns = [
     path("config/<int:pk>/toggle/", views.source_toggle, name="source_toggle"),
     path("config/<int:pk>/delete/", views.source_delete, name="source_delete"),
     path("scrape/", views.trigger_scrape, name="trigger_scrape"),
+    path("scrape/<str:task_id>/status/", views.scrape_status, name="scrape_status"),
     path("train/", views.trigger_train, name="trigger_train"),
     path("train/<str:task_id>/status/", views.train_status, name="train_status"),
     path("logs/", views.logs_page, name="logs"),

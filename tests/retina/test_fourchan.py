@@ -118,6 +118,35 @@ def test_iter_image_urls_skips_failed_thread() -> None:
     assert urls == ["https://i.4cdn.org/wg/50.jpg"]
 
 
+def test_iter_image_urls_skips_thread_read_timeout() -> None:
+    """A socket read timeout (TimeoutError/OSError, not URLError) skips the thread.
+
+    Read timeouts on resp.read() raise socket.timeout/TimeoutError, which is an
+    OSError and is NOT wrapped in URLError — the original (HTTPError, URLError)
+    catch would have let it abort the whole scrape.
+    """
+    thread_list = [{"no": 1}, {"no": 2}]
+
+    def fake_get_thread(board: str, no: int) -> dict:
+        if no == 1:
+            raise TimeoutError("timed out")
+        return {"posts": [{"tim": 50, "ext": ".jpg"}]}
+
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", side_effect=fake_get_thread),
+    ):
+        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+    assert urls == ["https://i.4cdn.org/wg/50.jpg"]
+
+
+def test_iter_image_urls_thread_list_timeout_returns_empty() -> None:
+    """A read timeout fetching threads.json yields [] instead of propagating."""
+    with patch.object(fourchan, "get_thread_list", side_effect=TimeoutError("nope")):
+        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+    assert urls == []
+
+
 def test_iter_image_urls_rate_limits_every_request() -> None:
     """One sleep precedes the thread list and one precedes each thread fetch."""
     thread_list = [{"no": 1}, {"no": 2}]

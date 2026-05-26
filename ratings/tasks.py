@@ -45,22 +45,29 @@ def _trim_logs():
 
 def run_scrape():
     """
-    Run a full scrape in the background worker context and log output to the DB.
+    Run a full scrape in the background worker and return a result dict.
 
-    Called by django-q on the auto_scrape schedule. Wraps scraper.run() with
-    a DB sink so results appear in the in-app log viewer without any additional
-    configuration.
+    Called by django-q both on the auto_scrape schedule and from the manual
+    trigger_scrape button (the latter polls scrape_status, which reads this
+    return value). Returns {"ok": True, "total": N, "counts": {...}} on success
+    or {"ok": False, "error": "..."} on failure — mirroring run_train so the
+    polling view can render a result fragment without storing state elsewhere.
+    Wraps scraper.run() with a DB sink so output shows in the in-app log viewer.
     """
     from loguru import logger
 
     _trim_logs()
     sink_id = logger.add(_db_sink("scrape"), format="{message}")
     try:
-        scraper.run(
+        counts = scraper.run(
             config_path=Path(settings.CONFIG_PATH),
             data_dir=Path(settings.DATA_DIR),
             vision=scraper.vision_config_from_settings(),
         )
+        return {"ok": True, "total": sum(counts.values()), "counts": counts}
+    except Exception as exc:
+        logger.error("Scrape failed: {}", exc)
+        return {"ok": False, "error": str(exc)}
     finally:
         logger.remove(sink_id)
 

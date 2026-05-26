@@ -201,9 +201,14 @@ def _fmt_elapsed(seconds: int | None) -> str | None:
     return f"{seconds // 60}m {seconds % 60}s"
 
 
-def _elapsed_from_session(request) -> int | None:
-    """Return seconds since training_started_at was recorded in the session, or None."""
-    started_at_str = request.session.get("training_started_at")
+def _elapsed_from_session(request, kind: str = "training") -> int | None:
+    """Return seconds since the {kind}_started_at stamp in the session, or None.
+
+    ``kind`` namespaces the session keys ("training" / "scrape") so the same
+    elapsed-time logic backs both background jobs; the default keeps the
+    original training call sites unchanged.
+    """
+    started_at_str = request.session.get(f"{kind}_started_at")
     if not started_at_str:
         return None
     started_at = datetime.fromisoformat(started_at_str)
@@ -263,6 +268,51 @@ def _training_ctx(request) -> dict:
         return {"active_task_id": None, "training_elapsed": None}
     elapsed = _elapsed_from_session(request)
     return {"active_task_id": task_id, "training_elapsed": _fmt_elapsed(elapsed)}
+
+
+def _clear_scrape_session(request, task_id: str | None = None) -> None:
+    """Drop scrape session keys only when ``task_id`` matches the stored job (or is omitted)."""
+    session_task = request.session.get("scrape_task_id")
+    if task_id is not None and session_task != task_id:
+        return
+    request.session.pop("scrape_task_id", None)
+    request.session.pop("scrape_started_at", None)
+
+
+def _scrape_task_stale(request, task_id: str) -> bool:
+    """Return True when the session's scrape task is no longer running in django-q.
+
+    Same reasoning as _training_task_stale: fetch() returns None while the task
+    is still queued/running in OrmQ, so a None result is only "lost" once elapsed
+    exceeds the cluster timeout (14400s), at which point the worker would have
+    been killed anyway.
+    """
+    from django_q.tasks import fetch
+
+    task = fetch(task_id)
+    if task is None:
+        elapsed = _elapsed_from_session(request, "scrape")
+        return elapsed is None or elapsed > 14400
+    if task.stopped is not None:
+        return True
+    elapsed = _elapsed_from_session(request, "scrape")
+    return elapsed is not None and elapsed > 14400
+
+
+def _scrape_ctx(request) -> dict:
+    """Build the scrape-progress context fragment, mirroring _training_ctx.
+
+    Lets a page reload during an active scrape resume the polling fragment
+    instead of showing an empty result box while the worker keeps running.
+    """
+    task_id = request.session.get("scrape_task_id")
+    if not task_id:
+        return {"active_scrape_task_id": None, "scrape_elapsed": None}
+    if _scrape_task_stale(request, task_id):
+        _clear_scrape_session(request, task_id)
+        return {"active_scrape_task_id": None, "scrape_elapsed": None}
+    elapsed = _elapsed_from_session(request, "scrape")
+    return {"active_scrape_task_id": task_id, "scrape_elapsed": _fmt_elapsed(elapsed)}
 
 
 def _purge_image(image: Image) -> None:
@@ -422,6 +472,7 @@ def stats(request):
         {
             **counts,
             **_training_ctx(request),
+            **_scrape_ctx(request),
             "show_nsfw": show_nsfw,
             "last_trained": last_trained,
             "last_train": last_train_info,
@@ -444,32 +495,121 @@ def stats(request):
 @require_POST
 def trigger_scrape(request):
     """
-    Run a scrape synchronously in the request/response cycle.
+    Enqueue a scrape via django-q and return a polling fragment.
 
-    Scraping is synchronous (not async_task) because it's fast enough for a
-    normal request timeout and the user expects to see the new image count
-    immediately. Training is async because DINOv2 encoding takes minutes.
+    Scraping used to run synchronously in the request, on the assumption it was
+    "fast enough for a normal request timeout." That stopped being true once the
+    4chan scraper switched from reading two index pages to fetching every live
+    thread — one rate-limited request per thread (~1s each), so a multi-board
+    scrape now runs for many minutes. A synchronous request would blow past
+    gunicorn's --timeout (300s) and the worker would be SIGKILLed mid-scrape. So,
+    like training, it now runs in a background worker and the UI polls
+    scrape_status. The session stores the task ID for the poller to watch.
     """
-    from loguru import logger
+    from django_q.tasks import async_task, fetch
 
-    from ratings import scraper
-    from ratings.tasks import _db_sink, _trim_logs
+    existing_id = request.session.get("scrape_task_id")
+    if existing_id:
+        task = fetch(existing_id)
+        if task is not None and task.stopped is None:
+            ctx = _scrape_ctx(request)
+            return render(
+                request,
+                "ratings/_scrape_pending.html",
+                {
+                    "task_id": ctx["active_scrape_task_id"],
+                    "elapsed": ctx["scrape_elapsed"],
+                },
+            )
+        _clear_scrape_session(request, existing_id)
 
-    _trim_logs()
-    sink_id = logger.add(_db_sink("scrape"), format="{message}")
-    try:
-        counts = scraper.run(
-            config_path=Path(settings.CONFIG_PATH),
-            data_dir=DATA_DIR,
-            vision=scraper.vision_config_from_settings(),
+    task_id = async_task("ratings.tasks.run_scrape")
+    request.session["scrape_task_id"] = task_id
+    request.session["scrape_started_at"] = timezone.now().isoformat()
+    return render(
+        request, "ratings/_scrape_pending.html", {"task_id": task_id, "elapsed": "0s"}
+    )
+
+
+@login_required
+def scrape_status(request, task_id: str):
+    """
+    Polling endpoint for the active scrape job (mirror of train_status).
+
+    Returns a "pending" fragment while the worker runs and a "result" fragment
+    once it completes; the session entry is cleared on completion. fetch()
+    returns None while the task is still queued/running in OrmQ, so a None result
+    is only treated as a lost worker after the cluster timeout (14400s).
+    """
+    from django_q.tasks import fetch
+
+    session_task = request.session.get("scrape_task_id")
+    task = fetch(task_id)
+
+    if task is None:
+        if session_task == task_id:
+            elapsed = _elapsed_from_session(request, "scrape")
+            if elapsed is None or elapsed > 14400:
+                _clear_scrape_session(request, task_id)
+                return render(
+                    request,
+                    "ratings/_scrape_result.html",
+                    {
+                        "ok": False,
+                        "error": "Scrape task not found (worker may have restarted).",
+                    },
+                )
+            return render(
+                request,
+                "ratings/_scrape_pending.html",
+                {"task_id": task_id, "elapsed": _fmt_elapsed(elapsed)},
+            )
+        elapsed = _elapsed_from_session(request, "scrape") if session_task else None
+        return render(
+            request,
+            "ratings/_scrape_pending.html",
+            {"task_id": session_task or task_id, "elapsed": _fmt_elapsed(elapsed)},
         )
-        ctx = {"ok": True, "total": sum(counts.values()), "counts": counts}
-    except Exception as exc:
-        logger.error("Scrape failed: {}", exc)
-        ctx = {"ok": False, "error": str(exc)}
-    finally:
-        logger.remove(sink_id)
-    return render(request, "ratings/_scrape_result.html", ctx)
+
+    if task.stopped is None:
+        elapsed = (
+            _elapsed_from_session(request, "scrape")
+            if session_task == task_id
+            else None
+        )
+        return render(
+            request,
+            "ratings/_scrape_pending.html",
+            {"task_id": task_id, "elapsed": _fmt_elapsed(elapsed)},
+        )
+
+    if session_task == task_id:
+        _clear_scrape_session(request, task_id)
+
+    result = task.result if isinstance(task.result, dict) else {}
+    # success=True from django-q only means the worker returned without raising;
+    # run_scrape catches its own exceptions and returns {"ok": False, ...}, so a
+    # genuine success needs both flags (matches the stats-page train logic).
+    ok = bool(task.success and result.get("ok", True))
+    if ok:
+        return render(
+            request,
+            "ratings/_scrape_result.html",
+            {
+                "ok": True,
+                "total": result.get("total", 0),
+                "counts": result.get("counts", {}),
+            },
+        )
+    if result.get("error"):
+        error = str(result["error"])
+    elif task.result:
+        error = str(task.result)[:500]
+    else:
+        error = "Task exited without a result."
+    return render(
+        request, "ratings/_scrape_result.html", {"ok": False, "error": error}
+    )
 
 
 @login_required

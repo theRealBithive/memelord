@@ -96,7 +96,11 @@ def iter_image_urls(
     try:
         time.sleep(rate_limit_sec)
         threads = get_thread_list(board)
-    except (HTTPError, URLError) as e:
+    except (HTTPError, URLError, OSError) as e:
+        # OSError covers socket read timeouts (socket.timeout/TimeoutError),
+        # which are NOT wrapped in URLError; without it a slow response here
+        # would propagate out and abort the entire multi-source scrape, since
+        # scraper.run has no per-source guard.
         logger.warning("Failed to fetch thread list for /{}/: {}", board, e)
         return []
     if max_threads is not None:
@@ -110,9 +114,12 @@ def iter_image_urls(
         time.sleep(rate_limit_sec)
         try:
             data = get_thread(board, thread_no)
-        except (HTTPError, URLError) as e:
-            # Threads 404 routinely (pruned between the list fetch and now);
-            # skip and keep scanning rather than aborting the whole board.
+        except (HTTPError, URLError, OSError) as e:
+            # Threads 404 routinely (pruned between the list fetch and now), and
+            # a read timeout (socket.timeout/TimeoutError, an OSError not wrapped
+            # in URLError) is increasingly likely across hundreds of fetches.
+            # Skip the thread and keep scanning rather than aborting the board —
+            # and, since scraper.run has no per-source guard, the whole scrape.
             logger.warning("Failed to fetch thread {}: {}", thread_no, e)
             continue
         posts = data.get("posts") if isinstance(data, dict) else []
