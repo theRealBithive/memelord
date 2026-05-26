@@ -59,6 +59,27 @@ docker compose run --rm memelord train    # train now
 
 ---
 
+## Upgrading to 2.0 — read before you deploy
+
+> ⚠️ **The 2.0 migration wipes every image record.** This is intentional. 2.0
+> replaces the old `data/inbox|corpus|void/` directory tree with a single flat
+> `data/images/` directory and a 0–6 score on each row, so the legacy file paths
+> no longer resolve. Migration `0020_p3_flatten_image` therefore `DELETE`s all
+> `ratings_image` rows (the delete is **not reversible** — rolling the migration
+> back restores the dropped columns but not the data), and the Docker entrypoint
+> runs `migrate` on **every container start**.
+>
+> What this means in practice:
+> - Your scores, tags, and NSFW labels for already-rated images are discarded.
+> - The old image files under `data/inbox/`, `data/corpus/`, and `data/void/` are
+>   left on disk, orphaned — delete them once you're satisfied, or re-scrape.
+>
+> **Before deploying 2.0 onto a populated instance, back up the DB**, e.g.
+> `docker compose run --rm memelord python manage.py dumpdata ratings > backup.json`
+> (or copy `data/memelord.db`). A fresh install has nothing to lose and needs no action.
+
+---
+
 ## Sources (`data/config.toml`)
 
 ```toml
@@ -72,11 +93,16 @@ blogs = ["someblog"]
 topics = ["pics"]
 
 [pixelfed]
-instance_base = "https://pixelfed.social"
+accounts = ["@user@pixelfed.social"]
 
 [mastodon]
 accounts = ["@user@instance.social"]
 ```
+
+> **Pixelfed config changed in 2.0.** The old `instance_base = "…"` key is gone —
+> Pixelfed now targets specific account handles, just like Mastodon. A config that
+> still uses `instance_base` is ignored (a warning is logged on scrape) until you
+> switch it to `accounts = [...]`.
 
 Sources can also be managed directly from the **Config** page in the UI — add, toggle, delete, and import from `config.toml` without restarting. Mark a source NSFW and its images are quarantined to a separate review queue.
 

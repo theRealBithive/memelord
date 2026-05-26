@@ -47,6 +47,22 @@ def _load_config(config_path: Path) -> dict:
         return tomllib.load(f)
 
 
+def _warn_legacy_pixelfed(cfg: dict) -> None:
+    """Warn when a config.toml still uses the removed [pixelfed] instance_base key.
+
+    2.0 replaced the single instance URL with a list of @user@instance account
+    handles (``accounts = [...]``). The old key is silently ignored otherwise,
+    so a user upgrading would lose Pixelfed scraping with no signal at all.
+    """
+    pf = cfg.get("pixelfed", {})
+    if pf.get("instance_base") and not pf.get("accounts"):
+        logger.warning(
+            "[pixelfed] instance_base is no longer supported — use "
+            'accounts = ["@user@instance"]. Pixelfed scraping stays disabled '
+            "until the config is migrated."
+        )
+
+
 def _load_sources(config_path: Path) -> dict:
     """Return scrape sources from the DB, falling back to config.toml if none are configured."""
     db_sources = list(Source.objects.filter(enabled=True))
@@ -65,6 +81,7 @@ def _load_sources(config_path: Path) -> dict:
 
     logger.info("No sources in DB — falling back to config.toml")
     cfg = _load_config(config_path)
+    _warn_legacy_pixelfed(cfg)
     result = {
         rk: cfg.get(section, {}).get(key, []) for _, section, key, rk in _SOURCE_MAP
     }
@@ -78,6 +95,7 @@ def _load_sources(config_path: Path) -> dict:
 def import_from_config(config_path: Path) -> int:
     """Read config.toml and create Source records for any not already in the DB. Returns count created."""
     cfg = _load_config(config_path)
+    _warn_legacy_pixelfed(cfg)
     created = 0
     for stype, section, key, _ in _SOURCE_MAP:
         for name in cfg.get(section, {}).get(key, []):

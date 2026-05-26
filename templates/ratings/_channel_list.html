@@ -1,4 +1,4 @@
-<div id="channel-list">
+<div id="channel-list"{% if oob %} hx-swap-oob="true"{% endif %}>
   {% for channel in channels %}
     {% include "ratings/_channel_row.html" %}
   {% empty %}
