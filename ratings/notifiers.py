@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 
 
-def send_to_mattermost(cfg, image_path: Path, source_label: str) -> None:
+def send_to_mattermost(ch, image_path: Path, source_label: str) -> None:
     """
     Upload an image file to a Mattermost channel as an attachment.
 
@@ -19,25 +19,24 @@ def send_to_mattermost(cfg, image_path: Path, source_label: str) -> None:
     Uses a Personal Access Token so the post appears from the user's own
     account. Raises requests.HTTPError on non-2xx.
     """
-    base = cfg.mattermost_base_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {cfg.mattermost_token}"}
+    base = ch.mm_base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {ch.mm_token}"}
     with open(image_path, "rb") as fh:
         upload = requests.post(
             f"{base}/api/v4/files",
             headers=headers,
-            data={"channel_id": cfg.mattermost_channel_id},
+            data={"channel_id": ch.mm_channel_id},
             files={"files": (image_path.name, fh)},
             timeout=30,
         )
     upload.raise_for_status()
     file_id = upload.json()["file_infos"][0]["id"]
 
-    prefix = cfg.mattermost_message_prefix
-    message = prefix.strip() if prefix else ""
+    message = ch.mm_message_prefix.strip() if ch.mm_message_prefix else ""
     post = requests.post(
         f"{base}/api/v4/posts",
         json={
-            "channel_id": cfg.mattermost_channel_id,
+            "channel_id": ch.mm_channel_id,
             "message": message,
             "file_ids": [file_id],
         },
@@ -55,7 +54,7 @@ def _encode_signal_attachment(image_path: Path) -> str:
     return f"data:{content_type};filename={image_path.name};base64,{encoded}"
 
 
-def send_to_signal(cfg, image_path: Path, source_label: str) -> None:
+def send_to_signal(ch, image_path: Path, source_label: str) -> None:
     """
     Send an image file to Signal recipients via signal-cli-rest-api.
 
@@ -63,20 +62,20 @@ def send_to_signal(cfg, image_path: Path, source_label: str) -> None:
     /media/ endpoint is @login_required, so a bare URL would be unreachable for
     recipients reading the message on their phone.
 
-    signal-cli-rest-api must be running and registered at cfg.signal_api_url.
-    Recipients are comma-separated phone numbers stored in cfg.signal_recipients.
+    signal-cli-rest-api must be running and registered at ch.signal_api_url.
+    Recipients are comma-separated phone numbers stored in ch.signal_recipients.
     Raises requests.HTTPError on non-2xx.
     """
-    recipients = [r.strip() for r in cfg.signal_recipients.split(",") if r.strip()]
+    recipients = [r.strip() for r in ch.signal_recipients.split(",") if r.strip()]
     if not recipients:
         return
-    prefix = cfg.signal_message_prefix.strip() if cfg.signal_message_prefix else ""
+    prefix = ch.signal_message_prefix.strip() if ch.signal_message_prefix else ""
     caption = prefix or source_label or ""
     resp = requests.post(
-        f"{cfg.signal_api_url.rstrip('/')}/v2/send",
+        f"{ch.signal_api_url.rstrip('/')}/v2/send",
         json={
             "message": caption,
-            "number": cfg.signal_sender,
+            "number": ch.signal_sender,
             "recipients": recipients,
             "base64_attachments": [_encode_signal_attachment(image_path)],
         },

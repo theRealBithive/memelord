@@ -419,31 +419,6 @@ kbd {
   letter-spacing: 0.04em;
 }
 
-.nsfw-toggle-btn {
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: var(--muted);
-  padding: 0.1rem 0.4rem;
-  letter-spacing: 0.04em;
-  transition: color 0.1s, background 0.1s, border-color 0.1s;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.nsfw-toggle-btn:hover {
-  color: var(--purple);
-  border-color: color-mix(in srgb, var(--purple) 40%, transparent);
-}
-
-.nsfw-toggle-btn--on {
-  color: var(--purple);
-  background: color-mix(in srgb, var(--purple) 15%, var(--surface));
-  border-color: color-mix(in srgb, var(--purple) 30%, transparent);
-}
-
 .order-toggle-btn {
   background: none;
   border: 1px solid transparent;
@@ -750,6 +725,7 @@ kbd {
   font-weight: 700;
   font-size: 0.75rem;
 }
+.meta-score--0 { color: #ef4444; }
 .meta-score--1 { color: #71717a; }
 .meta-score--2 { color: #60a5fa; }
 .meta-score--3 { color: #4ade80; }
@@ -806,40 +782,32 @@ kbd {
   line-height: 1;
 }
 
-.trash-btn {
-  flex: 1.5;
+/* Trash = score 0, sat at the left of the scale as "below 1". Same width and
+   row treatment as a score button. It's a one-shot action (not a toggle), so
+   the 🗑 emoji shows in full colour for contrast on the dark surface rather
+   than being dimmed — a red wash on hover gives the press feedback. */
+.review-trash-btn {
+  flex: 1;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.15rem;
   border: none;
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   cursor: pointer;
   background: var(--surface);
+  font-size: 1.3rem;
+  line-height: 1;
   transition: background 100ms, transform 80ms;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
-.trash-btn:hover {
-  background: color-mix(in srgb, var(--red) 15%, var(--surface));
+.review-trash-btn:hover {
+  background: color-mix(in srgb, var(--red) 18%, var(--surface));
 }
 
-.trash-btn:active {
-  transform: scale(0.94);
-}
-
-.trash-icon {
-  font-size: 1.3rem;
-  line-height: 1;
-}
-
-.trash-label {
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--muted);
+.review-trash-btn:active {
+  transform: scale(0.9);
 }
 
 .purge-btn {
@@ -880,7 +848,7 @@ kbd {
   opacity: 0.7;
 }
 
-.review-fav-btn {
+.review-nsfw-btn {
   flex: 1;
   display: flex;
   align-items: center;
@@ -889,26 +857,29 @@ kbd {
   border-left: 1px solid var(--border);
   cursor: pointer;
   background: var(--surface);
-  color: var(--muted);
-  font-size: 1.4rem;
+  font-size: 1.3rem;
   line-height: 1;
-  transition: background 100ms, color 100ms, transform 80ms;
+  /* The 🔞 emoji can't be recoloured, so dim it when NSFW is off and let it
+     go full-colour on hover / when marked — same muted→active feel as the
+     score buttons. */
+  filter: grayscale(0.7) opacity(0.55);
+  transition: background 100ms, filter 100ms, transform 80ms;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
-.review-fav-btn:hover {
-  background: color-mix(in srgb, #f59e0b 15%, var(--surface));
-  color: #f59e0b;
+.review-nsfw-btn:hover {
+  background: color-mix(in srgb, var(--purple) 15%, var(--surface));
+  filter: none;
 }
 
-.review-fav-btn:active {
+.review-nsfw-btn:active {
   transform: scale(0.94);
 }
 
-.review-fav-btn--on {
-  color: #f59e0b;
-  background: color-mix(in srgb, #f59e0b 12%, var(--surface));
+.review-nsfw-btn--on {
+  background: color-mix(in srgb, var(--purple) 18%, var(--surface));
+  filter: none;
 }
 
 .review-nav {
@@ -1781,3 +1752,113 @@ kbd {
 .lb-action-rescue-fav:hover { background: rgba(250,204,21,0.12); }
 
 .lb-action-purge:hover { color: var(--red); border-color: var(--red); }
+
+/* ── Share bottom sheet ─────────────────────────────────────────────────── */
+.share-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.share-sheet[hidden] { display: none; }
+
+.share-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.share-sheet-inner {
+  position: relative;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-radius: 16px 16px 0 0;
+  padding: 1.25rem 1rem calc(1.25rem + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  animation: sheet-slide-up 200ms ease-out;
+}
+
+@keyframes sheet-slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+.share-sheet-title {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding-bottom: 0.25rem;
+}
+
+.share-sheet-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.share-sheet-channel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 44px;
+  padding: 0 0.25rem;
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 1rem;
+  color: var(--fg);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.share-sheet-channel:active {
+  background: color-mix(in srgb, var(--fg) 8%, var(--surface));
+}
+
+.share-sheet-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: #38bdf8;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.share-sheet-send {
+  padding: 0.75rem 1rem;
+  background: #38bdf8;
+  color: #0a0a0a;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 100ms;
+}
+
+.share-sheet-send:disabled { opacity: 0.5; cursor: not-allowed; }
+.share-sheet-send:active:not(:disabled) { opacity: 0.75; }
+
+.share-sheet-cancel {
+  padding: 0.65rem 1rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.share-sheet-cancel:active { opacity: 0.7; }
+
+body.share-sheet--open { overflow: hidden; }

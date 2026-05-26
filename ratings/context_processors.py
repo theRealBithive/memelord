@@ -13,19 +13,21 @@ def app_version(request):
 
 def notification_config(request):
     """
-    Inject NotificationConfig singleton into every template context.
+    Inject enabled NotificationChannels into every template context.
 
-    A try/except guards against the first request before migrations run — the
-    table won't exist yet and we don't want to crash the login page.
+    share_channels is the list of configured+enabled channels — used by
+    _share_button.html to decide whether to render the share button at all,
+    and to populate the channel inputs. A try/except guards against the first
+    request before migrations run.
     """
     try:
-        from ratings.models import NotificationConfig
+        from ratings.models import NotificationChannel
 
-        cfg, _ = NotificationConfig.objects.get_or_create(pk=1)
+        channels = list(
+            NotificationChannel.objects.filter(enabled=True).order_by("name")
+        )
     except Exception:
         return {}
     return {
-        "notification_cfg": cfg,
-        "mm_enabled": cfg.mattermost_enabled and bool(cfg.mattermost_token),
-        "signal_enabled": cfg.signal_enabled and bool(cfg.signal_api_url),
+        "share_channels": [ch for ch in channels if ch.is_configured],
     }

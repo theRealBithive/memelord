@@ -1,0 +1,7 @@
+<div id="channel-list">
+  {% for channel in channels %}
+    {% include "ratings/_channel_row.html" %}
+  {% empty %}
+    <p class="empty-hint">No channels configured yet.</p>
+  {% endfor %}
+</div>

@@ -10,7 +10,6 @@
       <img class="lb-img" src="" alt="">
       <div class="lb-bar">
         <span class="lb-score"></span>
-        <span class="lb-fav" aria-hidden="true">★</span>
         <span class="lb-pos"></span>
         <a class="lb-review" href="">review →</a>
       </div>
@@ -22,7 +21,6 @@
         <button class="lb-action-score lb-action-score--4" data-score="4">4</button>
         <button class="lb-action-score lb-action-score--5" data-score="5">5</button>
         <button class="lb-action-score lb-action-score--6" data-score="6">6</button>
-        <button class="lb-action-fav" aria-label="Toggle favourite">★</button>
         <button class="lb-action-nsfw" aria-label="Toggle NSFW">🔞</button>
         <button class="lb-action-share" aria-label="Share" hidden>↗</button>
         <button class="lb-action-trash" aria-label="Trash">🗑</button>
@@ -33,22 +31,21 @@
 
   const lbImg          = lb.querySelector(".lb-img");
   const lbScore        = lb.querySelector(".lb-score");
-  const lbFav          = lb.querySelector(".lb-fav");
   const lbPos          = lb.querySelector(".lb-pos");
   const lbReview       = lb.querySelector(".lb-review");
   const lbPrev         = lb.querySelector(".lb-prev");
   const lbNext         = lb.querySelector(".lb-next");
   const lbTags         = lb.querySelector(".lb-tags");
-  const lbActionFav    = lb.querySelector(".lb-action-fav");
   const lbActionNsfw   = lb.querySelector(".lb-action-nsfw");
   const lbActionShare  = lb.querySelector(".lb-action-share");
   const lbActionTrash  = lb.querySelector(".lb-action-trash");
   const lbActionScores = Array.from(lb.querySelectorAll(".lb-action-score"));
   const grid           = document.querySelector(".gallery-grid");
-  const acUrl          = grid?.dataset.acUrl || "";
-  const mmEnabled      = grid?.dataset.mmEnabled === "1";
-  const signalEnabled  = grid?.dataset.signalEnabled === "1";
-  if (mmEnabled || signalEnabled) lbActionShare.hidden = false;
+  const acUrl         = grid?.dataset.acUrl || "";
+  const shareChannels = JSON.parse(
+    document.getElementById("gallery-share-channels")?.textContent || "[]"
+  );
+  if (shareChannels.length) lbActionShare.hidden = false;
 
   const items = Array.from(document.querySelectorAll(".gallery-item"));
   let current = 0;
@@ -209,19 +206,16 @@
     current = idx;
     const item  = items[idx];
     const score = item.dataset.score;
-    const fav   = item.dataset.fav === "1";
     lbImg.src           = item.dataset.src;
     lbReview.href       = item.href;
     lbScore.textContent = score || "";
     lbScore.className   = score ? `lb-score lb-score--${score}` : "lb-score";
-    lbFav.hidden        = !fav;
     lbPos.textContent   = `${idx + 1} / ${items.length}`;
     lbPrev.disabled     = idx === 0;
     lbNext.disabled     = idx === items.length - 1;
     lbActionScores.forEach((btn) => {
       btn.classList.toggle("lb-action-score--active", btn.dataset.score === score);
     });
-    lbActionFav.classList.toggle("lb-action-fav--on", fav);
     const nsfw = item.dataset.nsfw === "1";
     lbActionNsfw.classList.toggle("lb-action-nsfw--on", nsfw);
 
@@ -273,24 +267,6 @@
     });
   });
 
-  lbActionFav.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const item = items[current];
-    postAction(item.dataset.actionUrl, { action: "fav" }).then((data) => {
-      item.dataset.fav = data.fav ? "1" : "0";
-      let favEl = item.querySelector(".gallery-item-fav");
-      if (data.fav && !favEl) {
-        favEl = document.createElement("span");
-        favEl.className = "gallery-item-fav";
-        favEl.textContent = "★";
-        item.querySelector(".gallery-item-overlay").appendChild(favEl);
-      } else if (!data.fav && favEl) {
-        favEl.remove();
-      }
-      show(current);
-    });
-  });
-
   lbActionNsfw.addEventListener("click", (e) => {
     e.stopPropagation();
     const item = items[current];
@@ -303,29 +279,42 @@
   lbActionShare.addEventListener("click", (e) => {
     e.stopPropagation();
     const item = items[current];
-    const body = {};
-    if (mmEnabled) body.mattermost = "1";
-    if (signalEnabled) body.signal = "1";
-    lbActionShare.disabled = true;
-    lbActionShare.classList.add("lb-action-share--sending");
-    fetch(item.dataset.shareUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-CSRFToken": getCsrf(),
-      },
-      body: new URLSearchParams(body),
-    }).then((r) => r.text()).then(() => {
+    const shareUrl = item.dataset.shareUrl;
+
+    function markSent() {
       lbActionShare.classList.remove("lb-action-share--sending");
       lbActionShare.classList.add("lb-action-share--sent");
       setTimeout(() => {
         lbActionShare.classList.remove("lb-action-share--sent");
         lbActionShare.disabled = false;
       }, 1200);
-    }).catch(() => {
-      lbActionShare.classList.remove("lb-action-share--sending");
-      lbActionShare.disabled = false;
-    });
+    }
+
+    if (shareChannels.length === 1) {
+      // Single channel: fire immediately, no picker.
+      const params = new URLSearchParams();
+      params.append("channels", shareChannels[0].pk);
+      lbActionShare.disabled = true;
+      lbActionShare.classList.add("lb-action-share--sending");
+      fetch(shareUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "X-CSRFToken": getCsrf(),
+        },
+        body: params,
+      }).then(markSent).catch(() => {
+        lbActionShare.classList.remove("lb-action-share--sending");
+        lbActionShare.disabled = false;
+      });
+    } else {
+      // Multiple channels: open picker sheet.
+      window.ShareSheet?.open({
+        channels: shareChannels,
+        shareUrl,
+        onResult: () => markSent(),
+      });
+    }
   });
 
   lbActionTrash.addEventListener("click", (e) => {
@@ -350,6 +339,10 @@
     if (e.key === "Escape")     { close(); return; }
     if (e.key === "ArrowLeft")  { e.preventDefault(); prev(); }
     if (e.key === "ArrowRight") { e.preventDefault(); next(); }
+    if ((e.key === "s" || e.key === "S") && !lbActionShare.hidden) {
+      e.preventDefault();
+      lbActionShare.click();
+    }
   });
 
   let startX = 0;

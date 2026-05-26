@@ -75,7 +75,7 @@ def run_train():
     """
     from loguru import logger
     from core import trainer
-    from ratings.scraper import classify_inbox, populate_knn_tag_suggestions
+    from ratings.scraper import classify_images, populate_knn_tag_suggestions
 
     _trim_logs()
     sink_id = logger.add(_db_sink("train"), format="{message}")
@@ -86,10 +86,9 @@ def run_train():
             nsfw_weights_path=Path(settings.NSFW_WEIGHTS_PATH),
             nsfw_threshold=settings.NSFW_THRESHOLD,
         )
-        # Re-run auto-sort on existing inbox with the freshly-trained model so
-        # images scraped under an older classifier aren't stranded in inbox
-        # when the new model would now confidently send them to corpus/void.
-        classify_inbox(
+        # Re-run classification on unscored images with the freshly-trained
+        # model so images scraped under an older classifier get a fresh score.
+        classify_images(
             data_dir=Path(settings.DATA_DIR),
             vision=scraper.vision_config_from_settings(),
         )

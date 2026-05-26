@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-import uuid
 from pathlib import Path
 
 import django
@@ -20,12 +19,10 @@ class LoadSourcesPixelfedTests(TestCase):
     def setUp(self) -> None:
         Source.objects.all().delete()
 
-    def test_loads_all_enabled_pixelfed_instances_from_db(self) -> None:
-        Source.objects.create(type=Source.PIXELFED, name="https://pix.a", enabled=True)
-        Source.objects.create(type=Source.PIXELFED, name="https://pix.b", enabled=True)
-        Source.objects.create(
-            type=Source.PIXELFED, name="https://pix.off", enabled=False
-        )
+    def test_loads_all_enabled_pixelfed_accounts_from_db(self) -> None:
+        Source.objects.create(type=Source.PIXELFED, name="@a@pix.a", enabled=True)
+        Source.objects.create(type=Source.PIXELFED, name="@b@pix.b", enabled=True)
+        Source.objects.create(type=Source.PIXELFED, name="@off@pix.off", enabled=False)
         # Any enabled non-pixelfed source prevents config.toml fallback.
         Source.objects.create(type=Source.IMGUR, name="cats", enabled=True)
 
@@ -38,13 +35,13 @@ class LoadSourcesPixelfedTests(TestCase):
             config_path.unlink(missing_ok=True)
 
         self.assertEqual(
-            sorted(sources["pixelfed_instances"]),
-            ["https://pix.a", "https://pix.b"],
+            sorted(sources["pixelfed_accounts"]),
+            ["@a@pix.a", "@b@pix.b"],
         )
 
-    def test_config_toml_pixelfed_becomes_single_item_list(self) -> None:
+    def test_config_toml_pixelfed_accounts_list(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as fh:
-            fh.write(b'[pixelfed]\ninstance_base = "https://pix.example"\n')
+            fh.write(b'[pixelfed]\naccounts = ["@art@pixelfed.social"]\n')
             fh.flush()
             config_path = Path(fh.name)
 
@@ -53,4 +50,17 @@ class LoadSourcesPixelfedTests(TestCase):
         finally:
             config_path.unlink(missing_ok=True)
 
-        self.assertEqual(sources["pixelfed_instances"], ["https://pix.example"])
+        self.assertEqual(sources["pixelfed_accounts"], ["@art@pixelfed.social"])
+
+    def test_config_toml_empty_pixelfed_accounts(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", delete=False) as fh:
+            fh.write(b'[pixelfed]\naccounts = []\n')
+            fh.flush()
+            config_path = Path(fh.name)
+
+        try:
+            sources = scraper._load_sources(config_path)
+        finally:
+            config_path.unlink(missing_ok=True)
+
+        self.assertEqual(sources["pixelfed_accounts"], [])

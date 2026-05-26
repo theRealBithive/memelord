@@ -38,16 +38,52 @@ def test_send_to_signal_posts_file_attachment(monkeypatch: pytest.MonkeyPatch) -
 
         monkeypatch.setattr(notifiers.requests, "post", fake_post)
 
-        cfg = SimpleNamespace(
+        ch = SimpleNamespace(
             signal_api_url="http://signal.local:8080",
             signal_sender="+15550001",
             signal_recipients="+15550002",
             signal_message_prefix="",
         )
-        notifiers.send_to_signal(cfg, path, "imgur/memes")
+        notifiers.send_to_signal(ch, path, "imgur/memes")
 
     assert captured["url"] == "http://signal.local:8080/v2/send"
     assert captured["json"]["message"] == "imgur/memes"
     assert captured["json"]["recipients"] == ["+15550002"]
     assert captured["json"]["base64_attachments"][0].startswith("data:image/png;")
     assert captured["timeout"] == 60
+
+
+def test_send_to_mattermost_uploads_then_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mattermost send does a file upload then a post referencing the returned file_id."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = __import__("pathlib").Path(tmp) / "photo.jpg"
+        PilImage.new("RGB", (4, 4), color=(0, 128, 255)).save(path)
+
+        calls: list[dict] = []
+
+        def fake_post(url: str, **kwargs) -> MagicMock:
+            call = {"url": url, **kwargs}
+            calls.append(call)
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            # First call is file upload — return a file_id.
+            if "/files" in url:
+                resp.json.return_value = {"file_infos": [{"id": "abc123"}]}
+            return resp
+
+        monkeypatch.setattr(notifiers.requests, "post", fake_post)
+
+        ch = SimpleNamespace(
+            mm_base_url="https://chat.example.com",
+            mm_token="tok_xyz",
+            mm_channel_id="chan1",
+            mm_message_prefix="look at this",
+        )
+        notifiers.send_to_mattermost(ch, path, "pixelfed/art")
+
+    assert len(calls) == 2
+    assert calls[0]["url"] == "https://chat.example.com/api/v4/files"
+    assert calls[0]["data"] == {"channel_id": "chan1"}
+    assert calls[1]["url"] == "https://chat.example.com/api/v4/posts"
+    assert calls[1]["json"]["file_ids"] == ["abc123"]
+    assert calls[1]["json"]["message"] == "look at this"

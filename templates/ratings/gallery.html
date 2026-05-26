@@ -7,8 +7,12 @@
   <meta name="theme-color" content="#0a0a0a">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <title>memelord — gallery</title>
+  <title>memelord — {% if is_below_cutoff %}below cutoff{% else %}gallery{% endif %}</title>
   <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script id="gallery-share-channels" type="application/json">
+  [{% for ch in share_channels %}{"pk": {{ ch.pk }}, "name": "{{ ch.name|escapejs }}"}{% if not forloop.last %}, {% endif %}{% endfor %}]
+  </script>
+  <script src="{% static 'share-sheet.js' %}" defer></script>
   <script src="{% static 'tags.js' %}" defer></script>
   <script src="{% static 'gallery.js' %}" defer></script>
 </head>
@@ -19,34 +23,29 @@
   <div class="gallery-page">
 
     <div class="gallery-controls">
+      {% if not is_below_cutoff %}
       <div class="gallery-control-group">
         <span class="gallery-label">min score</span>
         {% for s in scores %}
-        <a href="?min_score={{ s }}&sort={{ sort }}{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
+        <a href="?min_score={{ s }}&sort={{ sort }}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-score-btn gallery-score-btn--{{ s }}{% if min_score == s %} gallery-score-active{% endif %}">{{ s }}</a>
         {% endfor %}
       </div>
+      {% endif %}
       <div class="gallery-control-group">
         <span class="gallery-label">sort</span>
-        <a href="?min_score={{ min_score }}&sort=newest{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
+        <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort=newest{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-sort-btn{% if sort == 'newest' %} gallery-sort-active{% endif %}">newest</a>
-        <a href="?min_score={{ min_score }}&sort=oldest{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
+        <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort=oldest{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-sort-btn{% if sort == 'oldest' %} gallery-sort-active{% endif %}">oldest</a>
-        <a href="?min_score={{ min_score }}&sort=random{% if fav_only %}&fav=1{% endif %}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
+        <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort=random{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-sort-btn{% if sort == 'random' %} gallery-sort-active{% endif %}">random</a>
-      </div>
-      <div class="gallery-control-group">
-        {% if fav_only %}
-        <a href="?min_score={{ min_score }}&sort={{ sort }}{% if active_tag %}&tag={{ active_tag }}{% endif %}" class="gallery-sort-btn gallery-sort-active">★ fav only</a>
-        {% else %}
-        <a href="?min_score={{ min_score }}&sort={{ sort }}&fav=1{% if active_tag %}&tag={{ active_tag }}{% endif %}" class="gallery-sort-btn">★ fav only</a>
-        {% endif %}
       </div>
       {% if all_tags %}
       <div class="gallery-control-group gallery-tags-filter">
         <span class="gallery-label">tags</span>
         {% for tag in all_tags %}
-        <a href="?min_score={{ min_score }}&sort={{ sort }}{% if fav_only %}&fav=1{% endif %}{% if active_tag != tag %}&tag={{ tag }}{% endif %}"
+        <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort={{ sort }}{% if active_tag != tag %}&tag={{ tag }}{% endif %}"
            class="tag-pill tag-pill--link{% if active_tag == tag %} tag-pill--active{% endif %}">#{{ tag }}</a>
         {% endfor %}
       </div>
@@ -56,14 +55,12 @@
 
     {% if images %}
     <div class="gallery-grid"
-         data-ac-url="{% url 'tag_autocomplete' %}"
-         data-mm-enabled="{% if mm_enabled %}1{% else %}0{% endif %}"
-         data-signal-enabled="{% if signal_enabled %}1{% else %}0{% endif %}">
+         data-ac-url="{% url 'tag_autocomplete' %}">
       {% for image in images %}
       <a href="{% url 'review_corpus_image' image.content_hash %}"
          class="gallery-item"
          data-score="{{ image.score }}"
-         data-fav="{% if image.is_favourite %}1{% else %}0{% endif %}"
+         data-fav="0"
          data-nsfw="{% if image.is_nsfw %}1{% else %}0{% endif %}"
          data-action-url="{% url 'gallery_action' image.content_hash %}"
          data-share-url="{% url 'share_image' image.content_hash %}"
@@ -73,7 +70,6 @@
         <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
         <div class="gallery-item-overlay">
           <span class="gallery-item-score gallery-item-score--{{ image.score }}">{{ image.score }}</span>
-          {% if image.is_favourite %}<span class="gallery-item-fav">★</span>{% endif %}
         </div>
       </a>
       {% endfor %}
@@ -81,7 +77,11 @@
     {% else %}
     <div class="done">
       <p class="done-title">No images</p>
+      {% if is_below_cutoff %}
+      <p class="done-hint">No low-scored images to show.</p>
+      {% else %}
       <p class="done-hint">No scored images match these filters.</p>
+      {% endif %}
     </div>
     {% endif %}
 

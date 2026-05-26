@@ -1,33 +1,32 @@
 (function () {
-  const SWIPE_THRESHOLD = 55;
+  // Channels are injected by review.html into a <script type="application/json">.
+  // Read once on load — channels don't change while the review page is open.
+  const shareChannels = JSON.parse(
+    document.getElementById("share-channels-data")?.textContent || "[]"
+  );
 
   function trigger(selector) {
     const el = document.querySelector(selector);
     if (el) { el.click(); el.blur(); }
   }
 
-  // Touch swipe on the image (mobile). Swipe left → trash, matching the old
-  // swipe.js "bad" gesture — many users still muscle-memory that motion even
-  // though arrow keys are now prev/next for scored corpus review.
-  let startX = 0;
-  let startY = 0;
-  let swipeActive = false;
+  // Open the share sheet when a multi-channel picker button is clicked.
+  // Delegated on document because the button lives inside #review-card (HTMX-swapped).
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".share-btn--picker");
+    if (!btn) return;
+    const shareUrl = btn.dataset.shareUrl;
+    if (!shareUrl || !shareChannels.length) return;
+    window.ShareSheet?.open({
+      channels: shareChannels,
+      shareUrl,
+      onResult: (html) => {
+        const toast = document.getElementById("share-toast");
+        if (toast) toast.outerHTML = html;
+      },
+    });
+  });
 
-  document.addEventListener("touchstart", (e) => {
-    if (!e.target.closest(".image-wrap")) return;
-    startX = e.touches[0].clientX;
-    startY = e.touches[0].clientY;
-    swipeActive = true;
-  }, { passive: true });
-
-  document.addEventListener("touchend", (e) => {
-    if (!swipeActive) return;
-    swipeActive = false;
-    const dx = e.changedTouches[0].clientX - startX;
-    const dy = e.changedTouches[0].clientY - startY;
-    if (Math.abs(dx) <= Math.abs(dy) || Math.abs(dx) < SWIPE_THRESHOLD) return;
-    if (dx < 0) trigger("[data-action='trash']");
-  }, { passive: true });
 
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
@@ -35,7 +34,8 @@
 
     const key = e.key;
 
-    if (key >= "1" && key <= "6") {
+    if (key >= "0" && key <= "6") {
+      // 0 = trash (the trash button carries data-score="0"); 1-6 = score.
       e.preventDefault();
       trigger(`[data-score="${key}"]`);
     } else if (key === "ArrowLeft") {
@@ -44,15 +44,14 @@
     } else if (key === "ArrowRight") {
       e.preventDefault();
       trigger("[data-action='next']");
-    } else if (key === "Backspace" || key === "Delete") {
-      e.preventDefault();
-      trigger("[data-action='trash']");
-    } else if (key === "f" || key === "F") {
-      e.preventDefault();
-      trigger("[data-action='fav']");
     } else if (key === "n" || key === "N") {
       e.preventDefault();
-      document.querySelector(".nsfw-toggle-btn")?.click();
+      document.querySelector(".review-nsfw-btn")?.click();
+    } else if (key === "s" || key === "S") {
+      e.preventDefault();
+      // Click whichever share button is present (single-channel form submit or picker).
+      const shareEl = document.querySelector(".share-btn, .share-btn--picker");
+      if (shareEl) shareEl.click();
     }
   });
 })();
