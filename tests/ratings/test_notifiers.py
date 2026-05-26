@@ -87,3 +87,47 @@ def test_send_to_mattermost_uploads_then_posts(monkeypatch: pytest.MonkeyPatch) 
     assert calls[1]["url"] == "https://chat.example.com/api/v4/posts"
     assert calls[1]["json"]["file_ids"] == ["abc123"]
     assert calls[1]["json"]["message"] == "look at this"
+
+
+def test_send_to_mattermost_converts_webp_to_jpeg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WebP uploads are transcoded to JPEG so Mattermost mobile can preview them."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = __import__("pathlib").Path(tmp) / "meme.webp"
+        PilImage.new("RGB", (8, 8), color=(10, 20, 30)).save(path, "WEBP")
+
+        upload: dict = {}
+
+        def fake_post(url: str, **kwargs) -> MagicMock:
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            if "/files" in url:
+                name, fh = kwargs["files"]["files"]
+                upload["name"] = name
+                upload["data"] = fh.read()
+                resp.json.return_value = {"file_infos": [{"id": "file1"}]}
+            return resp
+
+        monkeypatch.setattr(notifiers.requests, "post", fake_post)
+
+        ch = SimpleNamespace(
+            mm_base_url="https://chat.example.com",
+            mm_token="tok",
+            mm_channel_id="chan1",
+            mm_message_prefix="",
+        )
+        notifiers.send_to_mattermost(ch, path, "")
+
+    assert upload["name"] == "meme.jpg"
+    assert upload["data"].startswith(b"\xff\xd8\xff")
+
+
+def test_mattermost_upload_file_passes_through_non_webp() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = __import__("pathlib").Path(tmp) / "photo.png"
+        PilImage.new("RGB", (4, 4)).save(path)
+
+        with notifiers._mattermost_upload_file(path) as (upload_path, upload_name):
+            assert upload_path == path
+            assert upload_name == "photo.png"
