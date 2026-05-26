@@ -1,0 +1,7 @@
+<div id="scrape-result" class="train-result train-pending"
+     hx-get="{% url 'scrape_status' task_id %}"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML">
+  <span class="train-icon train-spin">⟳</span>
+  <span>Scraping…{% if elapsed %} {{ elapsed }}{% endif %}</span>
+</div>
