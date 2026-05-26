@@ -23,10 +23,28 @@ def _get_json(url: str) -> dict | list:
         return json.loads(resp.read().decode())
 
 
-def get_index(board: str, page: int = 1) -> dict:
-    """Fetch one index page for a board. Page is 1-based."""
-    url = f"{_BASE}/{board}/{page}.json"
-    return _get_json(url)
+def get_thread_list(board: str) -> list[dict]:
+    """
+    Fetch every live thread on a board via threads.json.
+
+    Why threads.json rather than paging {page}.json: a single request returns
+    every thread number across all index pages (each with a ``last_modified``
+    stamp), which we then expand into full-thread fetches. The index and catalog
+    endpoints only ever expose the OP plus the last few replies — the remainder
+    is counted in ``omitted_images`` and never reappears no matter how often you
+    poll — so an index-only scrape silently drops the bulk of the images on
+    dump-heavy boards like /wg/ (measured ~94% missed).
+    """
+    data = _get_json(f"{_BASE}/{board}/threads.json")
+    threads: list[dict] = []
+    if isinstance(data, list):
+        for page in data:
+            if not isinstance(page, dict):
+                continue
+            for thread in page.get("threads", []):
+                if isinstance(thread, dict) and thread.get("no") is not None:
+                    threads.append(thread)
+    return threads
 
 
 def get_thread(board: str, thread_no: int) -> dict:
@@ -54,43 +72,73 @@ def image_url_from_post(post: dict, board: str) -> str | None:
 
 def iter_image_urls(
     board: str = "wg",
-    index_pages: int = 2,
     *,
     rate_limit_sec: float = _RATE_LIMIT_SEC,
+    max_threads: int | None = None,
 ) -> list[str]:
     """
-    Collect image URLs from the board's index pages (no thread fetching).
-    Respects 4chan API: at most one request per second.
+    Collect image URLs from every post of every live thread on a board.
+
+    Why full-thread fetching instead of reading index pages: 4chan's index and
+    catalog JSON truncate each thread to the OP plus the last few replies, hiding
+    the rest in ``omitted_images``. On image-dump boards (/wg/) that is the great
+    majority of the content, and the buried middle never resurfaces in the index
+    — so scraping more frequently cannot recover it; only fetching the full
+    thread can. We enumerate threads once via threads.json, then fetch each.
+
+    Rate limiting: the 4chan API permits at most one request per second, applied
+    across the whole a.4cdn.org host (not per board). Every API call here — the
+    thread list and each individual thread — is preceded by a ``rate_limit_sec``
+    sleep, including the first call, so back-to-back board scrapes stay within
+    budget too. Image downloads hit the separate i.4cdn.org CDN and are paced in
+    ``download_images``.
     """
+    try:
+        time.sleep(rate_limit_sec)
+        threads = get_thread_list(board)
+    except (HTTPError, URLError) as e:
+        logger.warning("Failed to fetch thread list for /{}/: {}", board, e)
+        return []
+    if max_threads is not None:
+        threads = threads[:max_threads]
+    logger.info("Board /{}/: {} live threads to scan", board, len(threads))
+
     seen: set[str] = set()
     out: list[str] = []
-    page = 0
-    for page in range(1, index_pages + 1):
-        logger.info(
-            "Fetching index page {}/{} for board /{}/", page, index_pages, board
-        )
+    for i, thread in enumerate(threads, start=1):
+        thread_no = thread.get("no")
         time.sleep(rate_limit_sec)
         try:
-            data = get_index(board, page)
+            data = get_thread(board, thread_no)
         except (HTTPError, URLError) as e:
-            logger.warning("Failed to fetch page {}: {}", page, e)
-            break
-        threads = data.get("threads") if isinstance(data, dict) else []
-        n_page = 0
-        for thread in threads:
-            posts = thread.get("posts") if isinstance(thread, dict) else []
-            for post in posts:
-                if not isinstance(post, dict):
-                    continue
-                url = image_url_from_post(post, board)
-                if url and url not in seen:
-                    seen.add(url)
-                    out.append(url)
-                    n_page += 1
+            # Threads 404 routinely (pruned between the list fetch and now);
+            # skip and keep scanning rather than aborting the whole board.
+            logger.warning("Failed to fetch thread {}: {}", thread_no, e)
+            continue
+        posts = data.get("posts") if isinstance(data, dict) else []
+        n_thread = 0
+        for post in posts:
+            if not isinstance(post, dict):
+                continue
+            url = image_url_from_post(post, board)
+            if url and url not in seen:
+                seen.add(url)
+                out.append(url)
+                n_thread += 1
         logger.info(
-            "Page {}: found {} image URLs ({} unique so far)", page, n_page, len(out)
+            "Thread {}/{} (#{}): {} new images ({} unique total)",
+            i,
+            len(threads),
+            thread_no,
+            n_thread,
+            len(out),
         )
-    logger.info("Scrape complete: {} unique image URLs from {} pages", len(out), page)
+    logger.info(
+        "Scrape complete: {} unique image URLs from {} threads on /{}/",
+        len(out),
+        len(threads),
+        board,
+    )
     return out
 
 

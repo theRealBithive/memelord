@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from retina import fourchan
 from tests.conftest import minimal_png_bytes
@@ -49,43 +50,85 @@ def test_image_url_from_post_accepts_png_and_gif() -> None:
     )
 
 
-def test_iter_image_urls_uses_mocked_index() -> None:
-    """iter_image_urls collects URLs from index-like structure."""
-    fake_index = {
-        "threads": [
-            {
-                "posts": [
-                    {"tim": 100, "ext": ".jpg"},
-                    {"tim": 101, "ext": ".png"},
-                ],
-            },
-            {"posts": [{"tim": 102, "ext": ".jpg", "filedeleted": 1}]},
-        ],
-    }
+def test_get_thread_list_flattens_pages() -> None:
+    """get_thread_list flattens every index page into one thread list."""
+    payload = [
+        {"page": 1, "threads": [{"no": 1}, {"no": 2}]},
+        {"page": 2, "threads": [{"no": 3}]},
+    ]
+    with patch.object(fourchan, "_get_json", return_value=payload):
+        threads = fourchan.get_thread_list("wg")
+    assert [t["no"] for t in threads] == [1, 2, 3]
 
-    with patch.object(fourchan, "get_index", return_value=fake_index):
-        urls = fourchan.iter_image_urls(
-            board="wg",
-            index_pages=1,
-            rate_limit_sec=0,
-        )
+
+def test_iter_image_urls_fetches_full_threads() -> None:
+    """iter_image_urls expands every live thread into its full post list."""
+    thread_list = [{"no": 1}, {"no": 2}]
+    threads = {
+        1: {"posts": [{"tim": 100, "ext": ".jpg"}, {"tim": 101, "ext": ".png"}]},
+        2: {
+            "posts": [
+                {"tim": 102, "ext": ".jpg", "filedeleted": 1},
+                {"tim": 103, "ext": ".gif"},
+            ]
+        },
+    }
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", side_effect=lambda board, no: threads[no]),
+    ):
+        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+    # Every post is read, not just the OP + tail; filedeleted is skipped.
     assert urls == [
         "https://i.4cdn.org/wg/100.jpg",
         "https://i.4cdn.org/wg/101.png",
+        "https://i.4cdn.org/wg/103.gif",
     ]
 
 
-def test_iter_image_urls_deduplicates() -> None:
-    """Same image in multiple previews appears only once."""
-    fake_index = {
-        "threads": [
-            {"posts": [{"tim": 42, "ext": ".jpg"}]},
-            {"posts": [{"tim": 42, "ext": ".jpg"}]},
-        ],
+def test_iter_image_urls_deduplicates_across_threads() -> None:
+    """The same image reposted in two threads appears only once."""
+    thread_list = [{"no": 1}, {"no": 2}]
+    threads = {
+        1: {"posts": [{"tim": 42, "ext": ".jpg"}]},
+        2: {"posts": [{"tim": 42, "ext": ".jpg"}]},
     }
-    with patch.object(fourchan, "get_index", return_value=fake_index):
-        urls = fourchan.iter_image_urls(board="wg", index_pages=1, rate_limit_sec=0)
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", side_effect=lambda board, no: threads[no]),
+    ):
+        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
     assert urls == ["https://i.4cdn.org/wg/42.jpg"]
+
+
+def test_iter_image_urls_skips_failed_thread() -> None:
+    """A thread that 404s (pruned mid-scan) is skipped without aborting."""
+    thread_list = [{"no": 1}, {"no": 2}]
+
+    def fake_get_thread(board: str, no: int) -> dict:
+        if no == 1:
+            raise HTTPError("url", 404, "gone", {}, None)  # type: ignore[arg-type]
+        return {"posts": [{"tim": 50, "ext": ".jpg"}]}
+
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", side_effect=fake_get_thread),
+    ):
+        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+    assert urls == ["https://i.4cdn.org/wg/50.jpg"]
+
+
+def test_iter_image_urls_rate_limits_every_request() -> None:
+    """One sleep precedes the thread list and one precedes each thread fetch."""
+    thread_list = [{"no": 1}, {"no": 2}]
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", return_value={"posts": []}),
+        patch("retina.fourchan.time.sleep") as mock_sleep,
+    ):
+        fourchan.iter_image_urls(board="wg", rate_limit_sec=1.0)
+    # 1 for threads.json + 1 per thread = never more than one request/second.
+    assert mock_sleep.call_count == 3
 
 
 def test_download_images_writes_files_with_board_prefix() -> None:
