@@ -73,11 +73,17 @@ def image_url_from_post(post: dict, board: str) -> str | None:
 def iter_image_urls(
     board: str = "wg",
     *,
+    since_modified: int | None = None,
     rate_limit_sec: float = _RATE_LIMIT_SEC,
     max_threads: int | None = None,
-) -> list[str]:
+) -> tuple[list[str], int | None]:
     """
-    Collect image URLs from every post of every live thread on a board.
+    Collect image URLs from every post of every thread modified since last scrape.
+
+    Returns ``(urls, new_cursor)``. ``new_cursor`` is a ``last_modified`` unix
+    stamp to persist as the source cursor and pass back as ``since_modified`` next
+    run; on a thread-list failure it returns the cursor unchanged so a transient
+    error never resets incremental progress.
 
     Why full-thread fetching instead of reading index pages: 4chan's index and
     catalog JSON truncate each thread to the OP plus the last few replies, hiding
@@ -85,6 +91,25 @@ def iter_image_urls(
     majority of the content, and the buried middle never resurfaces in the index
     — so scraping more frequently cannot recover it; only fetching the full
     thread can. We enumerate threads once via threads.json, then fetch each.
+
+    Why incremental via ``last_modified``: threads.json stamps every thread with
+    the time of its last post/edit/delete. Adding a post always advances that
+    stamp, so a thread whose stamp is ``<= since_modified`` cannot hold an image
+    we have not already captured — we skip it and save the per-thread request.
+    Without this, every scrape re-fetched every live thread (hundreds of requests
+    on /wg/) regardless of what changed.
+
+    The cursor is a *watermark over the contiguous run of successfully-fetched
+    threads, oldest first*, NOT ``max(last_modified)`` over successes. Threads are
+    sorted ascending and the cursor only advances while no fetch has errored yet;
+    on the first error it freezes (we keep fetching the rest to capture what we
+    can, but don't promise it via the cursor). This is deliberate: a plain max
+    would jump the cursor past a failed thread sitting *between* two successes,
+    permanently skipping it next run. Freezing on first error costs at most some
+    redundant refetches after the error, never a lost image. Do not "simplify" it
+    back to a max. The ascending order also lets ``max_threads`` act as a safety
+    valve that drains the oldest backlog first across runs (trading freshness for
+    eventual completeness) rather than stranding the threads it doesn't reach.
 
     Rate limiting: the 4chan API permits at most one request per second, applied
     across the whole a.4cdn.org host (not per board). Every API call here — the
@@ -100,17 +125,33 @@ def iter_image_urls(
         # OSError covers socket read timeouts (socket.timeout/TimeoutError),
         # which are NOT wrapped in URLError; without it a slow response here
         # would propagate out and abort the entire multi-source scrape, since
-        # scraper.run has no per-source guard.
+        # scraper.run has no per-source guard. Return the cursor unchanged.
         logger.warning("Failed to fetch thread list for /{}/: {}", board, e)
-        return []
+        return [], since_modified
+
+    prev = since_modified or 0
+    # Oldest-first so the cursor watermark and any max_threads cap both advance
+    # from the bottom of the changed range (see docstring).
+    changed = sorted(
+        (t for t in threads if (t.get("last_modified") or 0) > prev),
+        key=lambda t: t.get("last_modified") or 0,
+    )
     if max_threads is not None:
-        threads = threads[:max_threads]
-    logger.info("Board /{}/: {} live threads to scan", board, len(threads))
+        changed = changed[:max_threads]
+    logger.info(
+        "Board /{}/: {} live threads, {} changed since last scrape",
+        board,
+        len(threads),
+        len(changed),
+    )
 
     seen: set[str] = set()
     out: list[str] = []
-    for i, thread in enumerate(threads, start=1):
+    new_cursor = prev
+    cursor_advancing = True
+    for i, thread in enumerate(changed, start=1):
         thread_no = thread.get("no")
+        last_modified = thread.get("last_modified") or 0
         time.sleep(rate_limit_sec)
         try:
             data = get_thread(board, thread_no)
@@ -120,6 +161,8 @@ def iter_image_urls(
             # in URLError) is increasingly likely across hundreds of fetches.
             # Skip the thread and keep scanning rather than aborting the board —
             # and, since scraper.run has no per-source guard, the whole scrape.
+            # Freeze the cursor here so the failed thread is retried next run.
+            cursor_advancing = False
             logger.warning("Failed to fetch thread {}: {}", thread_no, e)
             continue
         posts = data.get("posts") if isinstance(data, dict) else []
@@ -132,10 +175,12 @@ def iter_image_urls(
                 seen.add(url)
                 out.append(url)
                 n_thread += 1
+        if cursor_advancing:
+            new_cursor = last_modified
         logger.info(
             "Thread {}/{} (#{}): {} new images ({} unique total)",
             i,
-            len(threads),
+            len(changed),
             thread_no,
             n_thread,
             len(out),
@@ -143,10 +188,10 @@ def iter_image_urls(
     logger.info(
         "Scrape complete: {} unique image URLs from {} threads on /{}/",
         len(out),
-        len(threads),
+        len(changed),
         board,
     )
-    return out
+    return out, new_cursor
 
 
 def download_images(
