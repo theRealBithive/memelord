@@ -2,9 +2,36 @@
 
 import base64
 import mimetypes
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 import requests
+from PIL import Image as PilImage
+
+
+@contextmanager
+def _mattermost_upload_file(image_path: Path) -> Iterator[tuple[Path, str]]:
+    """
+    Yield (path, filename) for Mattermost's multipart upload.
+
+    Mattermost's mobile clients cannot preview WebP attachments, so WebP
+    sources are transcoded to JPEG in a temporary file that is removed on exit.
+    All other formats are uploaded unchanged.
+    """
+    if image_path.suffix.lower() != ".webp":
+        yield image_path, image_path.name
+        return
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        out = Path(tmp.name)
+    try:
+        with PilImage.open(image_path) as img:
+            img.convert("RGB").save(out, "JPEG", quality=92, optimize=True)
+        yield out, f"{image_path.stem}.jpg"
+    finally:
+        out.unlink(missing_ok=True)
 
 
 def send_to_mattermost(ch, image_path: Path, source_label: str) -> None:
@@ -21,14 +48,15 @@ def send_to_mattermost(ch, image_path: Path, source_label: str) -> None:
     """
     base = ch.mm_base_url.rstrip("/")
     headers = {"Authorization": f"Bearer {ch.mm_token}"}
-    with open(image_path, "rb") as fh:
-        upload = requests.post(
-            f"{base}/api/v4/files",
-            headers=headers,
-            data={"channel_id": ch.mm_channel_id},
-            files={"files": (image_path.name, fh)},
-            timeout=30,
-        )
+    with _mattermost_upload_file(image_path) as (upload_path, upload_name):
+        with open(upload_path, "rb") as fh:
+            upload = requests.post(
+                f"{base}/api/v4/files",
+                headers=headers,
+                data={"channel_id": ch.mm_channel_id},
+                files={"files": (upload_name, fh)},
+                timeout=30,
+            )
     upload.raise_for_status()
     file_id = upload.json()["file_infos"][0]["id"]
 
