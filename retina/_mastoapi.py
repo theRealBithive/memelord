@@ -215,14 +215,18 @@ def iter_image_items(
                 len(items),
             )
     else:
-        cursor_min_id: str | None = None
+        # Resume: page forward chronologically with min_id, starting from the
+        # stored cursor. since_id alone returns only the single newest page, so
+        # if more than one page of posts accumulated since the last run the
+        # middle would be skipped — and the cursor would jump past it for good.
+        # min_id walks forward from the cursor and picks up every new post.
+        cursor_min_id: str = since_id
         for page_num in range(max_pages):
             time.sleep(_RATE_LIMIT_SEC)
             page = _fetch_statuses_page(
                 instance,
                 account_id,
-                since_id=since_id if page_num == 0 else None,
-                min_id=cursor_min_id if page_num > 0 else None,
+                min_id=cursor_min_id,
                 access_token=access_token,
             )
             if not page:
