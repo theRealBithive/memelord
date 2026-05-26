@@ -121,12 +121,34 @@ class ScoreCorpusTests(TestCase):
         below = self.client.get(reverse("below_cutoff")).content.decode()
         self.assertIn(h, below)
 
-    def test_score_already_scored_image_returns_404(self) -> None:
-        """score_corpus only matches unscored images (score__isnull=True)."""
-        h = self._unscored(age_hours=1)
-        Image.objects.filter(content_hash=h).update(score=4)
-        response = self.client.post(reverse("score_corpus", args=[h]), {"score": "5"})
-        self.assertEqual(response.status_code, 404)
+    def test_review_by_hash_shows_that_scored_image(self) -> None:
+        """GET /review/<hash>/ for an already-scored image shows THAT image,
+        not the first unscored one (the gallery 'review' link)."""
+        scored = self._unscored(age_hours=2)
+        Image.objects.filter(content_hash=scored).update(score=5)
+        unscored = self._unscored(age_hours=1)
+
+        response = self.client.get(reverse("review_corpus_image", args=[scored]))
+
+        content = response.content.decode()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(scored, content)
+        self.assertNotIn(unscored, content)
+
+    def test_rescore_scored_image_updates_and_stays(self) -> None:
+        """Re-scoring an already-scored (out-of-queue) image works and keeps the
+        review on that image rather than jumping into the rate queue."""
+        scored = self._unscored(age_hours=2)
+        Image.objects.filter(content_hash=scored).update(score=4)
+        self._unscored(age_hours=1)  # an unscored image also exists
+
+        response = self.client.post(
+            reverse("score_corpus", args=[scored]), {"score": "6"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Image.objects.get(content_hash=scored).score, 6)
+        self.assertIn(scored, response.content.decode())
 
     def test_score_requires_post(self) -> None:
         h = self._unscored(age_hours=1)

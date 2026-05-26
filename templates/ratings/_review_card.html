@@ -11,7 +11,7 @@
     {% else %}
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
-    <span class="review-position">{{ position }} / {{ total }}{% if image.score %} · <span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
+    <span class="review-position">{% if total %}{{ position }} / {{ total }}{% endif %}{% if image.score is not None %}{% if total %} · {% endif %}<span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
     {% include "ratings/_share_button.html" %}
   </div>
 

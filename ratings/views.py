@@ -363,27 +363,37 @@ def stats(request):
             "error": error,
         }
 
-    gallery_qs = Image.objects.filter(score__isnull=False)
+    # Exclude purged rows, matching every other list view (gallery, below_cutoff,
+    # _review_qs, _counts) so purged images don't skew the charts and counters.
+    scored_qs = Image.objects.filter(score__isnull=False, is_purged=False)
     if not show_nsfw:
-        gallery_qs = gallery_qs.filter(is_nsfw=False)
+        scored_qs = scored_qs.filter(is_nsfw=False)
 
+    # The "Gallery" headline and tagging stats mirror the gallery page (score >= 1,
+    # i.e. trash excluded); the distribution chart below still shows the 0 bucket.
+    gallery_qs = scored_qs.filter(score__gte=1)
     gallery_total = gallery_qs.count()
+    # Disjoint from below_cutoff_count (score <= 2) and matches the trainer's split,
+    # so the "Training data" line on the page doesn't double-count scores 0-2.
+    liked_count = scored_qs.filter(score__gte=3).count()
 
     score_dist = list(
-        gallery_qs.values("score").annotate(n=Count("content_hash")).order_by("-score")
+        scored_qs.values("score").annotate(n=Count("content_hash")).order_by("-score")
     )
     score_dist_max = max((row["n"] for row in score_dist), default=1)
 
     source_breakdown = list(
-        gallery_qs.values("source_label")
+        scored_qs.values("source_label")
         .annotate(n=Count("content_hash"))
         .order_by("-n")
     )
 
     seven_days_ago = timezone.now() - timedelta(days=7)
-    scraped_7d = Image.objects.filter(downloaded_at__gte=seven_days_ago).count()
+    scraped_7d = Image.objects.filter(
+        downloaded_at__gte=seven_days_ago, is_purged=False
+    ).count()
     rated_7d = Image.objects.filter(
-        rated_at__gte=seven_days_ago, score__isnull=False
+        rated_at__gte=seven_days_ago, score__isnull=False, is_purged=False
     ).count()
 
     tag_breakdown = list(
@@ -397,8 +407,9 @@ def stats(request):
     # timedeltas natively and fetching (downloaded_at, rated_at) pairs is
     # cheap at corpus scale.
     inbox_durations = list(
-        Image.objects.filter(score__isnull=False, rated_at__isnull=False)
-        .values_list("downloaded_at", "rated_at")
+        Image.objects.filter(
+            score__isnull=False, rated_at__isnull=False, is_purged=False
+        ).values_list("downloaded_at", "rated_at")
     )
     avg_inbox_hours: int | None = None
     valid_durations = [(r - d).total_seconds() for d, r in inbox_durations if r > d]
@@ -415,6 +426,7 @@ def stats(request):
             "last_trained": last_trained,
             "last_train": last_train_info,
             "gallery_total": gallery_total,
+            "liked_count": liked_count,
             "score_dist": score_dist,
             "score_dist_max": score_dist_max,
             "source_breakdown": source_breakdown,
@@ -821,20 +833,44 @@ def _browse_ctx(
     extra: dict | None = None,
 ) -> dict:
     """
-    Build browse context with stable prev/next navigation from a queryset.
+    Build browse context for a single image, with prev/next navigation when the
+    image is part of the queue.
 
     The full hash list is materialised once so prev/next positions are computed
     from the same snapshot. Fetching prev/next lazily with separate queries
     risks a race condition where an image is rated (and removed from the queue)
     between calls, shifting the navigation offsets.
+
+    A requested content_hash that is NOT in the queue (e.g. an already-scored
+    image opened from the gallery for re-review) is still shown — standalone,
+    with no queue position and prev/next disabled — instead of silently
+    falling back to the head of the queue and showing the wrong picture.
     """
     all_hashes = list(qs.values_list("content_hash", flat=True))
     base = {"show_nsfw": show_nsfw, **_counts(show_nsfw)}
     if extra:
         base.update(extra)
 
+    if content_hash and content_hash not in set(all_hashes):
+        image = Image.objects.filter(content_hash=content_hash).first()
+        if image is not None:
+            ctx: dict = {
+                "image": image,
+                "prev_hash": None,
+                "next_hash": None,
+                "position": None,
+                "total": None,
+                "mode": mode,
+                "prediction": _taste_prediction(image),
+                **base,
+            }
+            if request is not None:
+                ctx.update(_training_ctx(request))
+            return ctx
+        # Requested image is gone (purged/deleted) — fall through to the queue.
+
     if not all_hashes:
-        ctx: dict = {"image": None, "mode": mode, **base}
+        ctx = {"image": None, "mode": mode, **base}
         if request is not None:
             ctx.update(_training_ctx(request))
         return ctx
@@ -963,17 +999,20 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
     """
     Shared score logic for both the normal and NSFW review queues.
 
-    next_hash is captured before scoring because scoring changes queue ordering
-    — the image disappears from its current position in the list once scored.
-    Uses _neighbor_hash so end-of-queue navigation matches _purge_impl
-    (previous image on the last item, not a teleport to position 1).
+    Scoring is allowed on any image, not just unscored ones, so an already-rated
+    image opened from the gallery for re-review can be re-scored here. Navigation
+    differs by origin: an in-queue image advances to its neighbour (rate-and-
+    advance); an out-of-queue image (re-review) stays put so the user sees the
+    updated score instead of being thrown into the rate queue. next_hash is
+    captured before scoring because scoring changes which images are in-queue.
     """
     show_nsfw = request.session.get("show_nsfw", False)
-    image = get_object_or_404(Image, content_hash=content_hash, score__isnull=True)
-    next_hash = _neighbor_hash(
-        list(qs_fn(show_nsfw).values_list("content_hash", flat=True)),
-        content_hash,
-    )
+    image = get_object_or_404(Image, content_hash=content_hash)
+    queue_hashes = list(qs_fn(show_nsfw).values_list("content_hash", flat=True))
+    if content_hash in queue_hashes:
+        next_hash = _neighbor_hash(queue_hashes, content_hash)
+    else:
+        next_hash = content_hash
     try:
         # 0 is "trash" — below the 1-6 scale; still a real rating, so it leaves
         # the queue and counts as the strongest negative training sample.
@@ -1037,39 +1076,46 @@ def purge_nsfw_corpus(request, content_hash: str):
 @require_POST
 def toggle_nsfw(request, content_hash: str):
     """
-    Toggle is_nsfw on an unscored image, then navigate appropriately for the current mode.
+    Toggle is_nsfw on an image, then navigate appropriately for the current mode.
 
-    Navigation logic differs per queue:
+    Navigation mirrors _score_impl: an in-queue image advances to its neighbour
+    when the toggle removes it from the current view; an out-of-queue image (an
+    already-scored picture opened from the gallery for re-review) stays put so
+    the user keeps seeing it instead of being teleported to the head of the rate
+    queue by _neighbor_hash's not-in-queue fallback.
+
     - Normal queue: marking NSFW only removes the image when show_nsfw is False
       (otherwise it stays visible in the queue).
-    - NSFW queue: marking safe always navigates away — the image is by definition
-      no longer in the NSFW queue regardless of show_nsfw.
+    - NSFW queue: marking safe removes the image — it's by definition no longer
+      in the NSFW queue regardless of show_nsfw.
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
     mode = request.POST.get("mode", "corpus")
 
     if mode == "nsfw_corpus":
-        neighbor = _neighbor_hash(
-            list(_review_nsfw_qs().values_list("content_hash", flat=True)),
-            content_hash,
-        )
+        queue_hashes = list(_review_nsfw_qs().values_list("content_hash", flat=True))
+        in_queue = content_hash in queue_hashes
+        neighbor = _neighbor_hash(queue_hashes, content_hash)
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
-        ctx = _review_nsfw_ctx(
-            content_hash if image.is_nsfw else neighbor, show_nsfw, request
-        )
+        # In-queue + marked safe → it left the NSFW queue, so advance.
+        # Out-of-queue (re-review) or still NSFW → stay on the image.
+        target = neighbor if (in_queue and not image.is_nsfw) else content_hash
+        ctx = _review_nsfw_ctx(target, show_nsfw, request)
     else:
-        neighbor = _neighbor_hash(
-            list(_review_qs(show_nsfw).values_list("content_hash", flat=True)),
-            content_hash,
-        )
+        queue_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
+        in_queue = content_hash in queue_hashes
+        neighbor = _neighbor_hash(queue_hashes, content_hash)
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
-        if not show_nsfw and image.is_nsfw:
-            ctx = _review_ctx(neighbor, show_nsfw, request)
+        # In-queue + marked NSFW while NSFW is hidden → it left the queue, advance.
+        # Out-of-queue (re-review) or still visible → stay on the image.
+        if in_queue and not show_nsfw and image.is_nsfw:
+            target = neighbor
         else:
-            ctx = _review_ctx(content_hash, show_nsfw, request)
+            target = content_hash
+        ctx = _review_ctx(target, show_nsfw, request)
     _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
@@ -1079,8 +1125,9 @@ def below_cutoff(request):
     """
     Low-scored image grid — shows images with score ≤ 2.
 
-    Replaces the old void grid. Images here have been manually rated 1–2; the
-    user can re-score or purge them from the gallery lightbox.
+    Replaces the old void grid. Includes trash (score 0) alongside the 1–2 band,
+    so every below-cutoff negative is in one place; the user can re-score upward
+    or purge them from the gallery lightbox.
     """
     show_nsfw = request.session.get("show_nsfw", False)
     sort = request.GET.get("sort", "newest")
@@ -1331,7 +1378,15 @@ def _channel_list_ctx() -> dict:
 @login_required
 @require_POST
 def channel_add(request):
-    """Create a new NotificationChannel from the config page form."""
+    """Create a new NotificationChannel from the config page form.
+
+    The form targets the inline #channel-add-error slot. On success the refreshed
+    list is returned as an out-of-band swap (so #channel-list updates while the
+    empty main body clears any prior error); validation failures render into the
+    slot without disturbing the existing list. Names are unique, so a duplicate is
+    rejected outright rather than silently returning a channel of the wrong service
+    (get_or_create would ignore the chosen service for an existing name).
+    """
     name = request.POST.get("name", "").strip()
     service = request.POST.get("service", "").strip()
     if not name:
@@ -1342,13 +1397,17 @@ def channel_add(request):
         return render(
             request, "ratings/_channel_error.html", {"error": "Invalid service."}
         )
-    ch, _ = NotificationChannel.objects.get_or_create(
-        name=name, defaults={"service": service}
-    )
+    if NotificationChannel.objects.filter(name=name).exists():
+        return render(
+            request,
+            "ratings/_channel_error.html",
+            {"error": f"A channel named “{name}” already exists."},
+        )
+    NotificationChannel.objects.create(name=name, service=service)
     return render(
         request,
         "ratings/_channel_list.html",
-        {**_channel_list_ctx(), "added_pk": ch.pk},
+        {**_channel_list_ctx(), "oob": True},
     )
 
 

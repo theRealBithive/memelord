@@ -2,10 +2,13 @@
 
 <div style="margin-top:1rem">
   <div class="section-title" style="margin-bottom:0.6rem">Add channel</div>
+  <!-- Errors render into #channel-add-error; on success the refreshed list is
+       swapped in out-of-band and this slot is cleared, so a validation failure
+       never blows away the existing channel list. -->
   <form class="add-form"
         hx-post="{% url 'channel_add' %}"
-        hx-target="#channel-list"
-        hx-swap="outerHTML"
+        hx-target="#channel-add-error"
+        hx-swap="innerHTML"
         hx-on::after-request="this.querySelector('input[name=name]').value=''">
     {% csrf_token %}
     <select name="service">
