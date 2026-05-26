@@ -9,10 +9,13 @@ import pytest
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "memelord.settings")
 django.setup()
 
-from django.test import TestCase, override_settings
+from django.contrib.auth.models import User
+from django.test import Client, TestCase, override_settings
+from django.urls import reverse
 
 from ratings.models import Image, ReviewThresholds
-from ratings.queue_rules import bucket_to_cutoff, get_review_thresholds
+from ratings.queue_rules import below_cutoff_q, bucket_to_cutoff, get_review_thresholds
+from ratings.views import _counts
 
 
 def test_bucket_to_cutoff_known_buckets():
@@ -131,3 +134,48 @@ class ReviewQueueThresholdFilterTests(TestCase):
 
         hashes = set(_review_qs(show_nsfw=False).values_list("content_hash", flat=True))
         self.assertNotIn(hide.content_hash, hashes)
+
+    def test_hidden_from_review_appears_in_below_cutoff_q(self) -> None:
+        hide = _make_image(predicted=0.2)
+        self._set_thresholds(sfw=4, nsfw=1)
+
+        below = below_cutoff_q(4, 1, show_nsfw=False)
+        hashes = set(Image.objects.filter(below).values_list("content_hash", flat=True))
+        self.assertIn(hide.content_hash, hashes)
+
+
+@override_settings(DEBUG=True)
+class SetVisionThresholdsNavTests(TestCase):
+    """Saving thresholds on /config/ refreshes nav badge counts via HTMX OOB."""
+
+    def setUp(self) -> None:
+        ReviewThresholds.objects.all().delete()
+        Image.objects.all().delete()
+        ReviewThresholds.objects.create(sfw_threshold=1, nsfw_threshold=1)
+        self.client = Client()
+        username = f"vis_{uuid.uuid4().hex[:8]}"
+        User.objects.create_user(username, password="secret")
+        self.client.login(username=username, password="secret")
+        content_hash = uuid.uuid4().hex
+        Image.objects.create(
+            content_hash=content_hash,
+            file_path=f"images/{content_hash}.jpg",
+            source_label="test",
+            predicted_score=0.2,
+        )
+
+    def test_save_returns_oob_nav_with_updated_counts(self) -> None:
+        before = _counts(show_nsfw=False)
+        response = self.client.post(
+            reverse("set_vision_thresholds"),
+            {"sfw_threshold": 4, "nsfw_threshold": 1},
+        )
+        after = _counts(show_nsfw=False)
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('hx-swap-oob="true"', content)
+        self.assertIn(f'id="badge-queue">{after["queue_count"]}</span>', content)
+        self.assertIn(f'id="badge-below">{after["below_cutoff_count"]}</span>', content)
+        self.assertGreater(after["below_cutoff_count"], before["below_cutoff_count"])
+        self.assertLess(after["queue_count"], before["queue_count"])

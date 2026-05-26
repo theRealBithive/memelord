@@ -10,6 +10,7 @@
       <img class="lb-img" src="" alt="">
       <div class="lb-bar">
         <span class="lb-score"></span>
+        <span class="lb-pred"></span>
         <span class="lb-pos"></span>
         <a class="lb-review" href="">review →</a>
       </div>
@@ -29,19 +30,20 @@
   `;
   document.body.appendChild(lb);
 
-  const lbImg          = lb.querySelector(".lb-img");
-  const lbScore        = lb.querySelector(".lb-score");
-  const lbPos          = lb.querySelector(".lb-pos");
-  const lbReview       = lb.querySelector(".lb-review");
-  const lbPrev         = lb.querySelector(".lb-prev");
-  const lbNext         = lb.querySelector(".lb-next");
-  const lbTags         = lb.querySelector(".lb-tags");
-  const lbActionNsfw   = lb.querySelector(".lb-action-nsfw");
-  const lbActionShare  = lb.querySelector(".lb-action-share");
-  const lbActionPurge  = lb.querySelector(".lb-action-purge");
+  const lbImg = lb.querySelector(".lb-img");
+  const lbScore = lb.querySelector(".lb-score");
+  const lbPred = lb.querySelector(".lb-pred");
+  const lbPos = lb.querySelector(".lb-pos");
+  const lbReview = lb.querySelector(".lb-review");
+  const lbPrev = lb.querySelector(".lb-prev");
+  const lbNext = lb.querySelector(".lb-next");
+  const lbTags = lb.querySelector(".lb-tags");
+  const lbActionNsfw = lb.querySelector(".lb-action-nsfw");
+  const lbActionShare = lb.querySelector(".lb-action-share");
+  const lbActionPurge = lb.querySelector(".lb-action-purge");
   const lbActionScores = Array.from(lb.querySelectorAll(".lb-action-score"));
-  const grid           = document.querySelector(".gallery-grid");
-  const acUrl         = grid?.dataset.acUrl || "";
+  const grid = document.querySelector(".gallery-grid");
+  const acUrl = grid?.dataset.acUrl || "";
   const shareChannels = JSON.parse(
     document.getElementById("gallery-share-channels")?.textContent || "[]"
   );
@@ -202,17 +204,32 @@
 
   // ── Core lightbox ─────────────────────────────────────────────────────────
 
+  function humanScoreLabel(raw) {
+    if (raw === undefined || raw === "" || raw === "None") {
+      return { text: "unrated", cls: "lb-score lb-score--unrated" };
+    }
+    return { text: raw, cls: `lb-score lb-score--${raw}` };
+  }
+
+  function modelPredLabel(raw) {
+    if (raw === undefined || raw === "" || raw === "None") return "";
+    const pct = Math.round(parseFloat(raw) * 100);
+    return Number.isFinite(pct) ? `model ${pct}%` : "";
+  }
+
   function show(idx) {
     current = idx;
-    const item  = items[idx];
+    const item = items[idx];
     const score = item.dataset.score;
-    lbImg.src           = item.dataset.src;
-    lbReview.href       = item.href;
-    lbScore.textContent = score || "";
-    lbScore.className   = score ? `lb-score lb-score--${score}` : "lb-score";
-    lbPos.textContent   = `${idx + 1} / ${items.length}`;
-    lbPrev.disabled     = idx === 0;
-    lbNext.disabled     = idx === items.length - 1;
+    const human = humanScoreLabel(score);
+    lbImg.src = item.dataset.src;
+    lbReview.href = item.href;
+    lbScore.textContent = human.text;
+    lbScore.className = human.cls;
+    lbPred.textContent = modelPredLabel(item.dataset.predicted);
+    lbPos.textContent = `${idx + 1} / ${items.length}`;
+    lbPrev.disabled = idx === 0;
+    lbNext.disabled = idx === items.length - 1;
     lbActionScores.forEach((btn) => {
       btn.classList.toggle("lb-action-score--active", btn.dataset.score === score);
     });
@@ -342,8 +359,8 @@
 
   document.addEventListener("keydown", (e) => {
     if (!lb.classList.contains("lb-open")) return;
-    if (e.key === "Escape")     { close(); return; }
-    if (e.key === "ArrowLeft")  { e.preventDefault(); prev(); }
+    if (e.key === "Escape") { close(); return; }
+    if (e.key === "ArrowLeft") { e.preventDefault(); prev(); }
     if (e.key === "ArrowRight") { e.preventDefault(); next(); }
     if ((e.key === "s" || e.key === "S") && !lbActionShare.hidden) {
       e.preventDefault();

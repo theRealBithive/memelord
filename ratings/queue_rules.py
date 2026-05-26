@@ -1,8 +1,8 @@
-"""Single source of truth for what makes an image visible in /review/.
+"""Single source of truth for review and below-cutoff queue filters.
 
-The 1-6 dial on /config uses bucket_to_cutoff + pred_score_visible to hide
-low-confidence rows so the user only reviews things the model thinks they'll
-like.
+The 1-6 dial on /config maps to a predicted_score cutoff. Unrated images at
+or above the cutoff go to /review/; unrated images below it go to /below-cutoff/
+so nothing is silently dropped. User-rated scores <= 2 also stay in below-cutoff.
 """
 
 from django.db.models import Q
@@ -57,3 +57,34 @@ def visibility_q(sfw_bucket: int, nsfw_bucket: int, show_nsfw: bool) -> Q:
         return sfw_visible
     nsfw_visible = Q(is_nsfw=True) & pred_score_visible(bucket_to_cutoff(nsfw_bucket))
     return sfw_visible | nsfw_visible
+
+
+def user_dislike_q() -> Q:
+    """User-rated training negatives (trash 0 through score 2)."""
+    return Q(score__isnull=False, score__lte=2)
+
+
+def pred_score_below_cutoff(cutoff: float) -> Q:
+    """Unrated rows the classifier scored below the config dial.
+
+    Requires a concrete predicted_score — NULL means "not classified yet" and
+    those rows stay in review only, not below-cutoff.
+    """
+    return (
+        Q(score__isnull=True)
+        & Q(predicted_score__lt=cutoff)
+        & Q(predicted_score__isnull=False)
+    )
+
+
+def below_cutoff_q(sfw_bucket: int, nsfw_bucket: int, show_nsfw: bool) -> Q:
+    """Combined Below-tab Q: user dislikes plus unrated model rejects per side."""
+    sfw_reject = Q(is_nsfw=False) & pred_score_below_cutoff(
+        bucket_to_cutoff(sfw_bucket)
+    )
+    if not show_nsfw:
+        return user_dislike_q() | sfw_reject
+    nsfw_reject = Q(is_nsfw=True) & pred_score_below_cutoff(
+        bucket_to_cutoff(nsfw_bucket)
+    )
+    return user_dislike_q() | sfw_reject | nsfw_reject

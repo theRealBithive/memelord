@@ -59,7 +59,8 @@
       {% for image in images %}
       <a href="{% url 'review_corpus_image' image.content_hash %}"
          class="gallery-item"
-         data-score="{{ image.score }}"
+         {% if image.score is not None %}data-score="{{ image.score }}"{% endif %}
+         {% if image.predicted_score is not None %}data-predicted="{{ image.predicted_score }}"{% endif %}
          data-nsfw="{% if image.is_nsfw %}1{% else %}0{% endif %}"
          data-action-url="{% url 'gallery_action' image.content_hash %}"
          data-share-url="{% url 'share_image' image.content_hash %}"
@@ -68,7 +69,11 @@
          data-src="{% url 'serve_media' image.file_path %}">
         <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
         <div class="gallery-item-overlay">
+          {% if image.score is not None %}
           <span class="gallery-item-score gallery-item-score--{{ image.score }}">{{ image.score }}</span>
+          {% else %}
+          <span class="gallery-item-score gallery-item-score--unrated">unrated</span>
+          {% endif %}
         </div>
       </a>
       {% endfor %}
@@ -77,7 +82,7 @@
     <div class="done">
       <p class="done-title">No images</p>
       {% if is_below_cutoff %}
-      <p class="done-hint">No low-scored images to show.</p>
+      <p class="done-hint">Nothing below the model threshold or with a low score.</p>
       {% else %}
       <p class="done-hint">No scored images match these filters.</p>
       {% endif %}

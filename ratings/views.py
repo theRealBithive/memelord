@@ -19,6 +19,7 @@ from ratings.models import (
     Tag,
 )
 from ratings.queue_rules import (
+    below_cutoff_q,
     bucket_to_cutoff,
     get_review_thresholds,
     pred_score_visible,
@@ -177,7 +178,7 @@ def _counts(show_nsfw: bool = False) -> dict:
     qs = Image.objects.filter(is_purged=False)
     sfw_queue = Q(score__isnull=True, is_nsfw=False) & sfw_pred_visible
     nsfw_queue = Q(score__isnull=True, is_nsfw=True) & nsfw_pred_visible
-    below_q = Q(score__isnull=False, score__lte=2)
+    below_q = below_cutoff_q(sfw_bucket, nsfw_bucket, show_nsfw=True)
 
     if show_nsfw:
         return qs.aggregate(
@@ -300,7 +301,6 @@ def rate_nsfw_corpus(request, content_hash: str | None = None):
     if request.htmx:
         return render(request, "ratings/_review_htmx.html", ctx)
     return render(request, "ratings/review.html", ctx)
-
 
 
 @login_required
@@ -616,7 +616,18 @@ def set_vision_thresholds(request):
     ReviewThresholds.objects.update_or_create(
         pk=1, defaults={"sfw_threshold": sfw, "nsfw_threshold": nsfw}
     )
-    return render(request, "ratings/_vision_status.html", _vision_ctx())
+    show_nsfw = request.session.get("show_nsfw", False)
+    return render(
+        request,
+        "ratings/_vision_thresholds_htmx.html",
+        {
+            **_vision_ctx(),
+            **_counts(show_nsfw),
+            "show_nsfw": show_nsfw,
+            "mode": "config",
+            **_training_ctx(request),
+        },
+    )
 
 
 def _schedule_ctx() -> dict:
@@ -1104,7 +1115,9 @@ def toggle_nsfw(request, content_hash: str):
         target = neighbor if (in_queue and not image.is_nsfw) else content_hash
         ctx = _review_nsfw_ctx(target, show_nsfw, request)
     else:
-        queue_hashes = list(_review_qs(show_nsfw).values_list("content_hash", flat=True))
+        queue_hashes = list(
+            _review_qs(show_nsfw).values_list("content_hash", flat=True)
+        )
         in_queue = content_hash in queue_hashes
         neighbor = _neighbor_hash(queue_hashes, content_hash)
         image.is_nsfw = not image.is_nsfw
@@ -1123,11 +1136,11 @@ def toggle_nsfw(request, content_hash: str):
 @login_required
 def below_cutoff(request):
     """
-    Low-scored image grid — shows images with score ≤ 2.
+    Safety-net grid for images the model rejected or the user scored ≤ 2.
 
-    Replaces the old void grid. Includes trash (score 0) alongside the 1–2 band,
-    so every below-cutoff negative is in one place; the user can re-score upward
-    or purge them from the gallery lightbox.
+    Unrated rows with predicted_score below the /config/ dial land here instead
+    of vanishing from review. User-rated trash (0) and scores 1–2 stay here too.
+    Re-score upward or purge from the gallery lightbox.
     """
     show_nsfw = request.session.get("show_nsfw", False)
     sort = request.GET.get("sort", "newest")
@@ -1135,7 +1148,10 @@ def below_cutoff(request):
         sort = "newest"
     active_tag = request.GET.get("tag", "").strip().lower()
 
-    qs = Image.objects.filter(score__isnull=False, score__lte=2, is_purged=False)
+    sfw_bucket, nsfw_bucket = get_review_thresholds()
+    qs = Image.objects.filter(is_purged=False).filter(
+        below_cutoff_q(sfw_bucket, nsfw_bucket, show_nsfw)
+    )
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
     if active_tag:
@@ -1193,7 +1209,9 @@ def gallery(request):
 
     active_tag = request.GET.get("tag", "").strip().lower()
 
-    qs = Image.objects.filter(score__isnull=False, score__gte=min_score, is_purged=False)
+    qs = Image.objects.filter(
+        score__isnull=False, score__gte=min_score, is_purged=False
+    )
     if not show_nsfw:
         qs = qs.filter(is_nsfw=False)
     if active_tag:
@@ -1226,7 +1244,6 @@ def gallery(request):
             "active_tag": active_tag,
         },
     )
-
 
 
 @login_required
@@ -1367,7 +1384,9 @@ def share_image(request, content_hash):
             sent.append(ch.name)
         except Exception as exc:
             errors.append(f"{ch.name}: {exc}")
-    return render(request, "ratings/_share_toast.html", {"sent": sent, "errors": errors})
+    return render(
+        request, "ratings/_share_toast.html", {"sent": sent, "errors": errors}
+    )
 
 
 def _channel_list_ctx() -> dict:
