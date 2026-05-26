@@ -1101,6 +1101,7 @@ kbd {
   font-weight: 700;
   line-height: 1;
 }
+.gallery-item-score--0 { color: #ef4444; }
 .gallery-item-score--1 { color: #71717a; }
 .gallery-item-score--2 { color: #60a5fa; }
 .gallery-item-score--3 { color: #4ade80; }
@@ -1213,6 +1214,7 @@ kbd {
   font-size: 0.8rem;
   font-weight: 700;
 }
+.lb-score--0 { color: #ef4444; }
 .lb-score--1 { color: #71717a; }
 .lb-score--2 { color: #60a5fa; }
 .lb-score--3 { color: #4ade80; }
@@ -1283,10 +1285,9 @@ kbd {
   border-color: var(--lasc);
 }
 
-.lb-action-fav,
 .lb-action-nsfw,
 .lb-action-share,
-.lb-action-trash {
+.lb-action-purge {
   padding: 0.3rem 0.5rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1298,9 +1299,6 @@ kbd {
   -webkit-tap-highlight-color: transparent;
 }
 
-.lb-action-fav:hover { color: #facc15; border-color: #facc15; }
-.lb-action-fav--on   { color: #facc15; border-color: #facc15; }
-
 .lb-action-nsfw:hover  { color: #f472b6; border-color: #f472b6; }
 .lb-action-nsfw--on    { color: #f472b6; border-color: #f472b6; }
 
@@ -1308,7 +1306,7 @@ kbd {
 .lb-action-share--sending      { opacity: 0.5; }
 .lb-action-share--sent         { color: #4ade80; border-color: #4ade80; }
 
-.lb-action-trash:hover { color: var(--red); border-color: var(--red); }
+.lb-action-purge:hover { color: var(--red); border-color: var(--red); }
 
 /* ── Tags ── */
 .tag-pill {
@@ -1728,30 +1726,6 @@ kbd {
 }
 
 /* ── Void lightbox action buttons ─────────────────────────────────────── */
-
-.lb-action-rescue,
-.lb-action-rescue-fav,
-.lb-action-purge {
-  flex: 1;
-  padding: 0.4rem 0.5rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 100ms, color 100ms, border-color 100ms;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.lb-action-rescue     { border-color: #4ade80; color: #4ade80; }
-.lb-action-rescue:hover { background: rgba(74,222,128,0.12); }
-
-.lb-action-rescue-fav     { border-color: #facc15; color: #facc15; }
-.lb-action-rescue-fav:hover { background: rgba(250,204,21,0.12); }
-
-.lb-action-purge:hover { color: var(--red); border-color: var(--red); }
 
 /* ── Share bottom sheet ─────────────────────────────────────────────────── */
 .share-sheet {

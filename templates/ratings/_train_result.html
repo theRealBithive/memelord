@@ -1,7 +1,7 @@
 <div id="train-result" class="train-result {% if ok %}train-ok{% else %}train-err{% endif %}">
 {% if ok %}
   <span class="train-icon">✓</span>
-  <span>Trained on {{ corpus_n }} scored + {{ below_cutoff_n }} below-cutoff images. Weights saved.</span>
+  <span>Trained on {{ liked_n }} liked + {{ below_cutoff_n }} below-cutoff images. Weights saved.</span>
 {% else %}
   <span class="train-icon">✕</span>
   <span>{{ error }}</span>

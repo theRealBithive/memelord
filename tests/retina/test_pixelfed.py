@@ -52,6 +52,44 @@ def test_iter_image_items_returns_items_and_cursor() -> None:
     assert cursor == "42"
 
 
+def test_resume_pages_forward_through_multiple_pages() -> None:
+    """Resume must walk forward with min_id and collect every new post, not just
+    the newest page, when more than one page accumulated since the last cursor."""
+    page_size = _mastoapi._PAGE_SIZE
+
+    def _statuses(id_range):
+        return [
+            {
+                "id": str(i),
+                "url": f"https://pf.example/p/{i}",
+                "media_attachments": [
+                    {"type": "image", "url": f"https://pf.example/img{i}.jpg"}
+                ],
+            }
+            for i in id_range
+        ]
+
+    full_page = _statuses(range(101, 101 + page_size))  # full → keep paging
+    tail_page = _statuses(range(101 + page_size, 101 + page_size + 3))  # short → stop
+
+    with patch.object(_mastoapi, "_lookup_account_id", return_value="99"):
+        with patch.object(
+            _mastoapi, "_fetch_statuses_page", side_effect=[full_page, tail_page]
+        ) as fetch:
+            with patch.object(_mastoapi, "time") as mock_time:
+                mock_time.sleep = lambda _: None
+                items, cursor = pixelfed.iter_image_items(
+                    "@art@pixelfed.social", since_id="100"
+                )
+
+    # Every post from both pages collected; cursor = highest id seen.
+    assert len(items) == page_size + 3
+    assert cursor == str(101 + page_size + 2)
+    # Page 0 starts at the stored cursor; page 1 advances forward via min_id.
+    assert fetch.call_args_list[0].kwargs["min_id"] == "100"
+    assert fetch.call_args_list[1].kwargs["min_id"] == str(101 + page_size - 1)
+
+
 def test_iter_image_items_returns_empty_on_bad_handle() -> None:
     """iter_image_items returns ([], None) for a malformed account handle."""
     items, cursor = pixelfed.iter_image_items("not-a-valid-handle")

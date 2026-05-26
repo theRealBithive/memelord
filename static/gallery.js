@@ -23,7 +23,7 @@
         <button class="lb-action-score lb-action-score--6" data-score="6">6</button>
         <button class="lb-action-nsfw" aria-label="Toggle NSFW">🔞</button>
         <button class="lb-action-share" aria-label="Share" hidden>↗</button>
-        <button class="lb-action-trash" aria-label="Trash">🗑</button>
+        <button class="lb-action-purge" aria-label="Purge">⊘</button>
       </div>
     </div>
   `;
@@ -38,7 +38,7 @@
   const lbTags         = lb.querySelector(".lb-tags");
   const lbActionNsfw   = lb.querySelector(".lb-action-nsfw");
   const lbActionShare  = lb.querySelector(".lb-action-share");
-  const lbActionTrash  = lb.querySelector(".lb-action-trash");
+  const lbActionPurge  = lb.querySelector(".lb-action-purge");
   const lbActionScores = Array.from(lb.querySelectorAll(".lb-action-score"));
   const grid           = document.querySelector(".gallery-grid");
   const acUrl         = grid?.dataset.acUrl || "";
@@ -317,10 +317,16 @@
     }
   });
 
-  lbActionTrash.addEventListener("click", (e) => {
+  lbActionPurge.addEventListener("click", (e) => {
     e.stopPropagation();
+    // Purge is an irreversible hard-delete (file off disk, blocked from
+    // re-download) — confirm first. This is NOT the same as review's "trash"
+    // (score 0), which keeps the file as a strong negative example.
+    if (!confirm("Permanently delete this image? It will never be downloaded again.")) {
+      return;
+    }
     const item = items[current];
-    postAction(item.dataset.actionUrl, { action: "trash" }).then((data) => {
+    postAction(item.dataset.actionUrl, { action: "purge" }).then((data) => {
       if (data.deleted) {
         const removedIdx = current;
         items.splice(removedIdx, 1);

@@ -60,7 +60,6 @@
       <a href="{% url 'review_corpus_image' image.content_hash %}"
          class="gallery-item"
          data-score="{{ image.score }}"
-         data-fav="0"
          data-nsfw="{% if image.is_nsfw %}1{% else %}0{% endif %}"
          data-action-url="{% url 'gallery_action' image.content_hash %}"
          data-share-url="{% url 'share_image' image.content_hash %}"

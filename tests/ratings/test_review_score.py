@@ -184,6 +184,25 @@ class BelowCutoffRescoreTests(TestCase):
         after = self.client.get(reverse("below_cutoff")).content.decode()
         self.assertNotIn(h, after)
 
+    def test_purge_hard_deletes_and_marks_purged(self) -> None:
+        h = self._scored(1)
+        response = self.client.post(
+            reverse("gallery_action", args=[h]), {"action": "purge"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json().get("deleted"))
+        self.assertTrue(Image.objects.get(content_hash=h).is_purged)
+
+    def test_legacy_trash_action_does_not_hard_delete(self) -> None:
+        """The hard-delete action is 'purge' now; a stray 'trash' must not delete."""
+        h = self._scored(1)
+        response = self.client.post(
+            reverse("gallery_action", args=[h]), {"action": "trash"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("deleted", response.json())
+        self.assertFalse(Image.objects.get(content_hash=h).is_purged)
+
     def test_rescore_requires_post(self) -> None:
         h = self._scored(1)
         response = self.client.get(reverse("gallery_action", args=[h]))

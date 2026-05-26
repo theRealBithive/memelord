@@ -563,7 +563,10 @@ def train_status(request, task_id: str):
         {
             "ok": result.get("ok", False),
             "error": result.get("error", "Unknown error."),
-            "corpus_n": Image.objects.filter(score__isnull=False).count(),
+            # Disjoint counts matching the trainer's split: positives (score>=3)
+            # vs below-cutoff negatives (score<=2). Together they're the full
+            # training set, so the "+" in the message doesn't double-count.
+            "liked_n": Image.objects.filter(score__gte=3).count(),
             "below_cutoff_n": Image.objects.filter(score__lte=2).count(),
         },
     )
@@ -1260,17 +1263,18 @@ def tag_delete(request, pk: int):
 @require_POST
 def gallery_action(request, content_hash: str):
     """
-    Handle inline score/fav/trash actions from the gallery grid.
+    Handle inline score/nsfw/purge actions from the gallery grid.
 
     Returns JSON so the gallery JS can update the card in-place without a full
-    page reload. Trash returns {"deleted": True} as a signal to remove the card
-    from the DOM.
+    page reload. Purge returns {"deleted": True} as a signal to remove the card
+    from the DOM. Purge is a hard-delete — distinct from review's score-0
+    "trash", which keeps the file as a strong negative training example.
     """
     action = request.POST.get("action", "")
     image = get_object_or_404(Image, content_hash=content_hash)
     now = timezone.now()
 
-    if action == "trash":
+    if action == "purge":
         _purge_image(image)
         return JsonResponse({"deleted": True})
 
