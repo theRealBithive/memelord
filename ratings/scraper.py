@@ -20,9 +20,9 @@ _SOURCE_MAP = [
 ]
 
 # Scrapers that share the same iter_image_urls / download_images(urls, dir, name, skip_dirs)
-# interface. Pixelfed and Mastodon have different signatures so they stay explicit below.
+# interface. 4chan, Pixelfed and Mastodon are cursor-based (incremental) and have
+# different signatures, so they stay explicit below.
 _SIMPLE_SCRAPERS = [
-    (fourchan, "boards", "4chan/{}"),
     (imgur, "topics", "imgur/{}"),
     (tumblr, "blogs", "tumblr/{}"),
 ]
@@ -45,6 +45,20 @@ def _load_config(config_path: Path) -> dict:
         return {}
     with open(config_path, "rb") as f:
         return tomllib.load(f)
+
+
+def _cursor_int(cursor: str | None) -> int | None:
+    """Parse a Source.cursor (stored as text) into a 4chan last_modified stamp.
+
+    Returns None on a missing or non-numeric cursor so the board falls back to a
+    full scrape rather than crashing on a value written by some other source type.
+    """
+    if not cursor:
+        return None
+    try:
+        return int(cursor)
+    except (TypeError, ValueError):
+        return None
 
 
 def _warn_legacy_pixelfed(cfg: dict) -> None:
@@ -464,6 +478,30 @@ def run(
             counts[label] = _process_downloads(
                 downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
             )
+
+    # 4chan is incremental: each board's Source.cursor holds the last_modified
+    # high-water mark so we only re-fetch threads touched since the last scrape.
+    # max_threads is an optional global safety valve (see fourchan.iter_image_urls).
+    fourchan_max_threads = cfg.get("4chan", {}).get("max_threads")
+    for board in sources["boards"]:
+        label = f"4chan/{board}"
+        logger.info("Scraping {}", label)
+        source_obj = Source.objects.filter(
+            type=Source.FOURCHAN, name=board
+        ).first()
+        since_modified = _cursor_int(source_obj.cursor if source_obj else None)
+        urls, new_cursor = fourchan.iter_image_urls(
+            board, since_modified=since_modified, max_threads=fourchan_max_threads
+        )
+        downloaded = fourchan.download_images(
+            urls, images_dir, board, skip_dirs=skip_dirs
+        )
+        counts[label] = _process_downloads(
+            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
+        )
+        if new_cursor is not None and source_obj:
+            source_obj.cursor = str(new_cursor)
+            source_obj.save(update_fields=["cursor"])
 
     pixelfed_token = cfg.get("pixelfed", {}).get("access_token", "").strip() or None
     for account in sources["pixelfed_accounts"]:

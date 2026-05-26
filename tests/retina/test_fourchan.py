@@ -63,7 +63,7 @@ def test_get_thread_list_flattens_pages() -> None:
 
 def test_iter_image_urls_fetches_full_threads() -> None:
     """iter_image_urls expands every live thread into its full post list."""
-    thread_list = [{"no": 1}, {"no": 2}]
+    thread_list = [{"no": 1, "last_modified": 10}, {"no": 2, "last_modified": 20}]
     threads = {
         1: {"posts": [{"tim": 100, "ext": ".jpg"}, {"tim": 101, "ext": ".png"}]},
         2: {
@@ -77,18 +77,20 @@ def test_iter_image_urls_fetches_full_threads() -> None:
         patch.object(fourchan, "get_thread_list", return_value=thread_list),
         patch.object(fourchan, "get_thread", side_effect=lambda board, no: threads[no]),
     ):
-        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+        urls, cursor = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
     # Every post is read, not just the OP + tail; filedeleted is skipped.
     assert urls == [
         "https://i.4cdn.org/wg/100.jpg",
         "https://i.4cdn.org/wg/101.png",
         "https://i.4cdn.org/wg/103.gif",
     ]
+    # Cursor advances to the newest fully-fetched thread.
+    assert cursor == 20
 
 
 def test_iter_image_urls_deduplicates_across_threads() -> None:
     """The same image reposted in two threads appears only once."""
-    thread_list = [{"no": 1}, {"no": 2}]
+    thread_list = [{"no": 1, "last_modified": 10}, {"no": 2, "last_modified": 20}]
     threads = {
         1: {"posts": [{"tim": 42, "ext": ".jpg"}]},
         2: {"posts": [{"tim": 42, "ext": ".jpg"}]},
@@ -97,13 +99,37 @@ def test_iter_image_urls_deduplicates_across_threads() -> None:
         patch.object(fourchan, "get_thread_list", return_value=thread_list),
         patch.object(fourchan, "get_thread", side_effect=lambda board, no: threads[no]),
     ):
-        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+        urls, _ = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
     assert urls == ["https://i.4cdn.org/wg/42.jpg"]
+
+
+def test_iter_image_urls_skips_unchanged_threads() -> None:
+    """Threads with last_modified <= since_modified are not re-fetched."""
+    thread_list = [
+        {"no": 1, "last_modified": 100},  # unchanged since cursor
+        {"no": 2, "last_modified": 200},  # changed
+    ]
+    fetched: list[int] = []
+
+    def fake_get_thread(board: str, no: int) -> dict:
+        fetched.append(no)
+        return {"posts": [{"tim": no, "ext": ".jpg"}]}
+
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", side_effect=fake_get_thread),
+    ):
+        urls, cursor = fourchan.iter_image_urls(
+            board="wg", since_modified=100, rate_limit_sec=0
+        )
+    assert fetched == [2]  # only the changed thread hit the network
+    assert urls == ["https://i.4cdn.org/wg/2.jpg"]
+    assert cursor == 200
 
 
 def test_iter_image_urls_skips_failed_thread() -> None:
     """A thread that 404s (pruned mid-scan) is skipped without aborting."""
-    thread_list = [{"no": 1}, {"no": 2}]
+    thread_list = [{"no": 1, "last_modified": 10}, {"no": 2, "last_modified": 20}]
 
     def fake_get_thread(board: str, no: int) -> dict:
         if no == 1:
@@ -114,7 +140,7 @@ def test_iter_image_urls_skips_failed_thread() -> None:
         patch.object(fourchan, "get_thread_list", return_value=thread_list),
         patch.object(fourchan, "get_thread", side_effect=fake_get_thread),
     ):
-        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+        urls, _ = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
     assert urls == ["https://i.4cdn.org/wg/50.jpg"]
 
 
@@ -125,7 +151,7 @@ def test_iter_image_urls_skips_thread_read_timeout() -> None:
     OSError and is NOT wrapped in URLError — the original (HTTPError, URLError)
     catch would have let it abort the whole scrape.
     """
-    thread_list = [{"no": 1}, {"no": 2}]
+    thread_list = [{"no": 1, "last_modified": 10}, {"no": 2, "last_modified": 20}]
 
     def fake_get_thread(board: str, no: int) -> dict:
         if no == 1:
@@ -136,20 +162,80 @@ def test_iter_image_urls_skips_thread_read_timeout() -> None:
         patch.object(fourchan, "get_thread_list", return_value=thread_list),
         patch.object(fourchan, "get_thread", side_effect=fake_get_thread),
     ):
-        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+        urls, _ = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
     assert urls == ["https://i.4cdn.org/wg/50.jpg"]
 
 
-def test_iter_image_urls_thread_list_timeout_returns_empty() -> None:
-    """A read timeout fetching threads.json yields [] instead of propagating."""
+def test_iter_image_urls_cursor_freezes_on_mid_range_error() -> None:
+    """A failed fetch between two successes freezes the cursor at the last success.
+
+    Watermark semantics: advancing the cursor to max(successful last_modified)
+    would jump past the failed thread (lm=100), permanently skipping it next run.
+    Freezing at the pre-error success (lm=80) makes both the failed thread and
+    the later success eligible for refetch — wasteful but never lossy.
+    """
+    thread_list = [
+        {"no": 1, "last_modified": 80},  # ok
+        {"no": 2, "last_modified": 100},  # errors
+        {"no": 3, "last_modified": 120},  # ok, but after the error
+    ]
+
+    def fake_get_thread(board: str, no: int) -> dict:
+        if no == 2:
+            raise TimeoutError("timed out")
+        return {"posts": [{"tim": no, "ext": ".jpg"}]}
+
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", side_effect=fake_get_thread),
+    ):
+        urls, cursor = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+    # We still capture what we can from threads 1 and 3.
+    assert urls == ["https://i.4cdn.org/wg/1.jpg", "https://i.4cdn.org/wg/3.jpg"]
+    # Cursor frozen at the last success before the error, not at 120.
+    assert cursor == 80
+
+
+def test_iter_image_urls_max_threads_takes_oldest_first() -> None:
+    """A max_threads cap drains the oldest changed threads first across runs."""
+    thread_list = [
+        {"no": 1, "last_modified": 30},
+        {"no": 2, "last_modified": 10},
+        {"no": 3, "last_modified": 20},
+    ]
+    fetched: list[int] = []
+
+    def fake_get_thread(board: str, no: int) -> dict:
+        fetched.append(no)
+        return {"posts": [{"tim": no, "ext": ".jpg"}]}
+
+    with (
+        patch.object(fourchan, "get_thread_list", return_value=thread_list),
+        patch.object(fourchan, "get_thread", side_effect=fake_get_thread),
+    ):
+        urls, cursor = fourchan.iter_image_urls(
+            board="wg", max_threads=2, rate_limit_sec=0
+        )
+    # Sorted ascending by last_modified, capped to 2 → threads 2 (lm10), 3 (lm20).
+    assert fetched == [2, 3]
+    assert urls == ["https://i.4cdn.org/wg/2.jpg", "https://i.4cdn.org/wg/3.jpg"]
+    # Cursor stops at the newest fetched; thread 1 (lm30) is left for next run.
+    assert cursor == 20
+
+
+def test_iter_image_urls_thread_list_failure_preserves_cursor() -> None:
+    """A thread-list fetch failure yields [] and returns the cursor unchanged."""
     with patch.object(fourchan, "get_thread_list", side_effect=TimeoutError("nope")):
-        urls = fourchan.iter_image_urls(board="wg", rate_limit_sec=0)
+        urls, cursor = fourchan.iter_image_urls(
+            board="wg", since_modified=500, rate_limit_sec=0
+        )
     assert urls == []
+    assert cursor == 500
 
 
 def test_iter_image_urls_rate_limits_every_request() -> None:
     """One sleep precedes the thread list and one precedes each thread fetch."""
-    thread_list = [{"no": 1}, {"no": 2}]
+    thread_list = [{"no": 1, "last_modified": 10}, {"no": 2, "last_modified": 20}]
     with (
         patch.object(fourchan, "get_thread_list", return_value=thread_list),
         patch.object(fourchan, "get_thread", return_value={"posts": []}),
