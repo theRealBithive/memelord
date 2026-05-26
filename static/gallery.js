@@ -51,6 +51,14 @@
 
   const items = Array.from(document.querySelectorAll(".gallery-item"));
   let current = 0;
+  let shareAbort = null;
+
+  function resetShareButton() {
+    shareAbort?.abort();
+    shareAbort = null;
+    lbActionShare.classList.remove("lb-action-share--sending", "lb-action-share--sent");
+    lbActionShare.disabled = false;
+  }
 
   function getCsrf() {
     const val = `; ${document.cookie}`;
@@ -218,6 +226,7 @@
   }
 
   function show(idx) {
+    if (idx !== current) resetShareButton();
     current = idx;
     const item = items[idx];
     const score = item.dataset.score;
@@ -247,6 +256,8 @@
   }
 
   function close() {
+    resetShareButton();
+    if (window.ShareSheet) window.ShareSheet.close();
     if (window.TagModal) window.TagModal.close();
     lb.classList.remove("lb-open");
     lbImg.src = "";
@@ -311,6 +322,8 @@
       // Single channel: fire immediately, no picker.
       const params = new URLSearchParams();
       params.append("channels", shareChannels[0].pk);
+      const ac = new AbortController();
+      shareAbort = ac;
       lbActionShare.disabled = true;
       lbActionShare.classList.add("lb-action-share--sending");
       fetch(shareUrl, {
@@ -320,10 +333,18 @@
           "X-CSRFToken": getCsrf(),
         },
         body: params,
-      }).then(markSent).catch(() => {
-        lbActionShare.classList.remove("lb-action-share--sending");
-        lbActionShare.disabled = false;
-      });
+        signal: ac.signal,
+      })
+        .then(() => {
+          shareAbort = null;
+          markSent();
+        })
+        .catch((err) => {
+          if (err.name === "AbortError") return;
+          lbActionShare.classList.remove("lb-action-share--sending");
+          lbActionShare.disabled = false;
+          shareAbort = null;
+        });
     } else {
       // Multiple channels: open picker sheet.
       window.ShareSheet?.open({

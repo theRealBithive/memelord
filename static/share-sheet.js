@@ -11,7 +11,23 @@
 (function () {
   "use strict";
 
-  let sheet, backdrop, channelList, sendBtn, triggerEl;
+  let sheet, backdrop, channelList, sendBtn, triggerEl, inFlight;
+
+  function resetSendBtn() {
+    if (!sendBtn) return;
+    sendBtn.disabled = false;
+    sendBtn.textContent = "Send";
+  }
+
+  function hideSheet() {
+    if (!sheet || sheet.hidden) return;
+    sheet.hidden = true;
+    document.body.classList.remove("share-sheet--open");
+    if (triggerEl) {
+      triggerEl.focus();
+      triggerEl = null;
+    }
+  }
 
   function getCsrf() {
     const v = `; ${document.cookie}`;
@@ -67,10 +83,12 @@
   }
 
   function close() {
-    if (!sheet || sheet.hidden) return;
-    sheet.hidden = true;
-    document.body.classList.remove("share-sheet--open");
-    if (triggerEl) { triggerEl.focus(); triggerEl = null; }
+    if (inFlight) {
+      inFlight.abort();
+      inFlight = null;
+    }
+    resetSendBtn();
+    hideSheet();
   }
 
   function open({ channels, shareUrl, onResult }) {
@@ -99,6 +117,7 @@
     const newSend = sendBtn.cloneNode(true);
     sendBtn.replaceWith(newSend);
     sendBtn = newSend;
+    resetSendBtn();
 
     sendBtn.addEventListener("click", () => {
       const selected = Array.from(
@@ -112,6 +131,9 @@
       const params = new URLSearchParams();
       selected.forEach((pk) => params.append("channels", pk));
 
+      const ac = new AbortController();
+      inFlight = ac;
+
       fetch(shareUrl, {
         method: "POST",
         headers: {
@@ -119,15 +141,21 @@
           "X-CSRFToken": getCsrf(),
         },
         body: params,
+        signal: ac.signal,
       })
         .then((r) => r.text())
         .then((html) => {
-          close();
+          inFlight = null;
+          resetSendBtn();
+          hideSheet();
           if (onResult) onResult(html);
         })
-        .catch(() => {
-          sendBtn.disabled = false;
-          sendBtn.textContent = "Send";
+        .catch((err) => {
+          if (err.name === "AbortError") return;
+          resetSendBtn();
+        })
+        .finally(() => {
+          if (inFlight === ac) inFlight = null;
         });
     });
 

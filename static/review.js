@@ -10,6 +10,11 @@
     if (el) { el.click(); el.blur(); }
   }
 
+  // Close an in-flight share when the review card swaps (prev/next/score).
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    if (e.detail.target?.id === "review-card") window.ShareSheet?.close();
+  });
+
   // Open the share sheet when a multi-channel picker button is clicked.
   // Delegated on document because the button lives inside #review-card (HTMX-swapped).
   document.addEventListener("click", (e) => {
