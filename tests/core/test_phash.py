@@ -30,7 +30,7 @@ def test_is_phash_duplicate_within_threshold(tmp_path: Path) -> None:
     img.save(near)
     h1 = phash.compute_phash(base)
     h2 = phash.compute_phash(near)
-    assert phash.is_phash_duplicate(h2, [h1], max_distance=12)
+    assert phash.is_phash_duplicate(h2, [int(h1, 16)], max_distance=12)
 
 
 def test_is_phash_duplicate_far_apart(tmp_path: Path) -> None:
@@ -41,4 +41,11 @@ def test_is_phash_duplicate_far_apart(tmp_path: Path) -> None:
     Image.new("RGB", (64, 64), color=(255, 255, 255)).save(b)
     h1 = phash.compute_phash(a)
     h2 = phash.compute_phash(b)
-    assert not phash.is_phash_duplicate(h2, [h1], max_distance=3)
+    assert not phash.is_phash_duplicate(h2, [int(h1, 16)], max_distance=3)
+
+
+def test_all_zero_phash_is_a_valid_comparison_target() -> None:
+    """A solid/near-uniform image hashes to int 0, which is falsy. The int list
+    must not be truthiness-filtered, or such fingerprints would silently stop
+    matching (PERF-8 regression guard)."""
+    assert phash.is_phash_duplicate("0000000000000000", [0], max_distance=0)

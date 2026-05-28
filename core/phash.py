@@ -68,14 +68,22 @@ def hamming_distance(a: str, b: str) -> int:
     return (ai ^ bi).bit_count()
 
 
-def is_phash_duplicate(phash: str, phashes: list[str], max_distance: int) -> bool:
+def is_phash_duplicate(phash: str, phash_ints: list[int], max_distance: int) -> bool:
     """
     Linear scan is acceptable because this only runs on images that already
     passed SHA-256 dedup. For typical collection sizes the scan is fast enough
     that a BK-tree would add complexity without measurable gain.
+
+    `phash_ints` is pre-parsed to integers once when the DedupIndex loads
+    (PERF-8): the index list is rescanned for every candidate, so parsing each
+    stored hex string per pair made hex parsing O(N²) per scrape. Here only the
+    candidate is parsed (once), then XOR + bit_count() against the cached ints.
+    No truthiness filter on the list: an all-zero hash (a solid/near-uniform
+    image) is a legitimate stored fingerprint, and int 0 is falsy — filtering it
+    would silently drop it as a comparison target. NULL/empty phashes are
+    excluded upstream, on the string side, before they ever become ints.
     """
-    if not phash or not phashes:
+    if not phash or not phash_ints:
         return False
-    return any(
-        hamming_distance(phash, other) <= max_distance for other in phashes if other
-    )
+    value = int(phash, 16)
+    return any((value ^ other).bit_count() <= max_distance for other in phash_ints)
