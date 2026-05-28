@@ -1026,7 +1026,11 @@ def _browse_ctx(
         base.update(extra)
 
     if content_hash and content_hash not in set(all_hashes):
-        image = Image.objects.filter(content_hash=content_hash).first()
+        image = (
+            Image.objects.filter(content_hash=content_hash)
+            .prefetch_related("tags")
+            .first()
+        )
         if image is not None:
             ctx: dict = {
                 "image": image,
@@ -1052,7 +1056,9 @@ def _browse_ctx(
     hash_index = {h: i for i, h in enumerate(all_hashes)}
     idx = hash_index.get(content_hash, 0) if content_hash else 0
 
-    image = Image.objects.get(content_hash=all_hashes[idx])
+    image = (
+        Image.objects.prefetch_related("tags").get(content_hash=all_hashes[idx])
+    )
     ctx = {
         "image": image,
         "prev_hash": all_hashes[idx - 1] if idx > 0 else None,
