@@ -38,6 +38,9 @@ Thumbs.db
 .env.local
 *.local
 
+# bug-hunt skill report artifact
+bug-hunt-report.md
+
 # Project: data, output, weights, DB
 data/corpus/*
 !data/corpus/.gitkeep

@@ -84,6 +84,22 @@ class ScoreCorpusTests(TestCase):
         self.assertIn(a, content)
         self.assertNotIn(b, content)
 
+    def test_score_after_initial_review_advances(self) -> None:
+        """
+        After a GET stamps queue_seen_at, scoring the seen image must still
+        advance to its neighbour — this exercises the non-NULL branch of the
+        windowed prev/next lookup, which the other tests bypass by POSTing
+        directly without a prior GET.
+        """
+        a = self._unscored(age_hours=3)
+        b = self._unscored(age_hours=2)
+        # GET sets queue_seen_at on the head image (a).
+        self.client.get(reverse("review_corpus"))
+        response = self.client.post(reverse("score_corpus", args=[a]), {"score": "4"})
+        content = response.content.decode()
+        self.assertIn(b, content)
+        self.assertNotIn(a, content)
+
     def test_score_only_image_shows_empty_queue(self) -> None:
         h = self._unscored(age_hours=1)
         response = self.client.post(reverse("score_corpus", args=[h]), {"score": "2"})

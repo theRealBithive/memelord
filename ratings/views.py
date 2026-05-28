@@ -359,23 +359,62 @@ def _purge_image(image: Image) -> None:
     _invalidate_similar_index()
 
 
-def _neighbor_hash(all_hashes: list[str], content_hash: str) -> str | None:
-    """Next hash in list, or previous if last, or None if single item.
-
-    When content_hash isn't in the queue at all (another tab rated it, or it
-    was filtered out between the GET and POST), fall back to the head of the
-    queue rather than treating the missing item as if it were at index 0 — the
-    previous behaviour silently teleported the user one position in (returning
-    `all_hashes[1]`) instead of landing them somewhere predictable.
+def _queue_position_filters(image: Image) -> tuple[Q, Q]:
     """
-    if not all_hashes:
-        return None
-    idx = {h: i for i, h in enumerate(all_hashes)}.get(content_hash)
-    if idx is None:
-        return all_hashes[0]
-    if idx < len(all_hashes) - 1:
-        return all_hashes[idx + 1]
-    return all_hashes[idx - 1] if idx > 0 else None
+    Build (prev_filter, next_filter) Q-pairs that split a review queue around
+    `image`, matching the queue's (queue_seen_at ASC NULLS FIRST, downloaded_at
+    ASC) ordering.
+
+    Walking the compound key explicitly is what lets callers do windowed
+    prev/next lookups instead of materialising the entire queue's hashes —
+    the queue grows with every scrape, and the old `list(qs.values_list(...))`
+    pass was an O(N) DB scan plus transport on every navigation click.
+    """
+    qsa, da = image.queue_seen_at, image.downloaded_at
+    if qsa is None:
+        # image sits inside the leading NULL block.
+        prev_filter = Q(queue_seen_at__isnull=True, downloaded_at__lt=da)
+        next_filter = Q(queue_seen_at__isnull=True, downloaded_at__gt=da) | Q(
+            queue_seen_at__isnull=False
+        )
+    else:
+        # image sits strictly after the NULL block.
+        prev_filter = (
+            Q(queue_seen_at__isnull=True)
+            | Q(queue_seen_at__lt=qsa)
+            | Q(queue_seen_at=qsa, downloaded_at__lt=da)
+        )
+        next_filter = Q(queue_seen_at__gt=qsa) | Q(
+            queue_seen_at=qsa, downloaded_at__gt=da
+        )
+    return prev_filter, next_filter
+
+
+def _queue_neighbor_hash(qs, image: Image) -> str | None:
+    """
+    Next content_hash after `image` in queue order, falling back to the prior
+    one if image is the tail, or None for an empty queue.
+
+    Used by score/purge/toggle for rate-and-advance navigation; callers should
+    only invoke this once they've confirmed `image` belongs to `qs` (a one-row
+    PK `.exists()` check), otherwise an out-of-queue caller will navigate
+    relative to its stale queue position instead of staying put.
+    """
+    prev_filter, next_filter = _queue_position_filters(image)
+    next_hash = (
+        qs.filter(next_filter).values_list("content_hash", flat=True).first()
+    )
+    if next_hash is not None:
+        return next_hash
+    # SQLite defaults DESC to NULLS LAST, which is the exact reverse of the
+    # queue's NULLS-FIRST ASC ordering — so `.first()` here is the immediate
+    # predecessor regardless of whether the predecessor has a NULL qsa.
+    return (
+        qs.filter(prev_filter)
+        .order_by("-queue_seen_at", "-downloaded_at")
+        .values_list("content_hash", flat=True)
+        .first()
+    )
 
 
 @login_required
@@ -1025,61 +1064,88 @@ def _browse_ctx(
     Build browse context for a single image, with prev/next navigation when the
     image is part of the queue.
 
-    The full hash list is materialised once so prev/next positions are computed
-    from the same snapshot. Fetching prev/next lazily with separate queries
-    risks a race condition where an image is rated (and removed from the queue)
-    between calls, shifting the navigation offsets.
+    Prev/next/position/total are resolved with windowed lookups against the
+    queue's natural (queue_seen_at, downloaded_at) ordering (see
+    `_queue_position_filters`) instead of pulling every queued content_hash
+    into Python on each request. Two `.first()`s and two `.count()`s scale
+    with the queue much better than the old materialise-and-index pass.
+
+    Navigation stays correct under concurrent edits: if a sibling is rated or
+    purged between requests, the windowed query simply finds whichever real
+    neighbour exists at query time. The stronger "consistent snapshot" claim
+    of the old code only ever held within a single request anyway.
 
     A requested content_hash that is NOT in the queue (e.g. an already-scored
     image opened from the gallery for re-review) is still shown — standalone,
     with no queue position and prev/next disabled — instead of silently
     falling back to the head of the queue and showing the wrong picture.
     """
-    all_hashes = list(qs.values_list("content_hash", flat=True))
     base = {"show_nsfw": show_nsfw, **_counts(show_nsfw)}
     if extra:
         base.update(extra)
 
-    if content_hash and content_hash not in set(all_hashes):
+    image = None
+    in_queue = False
+    if content_hash:
+        # Try the queue first; in the common in-queue case this saves the
+        # separate "does it exist anywhere?" lookup.
         image = (
-            Image.objects.filter(content_hash=content_hash)
-            .prefetch_related("tags")
-            .first()
+            qs.filter(content_hash=content_hash).prefetch_related("tags").first()
         )
-        if image is not None:
-            ctx: dict = {
-                "image": image,
-                "prev_hash": None,
-                "next_hash": None,
-                "position": None,
-                "total": None,
-                "mode": mode,
-                "prediction": _taste_prediction(image),
-                **base,
-            }
-            if request is not None:
-                ctx.update(_training_ctx(request))
-            return ctx
-        # Requested image is gone (purged/deleted) — fall through to the queue.
+        in_queue = image is not None
+        if image is None:
+            image = (
+                Image.objects.filter(content_hash=content_hash)
+                .prefetch_related("tags")
+                .first()
+            )
 
-    if not all_hashes:
+    if image is not None and not in_queue:
+        ctx: dict = {
+            "image": image,
+            "prev_hash": None,
+            "next_hash": None,
+            "position": None,
+            "total": None,
+            "mode": mode,
+            "prediction": _taste_prediction(image),
+            **base,
+        }
+        if request is not None:
+            ctx.update(_training_ctx(request))
+        return ctx
+
+    # No content_hash, or the requested image is gone (purged/deleted) — show
+    # the head of the queue so the user lands on something predictable.
+    if image is None:
+        image = qs.prefetch_related("tags").first()
+        in_queue = image is not None
+
+    if image is None:
         ctx = {"image": None, "mode": mode, **base}
         if request is not None:
             ctx.update(_training_ctx(request))
         return ctx
 
-    hash_index = {h: i for i, h in enumerate(all_hashes)}
-    idx = hash_index.get(content_hash, 0) if content_hash else 0
-
-    image = (
-        Image.objects.prefetch_related("tags").get(content_hash=all_hashes[idx])
+    prev_filter, next_filter = _queue_position_filters(image)
+    prev_qs = qs.filter(prev_filter)
+    next_qs = qs.filter(next_filter)
+    prev_hash = (
+        prev_qs.order_by("-queue_seen_at", "-downloaded_at")
+        .values_list("content_hash", flat=True)
+        .first()
     )
+    next_hash = next_qs.values_list("content_hash", flat=True).first()
+    prev_count = prev_qs.count()
+    # Derive total from the two halves + the image itself to skip a third
+    # COUNT(*) on the queue.
+    total = prev_count + 1 + next_qs.count()
     ctx = {
         "image": image,
-        "prev_hash": all_hashes[idx - 1] if idx > 0 else None,
-        "next_hash": all_hashes[idx + 1] if idx < len(all_hashes) - 1 else None,
-        "position": idx + 1,
-        "total": len(all_hashes),
+        "prev_hash": prev_hash,
+        "next_hash": next_hash,
+        "position": prev_count + 1,
+        "total": total,
         "mode": mode,
         "prediction": _taste_prediction(image),
         **base,
@@ -1203,9 +1269,9 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
-    queue_hashes = list(qs_fn(show_nsfw).values_list("content_hash", flat=True))
-    if content_hash in queue_hashes:
-        next_hash = _neighbor_hash(queue_hashes, content_hash)
+    qs = qs_fn(show_nsfw)
+    if qs.filter(content_hash=content_hash).exists():
+        next_hash = _queue_neighbor_hash(qs, image)
     else:
         next_hash = content_hash
     try:
@@ -1229,14 +1295,17 @@ def _purge_impl(request, content_hash: str, qs_fn, ctx_fn):
     Shared purge logic for both the normal and NSFW review queues.
 
     The neighbour is captured first so we know where to navigate after the
-    image is hard-deleted from disk.
+    image is hard-deleted from disk. An out-of-queue purge (rare — only when
+    re-reviewing an already-scored image from the gallery) falls back to the
+    head of the queue, preserving the legacy `_neighbor_hash` behaviour.
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
-    next_hash = _neighbor_hash(
-        list(qs_fn(show_nsfw).values_list("content_hash", flat=True)),
-        content_hash,
-    )
+    qs = qs_fn(show_nsfw)
+    if qs.filter(content_hash=content_hash).exists():
+        next_hash = _queue_neighbor_hash(qs, image)
+    else:
+        next_hash = qs.values_list("content_hash", flat=True).first()
     _purge_image(image)
     ctx = ctx_fn(next_hash, show_nsfw, request)
     _mark_queue_seen(ctx.get("image"))
@@ -1276,8 +1345,7 @@ def toggle_nsfw(request, content_hash: str):
     Navigation mirrors _score_impl: an in-queue image advances to its neighbour
     when the toggle removes it from the current view; an out-of-queue image (an
     already-scored picture opened from the gallery for re-review) stays put so
-    the user keeps seeing it instead of being teleported to the head of the rate
-    queue by _neighbor_hash's not-in-queue fallback.
+    the user keeps seeing it instead of being teleported elsewhere.
 
     - Normal queue: marking NSFW only removes the image when show_nsfw is False
       (otherwise it stays visible in the queue).
@@ -1289,9 +1357,9 @@ def toggle_nsfw(request, content_hash: str):
     mode = request.POST.get("mode", "corpus")
 
     if mode == "nsfw_corpus":
-        queue_hashes = list(_review_nsfw_qs().values_list("content_hash", flat=True))
-        in_queue = content_hash in queue_hashes
-        neighbor = _neighbor_hash(queue_hashes, content_hash)
+        qs = _review_nsfw_qs()
+        in_queue = qs.filter(content_hash=content_hash).exists()
+        neighbor = _queue_neighbor_hash(qs, image) if in_queue else None
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
         # In-queue + marked safe → it left the NSFW queue, so advance.
@@ -1299,11 +1367,9 @@ def toggle_nsfw(request, content_hash: str):
         target = neighbor if (in_queue and not image.is_nsfw) else content_hash
         ctx = _review_nsfw_ctx(target, show_nsfw, request)
     else:
-        queue_hashes = list(
-            _review_qs(show_nsfw).values_list("content_hash", flat=True)
-        )
-        in_queue = content_hash in queue_hashes
-        neighbor = _neighbor_hash(queue_hashes, content_hash)
+        qs = _review_qs(show_nsfw)
+        in_queue = qs.filter(content_hash=content_hash).exists()
+        neighbor = _queue_neighbor_hash(qs, image) if in_queue else None
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
         # In-queue + marked NSFW while NSFW is hidden → it left the queue, advance.
