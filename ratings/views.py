@@ -56,8 +56,20 @@ def _get_taste_clf():
 
 
 def _taste_prediction(image) -> int | None:
-    """Return P(corpus) as integer percentage 0–100, or None if unavailable."""
-    if not image or not image.embedding:
+    """Return P(corpus) as integer percentage 0–100, or None if unavailable.
+
+    Prefers the stored ``predicted_score`` — classify_images() writes it at
+    scrape time, so the common case is a single float read. Without this short
+    circuit every review/gallery render re-ran predict_proba and copied the
+    ~3 KB embedding blob via ``bytes(image.embedding)``, dominating the
+    per-page cost. Legacy rows (embedded before a classifier existed) take
+    the fallback once and persist the result, so subsequent renders are fast.
+    """
+    if image is None:
+        return None
+    if image.predicted_score is not None:
+        return round(float(image.predicted_score) * 100)
+    if not image.embedding:
         return None
     clf = _get_taste_clf()
     if clf is None:
@@ -65,7 +77,10 @@ def _taste_prediction(image) -> int | None:
     from core import brain
 
     emb = brain.bytes_to_embedding(bytes(image.embedding))
-    return round(float(brain.predict_proba(clf, emb)) * 100)
+    prob = float(brain.predict_proba(clf, emb))
+    image.predicted_score = prob
+    image.save(update_fields=["predicted_score"])
+    return round(prob * 100)
 
 
 def _get_similar_index() -> dict | None:
