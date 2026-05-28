@@ -54,8 +54,15 @@ class Image(models.Model):
         Suggestions are the user's own tags inherited from visually similar
         already-tagged images via DINOv2 kNN — they encode taste/theme, not
         objects, so they line up with how the user actually labels things.
+
+        Reads `applied` from `tags.all()` rather than `tags.values_list(...)` so
+        a `prefetch_related("tags")` upstream actually wins: prefetch only
+        caches `all()`, and any other queryset method (values_list, filter, …)
+        bypasses the cache and re-queries. Callers in hot paths like the review
+        card render this alongside `image.tags.all` in the template — sharing
+        the cache turns 2 queries per navigation into 0.
         """
-        applied = set(self.tags.values_list("name", flat=True))
+        applied = {t.name for t in self.tags.all()}
         return [
             k.strip()
             for k in self.knn_tag_suggestions.split(",")
