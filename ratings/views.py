@@ -96,12 +96,35 @@ def _get_similar_index() -> dict | None:
         _similar_index_cache = None
     else:
         import numpy as np
+        from loguru import logger
 
-        hashes = [r[0] for r in rows]
-        embeddings = np.stack(
-            [np.frombuffer(bytes(r[1]), dtype=np.float32) for r in rows]
-        )
-        _similar_index_cache = {"hashes": hashes, "embeddings": embeddings}
+        from core.brain import EMBEDDING_DIM
+
+        # Guard against corrupt blobs (truncated writes, schema drift): a single
+        # wrong-size row would raise ValueError inside np.stack and 500 every
+        # review/gallery render until the offending row was hunted down and
+        # deleted. Drop the bad rows here, log them so they can be repaired,
+        # and stack the survivors.
+        expected_bytes = EMBEDDING_DIM * 4
+        hashes: list[str] = []
+        vectors: list = []
+        for content_hash, blob in rows:
+            buf = bytes(blob)
+            if len(buf) != expected_bytes:
+                logger.warning(
+                    "similar_index: skipping {} — embedding blob is {} bytes, expected {}",
+                    content_hash, len(buf), expected_bytes,
+                )
+                continue
+            hashes.append(content_hash)
+            vectors.append(np.frombuffer(buf, dtype=np.float32))
+        if not vectors:
+            _similar_index_cache = None
+        else:
+            _similar_index_cache = {
+                "hashes": hashes,
+                "embeddings": np.stack(vectors),
+            }
     _similar_index_built_at = now
     return _similar_index_cache
 
