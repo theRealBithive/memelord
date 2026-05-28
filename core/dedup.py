@@ -24,7 +24,7 @@ class DedupIndex:
     """
 
     content_hashes: set[str] = field(default_factory=set)
-    phashes: list[str] = field(default_factory=list)
+    phash_ints: list[int] = field(default_factory=list)
     embeddings: np.ndarray = field(
         default_factory=lambda: np.zeros((0, brain.EMBEDDING_DIM), dtype=np.float32)
     )
@@ -44,7 +44,10 @@ class DedupIndex:
             )
         )
         content_hashes = {r[0] for r in rows}
-        phashes = [r[1] for r in rows if r[1]]
+        # Parse stored hex phashes to ints once, here, rather than per pair in
+        # the per-candidate scan (PERF-8). The `if r[1]` guard drops NULL/empty
+        # phashes; a "0000…" hash is kept (int 0 is a valid fingerprint).
+        phash_ints = [int(r[1], 16) for r in rows if r[1]]
         embeddings_list = [brain.bytes_to_embedding(r[2]) for r in rows if r[2]]
         embeddings = (
             np.vstack(embeddings_list)
@@ -53,7 +56,7 @@ class DedupIndex:
         )
         return cls(
             content_hashes=content_hashes,
-            phashes=phashes,
+            phash_ints=phash_ints,
             embeddings=embeddings,
         )
 
@@ -67,7 +70,7 @@ class DedupIndex:
         """
         self.content_hashes.add(content_hash)
         if ph:
-            self.phashes.append(ph)
+            self.phash_ints.append(int(ph, 16))
         if emb is not None:
             row = np.asarray(emb, dtype=np.float32).reshape(1, -1)
             self.embeddings = (
@@ -99,7 +102,7 @@ def is_phash_duplicate_for_path(
     caller can store it in the DB without a second read of the file.
     """
     ph = phash.compute_phash(path)
-    dup = phash.is_phash_duplicate(ph, index.phashes, max_distance)
+    dup = phash.is_phash_duplicate(ph, index.phash_ints, max_distance)
     return dup, ph
 
 

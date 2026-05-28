@@ -53,7 +53,7 @@ class DedupIndexFromDbTests(TestCase):
         index = dedup.DedupIndex.from_db()
 
         self.assertEqual(index.content_hashes, set())
-        self.assertEqual(index.phashes, [])
+        self.assertEqual(index.phash_ints, [])
         self.assertEqual(index.embeddings.shape, (0, brain.EMBEDDING_DIM))
 
     def test_rows_without_signals_do_not_break_embedding_stack(self) -> None:
@@ -65,5 +65,5 @@ class DedupIndexFromDbTests(TestCase):
         index = dedup.DedupIndex.from_db()
 
         self.assertIn(with_emb.content_hash, index.content_hashes)
-        self.assertEqual(len(index.phashes), 1)
+        self.assertEqual(len(index.phash_ints), 1)
         self.assertEqual(index.embeddings.shape, (1, brain.EMBEDDING_DIM))
