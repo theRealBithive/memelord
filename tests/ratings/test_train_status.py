@@ -16,6 +16,8 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from ratings.models import LogEntry
+
 
 def _completed_task(*, ok: bool = True, error: str = "") -> SimpleNamespace:
     return SimpleNamespace(
@@ -101,6 +103,70 @@ class TrainStatusSessionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.session["training_task_id"], "active-task")
         self.assertIn("train-pending", response.content.decode())
+
+
+def _log(message: str, *, source: str = "train", when=None) -> None:
+    """Create a LogEntry, backdating timestamp when given (auto_now_add ignores
+    the create() value, so we update afterwards)."""
+    entry = LogEntry.objects.create(level="INFO", source=source, message=message)
+    if when is not None:
+        LogEntry.objects.filter(pk=entry.pk).update(timestamp=when)
+
+
+@override_settings(DEBUG=True)
+class TrainEtaTests(TestCase):
+    def setUp(self) -> None:
+        self.client = Client()
+        username = f"train_{uuid.uuid4().hex[:8]}"
+        User.objects.create_user(username, password="secret")
+        self.client.login(username=username, password="secret")
+        session = self.client.session
+        session["training_task_id"] = "active-task"
+        session["training_started_at"] = timezone.now().isoformat()
+        session.save()
+
+    @patch("django_q.tasks.fetch", return_value=_running_task())
+    def test_running_poll_renders_human_friendly_eta(self, mock_fetch) -> None:
+        _log("train: 50/200 encoded (12.3 img/s, ETA 90s)")
+
+        response = self.client.get(reverse("train_status", args=["active-task"]))
+
+        self.assertContains(response, "ETA 1m 30s")
+
+    @patch("django_q.tasks.fetch", return_value=_running_task())
+    def test_latest_train_eta_wins(self, mock_fetch) -> None:
+        _log("train: 50/200 encoded (12.3 img/s, ETA 90s)")
+        _log("train: 150/200 encoded (12.3 img/s, ETA 30s)")
+
+        response = self.client.get(reverse("train_status", args=["active-task"]))
+
+        self.assertContains(response, "ETA 30s")
+        self.assertNotContains(response, "ETA 1m 30s")
+
+    @patch("django_q.tasks.fetch", return_value=_running_task())
+    def test_stale_pre_run_eta_is_ignored(self, mock_fetch) -> None:
+        # An ETA line from a previous run (before training_started_at) must not
+        # leak into the current run's display.
+        _log(
+            "train: 10/200 encoded (12.3 img/s, ETA 600s)",
+            when=timezone.now() - timedelta(hours=2),
+        )
+
+        response = self.client.get(reverse("train_status", args=["active-task"]))
+
+        self.assertNotContains(response, "ETA")
+
+    @patch("django_q.tasks.fetch", return_value=_running_task())
+    def test_classify_eta_does_not_drive_display(self, mock_fetch) -> None:
+        # The later classify_images encode pass logs its own ETA lines under a
+        # different label; they must not reset the displayed (trainer) ETA.
+        _log("train: 200/200 encoded (12.3 img/s, ETA 5s)")
+        _log("classify_images: 10/500 encoded (12.3 img/s, ETA 400s)")
+
+        response = self.client.get(reverse("train_status", args=["active-task"]))
+
+        self.assertContains(response, "ETA 5s")
+        self.assertNotContains(response, "ETA 6m 40s")
 
 
 @override_settings(DEBUG=True)

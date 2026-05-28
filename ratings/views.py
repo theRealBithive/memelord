@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 
@@ -237,6 +238,57 @@ def _fmt_elapsed(seconds: int | None) -> str | None:
     if seconds < 60:
         return f"{seconds}s"
     return f"{seconds // 60}m {seconds % 60}s"
+
+
+_TRAIN_ETA_RE = re.compile(r"ETA (\d+)s")
+
+
+def _training_eta(request) -> str | None:
+    """Return a human-friendly ETA to training completion, or None.
+
+    django-q runs training in a separate worker process that can't write the
+    web session, so the only worker→web channel is the LogEntry stream (the
+    same path ``elapsed`` rides). ``core.brain.encode`` logs progress lines
+    like "train: 50/200 encoded (12.3 img/s, ETA 12s)"; the encode pass
+    dominates training wall-clock, so its ETA is a good proxy for time left.
+
+    Two filters keep the reading honest:
+    - ``timestamp__gte`` the run's start stamp, because _trim_logs only drops
+      entries >48h, so without it a fresh run would read the *previous* run's
+      final "ETA 0s" before logging anything of its own.
+    - ``train: `` prefix, so we ignore the later classify_images encode pass
+      (logged under "classify_images: ") — otherwise the ETA would count down
+      to ~0, training would not finish, then the ETA would jump back up.
+    """
+    started_str = request.session.get("training_started_at")
+    if not started_str:
+        return None
+    started_at = datetime.fromisoformat(started_str)
+    message = (
+        LogEntry.objects.filter(
+            source="train",
+            timestamp__gte=started_at,
+            message__startswith="train: ",
+            message__contains="ETA ",
+        )
+        .order_by("-pk")
+        .values_list("message", flat=True)
+        .first()
+    )
+    if not message:
+        return None
+    match = _TRAIN_ETA_RE.search(message)
+    return _fmt_elapsed(int(match.group(1))) if match else None
+
+
+def _train_pending_ctx(request, task_id, elapsed) -> dict:
+    """Build the _train_pending.html context with elapsed + parsed ETA.
+
+    Centralised so every render site (the steady-state poll, the OrmQ-pending
+    paths, and trigger_train) shows the ETA — sprinkling it inline risks one
+    poll path silently dropping it.
+    """
+    return {"task_id": task_id, "elapsed": elapsed, "eta": _training_eta(request)}
 
 
 def _elapsed_from_session(request, kind: str = "training") -> int | None:
@@ -709,10 +761,9 @@ def trigger_train(request):
             return render(
                 request,
                 "ratings/_train_pending.html",
-                {
-                    "task_id": ctx["active_task_id"],
-                    "elapsed": ctx["training_elapsed"],
-                },
+                _train_pending_ctx(
+                    request, ctx["active_task_id"], ctx["training_elapsed"]
+                ),
             )
         _clear_training_session(request, existing_id)
 
@@ -720,7 +771,9 @@ def trigger_train(request):
     request.session["training_task_id"] = task_id
     request.session["training_started_at"] = timezone.now().isoformat()
     return render(
-        request, "ratings/_train_pending.html", {"task_id": task_id, "elapsed": "0s"}
+        request,
+        "ratings/_train_pending.html",
+        _train_pending_ctx(request, task_id, "0s"),
     )
 
 
@@ -756,19 +809,15 @@ def train_status(request, task_id: str):
             return render(
                 request,
                 "ratings/_train_pending.html",
-                {
-                    "task_id": task_id,
-                    "elapsed": _fmt_elapsed(elapsed),
-                },
+                _train_pending_ctx(request, task_id, _fmt_elapsed(elapsed)),
             )
         elapsed = _elapsed_from_session(request) if session_task else None
         return render(
             request,
             "ratings/_train_pending.html",
-            {
-                "task_id": session_task or task_id,
-                "elapsed": _fmt_elapsed(elapsed),
-            },
+            _train_pending_ctx(
+                request, session_task or task_id, _fmt_elapsed(elapsed)
+            ),
         )
 
     if task.stopped is None:
@@ -776,10 +825,7 @@ def train_status(request, task_id: str):
         return render(
             request,
             "ratings/_train_pending.html",
-            {
-                "task_id": task_id,
-                "elapsed": _fmt_elapsed(elapsed),
-            },
+            _train_pending_ctx(request, task_id, _fmt_elapsed(elapsed)),
         )
 
     if session_task == task_id:
