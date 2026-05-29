@@ -1,5 +1,8 @@
 # Janulon: sources to scrape when running with --source all
 # Add board/blog/topic names; leave empty or omit section to skip that source.
+#
+# Copy this file to config.toml and fill in your sources/tokens.
+# config.toml is gitignored — keep real access tokens out of version control.
 
 [4chan]
 boards = ["wg", "tg", "b", "gif"]
@@ -12,6 +15,7 @@ topics = ["funny", "warhammer40k", "architecture"]
 
 # Pixelfed: account-handle targeting — same @user@instance format as Mastodon.
 # Create an app on your instance to get an access_token if the API requires auth.
+# Set the token here OR via env PIXELFED_ACCESS_TOKEN (env takes precedence over a blank value).
 [pixelfed]
 accounts = []
 # access_token = ""
@@ -20,12 +24,8 @@ accounts = []
 # Create an app and get access_token from your instance (Settings → Development).
 [mastodon]
 base_url = "https://mastodon.social/"
-# access_token can be set here or via env MASTODON_ACCESS_TOKEN
-<<<<<<< HEAD
-access_token = " REDACTED "
-=======
-access_token = " Tx8L3Nl2V29JDcemseEkFKq1BM-1ks0uCha-oE3RuRI "
->>>>>>> 84dcdeb4ffd7994ce1ff399f4f49650758d74830
+# Set the token here OR via env MASTODON_ACCESS_TOKEN (env takes precedence over a blank value).
+access_token = ""
 
 # Vision thresholds: hide low-confidence images from the review queue.
 # Range 1-6 (1 = show everything, 6 = only top ~17%). The taste model's
