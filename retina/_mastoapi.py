@@ -74,7 +74,10 @@ def _lookup_account_id(
             return None
         logger.warning("HTTP {} looking up @{}@{}: {}", e.code, username, instance, e)
         return None
-    except (URLError, json.JSONDecodeError) as e:
+    except (URLError, json.JSONDecodeError, OSError) as e:
+        # OSError covers socket read timeouts (socket.timeout/TimeoutError),
+        # which are NOT wrapped in URLError; without it a slow response would
+        # propagate out and abort the whole multi-source scrape.
         logger.warning("Failed to look up @{}@{}: {}", username, instance, e)
         return None
     if not isinstance(data, dict):
@@ -115,7 +118,10 @@ def _fetch_statuses_page(
         else:
             logger.warning("HTTP {} fetching statuses from {}: {}", e.code, instance, e)
         return []
-    except (URLError, json.JSONDecodeError) as e:
+    except (URLError, json.JSONDecodeError, OSError) as e:
+        # OSError covers socket read timeouts (socket.timeout/TimeoutError),
+        # which are NOT wrapped in URLError; without it a slow response would
+        # propagate out and abort the whole multi-source scrape.
         logger.warning("Failed to fetch statuses from {}: {}", instance, e)
         return []
     if not isinstance(data, list):

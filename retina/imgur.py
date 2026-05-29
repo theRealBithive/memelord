@@ -309,7 +309,10 @@ def _iter_image_urls_api(
         time.sleep(rate_limit_sec)
         try:
             data = get_topic_page(topic, page, client_id)
-        except (HTTPError, URLError, json.JSONDecodeError) as e:
+        except (HTTPError, URLError, json.JSONDecodeError, OSError) as e:
+            # OSError covers socket read timeouts (socket.timeout/TimeoutError),
+            # which are NOT wrapped in URLError; without it a slow response would
+            # propagate out and abort the whole multi-source scrape.
             logger.warning("Failed to fetch page {}: {}", page + 1, e)
             break
         if not isinstance(data, dict) or not data.get("success"):

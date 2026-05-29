@@ -81,3 +81,39 @@ class FourchanCursorWiringTests(TestCase):
         _, kwargs = mock_iter.call_args
         self.assertIsNone(kwargs["since_modified"])
         self.assertFalse(Source.objects.filter(name="wg").exists())
+
+
+@override_settings(DEBUG=True)
+class PerSourceErrorIsolationTests(TestCase):
+    """A failure (e.g. an escaped socket timeout) in one source must not abort
+    the whole batch — run() guards each per-source block and continues."""
+
+    def test_one_source_raising_does_not_abort_later_sources(self) -> None:
+        # Two boards: the first raises a socket-style read timeout that escapes
+        # the scraper's own handlers; the second must still be scraped.
+        sources = {**_EMPTY_SOURCES, "boards": ["bad", "good"]}
+
+        def iter_side_effect(board, **kwargs):
+            if board == "bad":
+                raise TimeoutError("read timed out")
+            return (["u"], 7)
+
+        with (
+            patch.object(scraper, "_load_sources", return_value=sources),
+            patch.object(scraper.dedup.DedupIndex, "from_db", return_value=MagicMock()),
+            patch.object(scraper.brain, "get_encoder", return_value=MagicMock()),
+            patch.object(scraper.brain, "get_transform", return_value=MagicMock()),
+            patch.object(scraper, "_process_downloads", return_value=3),
+            patch.object(scraper.fourchan, "download_images", return_value=[]),
+            patch.object(
+                scraper.fourchan, "iter_image_urls", side_effect=iter_side_effect
+            ),
+        ):
+            counts = scraper.run(
+                config_path=Path("/nonexistent/config.toml"),
+                data_dir=Path("/tmp/memelord-test-data"),
+            )
+
+        # The bad board produced no count entry; the good board was still reached.
+        self.assertNotIn("4chan/bad", counts)
+        self.assertEqual(counts["4chan/good"], 3)

@@ -467,17 +467,24 @@ def run(
 
     counts: dict[str, int] = {}
 
+    # Each source block below is wrapped in try/except so that a failure in one
+    # source (e.g. a socket read timeout that escapes the scraper's own handlers)
+    # is logged and skipped rather than aborting every later source in the batch.
     for module, sources_key, label_fmt in _SIMPLE_SCRAPERS:
         for name in sources[sources_key]:
             label = label_fmt.format(name)
             logger.info("Scraping {}", label)
-            urls = module.iter_image_urls(name)
-            downloaded = module.download_images(
-                urls, images_dir, name, skip_dirs=skip_dirs
-            )
-            counts[label] = _process_downloads(
-                downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
-            )
+            try:
+                urls = module.iter_image_urls(name)
+                downloaded = module.download_images(
+                    urls, images_dir, name, skip_dirs=skip_dirs
+                )
+                counts[label] = _process_downloads(
+                    downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
+                )
+            except Exception as e:
+                logger.exception("Scraping {} failed: {}", label, e)
+                continue
 
     # 4chan is incremental: each board's Source.cursor holds the last_modified
     # high-water mark so we only re-fetch threads touched since the last scrape.
@@ -486,58 +493,74 @@ def run(
     for board in sources["boards"]:
         label = f"4chan/{board}"
         logger.info("Scraping {}", label)
-        source_obj = Source.objects.filter(
-            type=Source.FOURCHAN, name=board
-        ).first()
-        since_modified = _cursor_int(source_obj.cursor if source_obj else None)
-        urls, new_cursor = fourchan.iter_image_urls(
-            board, since_modified=since_modified, max_threads=fourchan_max_threads
-        )
-        downloaded = fourchan.download_images(
-            urls, images_dir, board, skip_dirs=skip_dirs
-        )
-        counts[label] = _process_downloads(
-            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
-        )
-        if new_cursor is not None and source_obj:
-            source_obj.cursor = str(new_cursor)
-            source_obj.save(update_fields=["cursor"])
+        try:
+            source_obj = Source.objects.filter(
+                type=Source.FOURCHAN, name=board
+            ).first()
+            since_modified = _cursor_int(source_obj.cursor if source_obj else None)
+            urls, new_cursor = fourchan.iter_image_urls(
+                board, since_modified=since_modified, max_threads=fourchan_max_threads
+            )
+            downloaded = fourchan.download_images(
+                urls, images_dir, board, skip_dirs=skip_dirs
+            )
+            counts[label] = _process_downloads(
+                downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
+            )
+            if new_cursor is not None and source_obj:
+                source_obj.cursor = str(new_cursor)
+                source_obj.save(update_fields=["cursor"])
+        except Exception as e:
+            logger.exception("Scraping {} failed: {}", label, e)
+            continue
 
     pixelfed_token = cfg.get("pixelfed", {}).get("access_token", "").strip() or None
     for account in sources["pixelfed_accounts"]:
         logger.info("Scraping Pixelfed: {}", account)
-        source_obj = Source.objects.filter(type=Source.PIXELFED, name=account).first()
-        since_id = source_obj.cursor if source_obj else None
-        items, new_cursor = pixelfed.iter_image_items(
-            account, since_id=since_id, access_token=pixelfed_token
-        )
-        downloaded = pixelfed.download_images(
-            items, images_dir, account, skip_dirs=skip_dirs
-        )
-        counts[f"pixelfed/{account}"] = _process_downloads(
-            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
-        )
-        if new_cursor and source_obj:
-            source_obj.cursor = new_cursor
-            source_obj.save(update_fields=["cursor"])
+        try:
+            source_obj = Source.objects.filter(
+                type=Source.PIXELFED, name=account
+            ).first()
+            since_id = source_obj.cursor if source_obj else None
+            items, new_cursor = pixelfed.iter_image_items(
+                account, since_id=since_id, access_token=pixelfed_token
+            )
+            downloaded = pixelfed.download_images(
+                items, images_dir, account, skip_dirs=skip_dirs
+            )
+            counts[f"pixelfed/{account}"] = _process_downloads(
+                downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
+            )
+            if new_cursor and source_obj:
+                source_obj.cursor = new_cursor
+                source_obj.save(update_fields=["cursor"])
+        except Exception as e:
+            logger.exception("Scraping Pixelfed {} failed: {}", account, e)
+            continue
 
     mastodon_token = cfg.get("mastodon", {}).get("access_token", "").strip() or None
     for account in sources["mastodon_accounts"]:
         logger.info("Scraping Mastodon: {}", account)
-        source_obj = Source.objects.filter(type=Source.MASTODON, name=account).first()
-        since_id = source_obj.cursor if source_obj else None
-        items, new_cursor = mastodon_scraper.iter_image_items(
-            account, since_id=since_id, access_token=mastodon_token
-        )
-        downloaded = mastodon_scraper.download_images(
-            items, images_dir, account, skip_dirs=skip_dirs
-        )
-        counts[f"mastodon/{account}"] = _process_downloads(
-            downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
-        )
-        if new_cursor and source_obj:
-            source_obj.cursor = new_cursor
-            source_obj.save(update_fields=["cursor"])
+        try:
+            source_obj = Source.objects.filter(
+                type=Source.MASTODON, name=account
+            ).first()
+            since_id = source_obj.cursor if source_obj else None
+            items, new_cursor = mastodon_scraper.iter_image_items(
+                account, since_id=since_id, access_token=mastodon_token
+            )
+            downloaded = mastodon_scraper.download_images(
+                items, images_dir, account, skip_dirs=skip_dirs
+            )
+            counts[f"mastodon/{account}"] = _process_downloads(
+                downloaded, data_dir, index, encoder, transform, vision, nsfw_clf
+            )
+            if new_cursor and source_obj:
+                source_obj.cursor = new_cursor
+                source_obj.save(update_fields=["cursor"])
+        except Exception as e:
+            logger.exception("Scraping Mastodon {} failed: {}", account, e)
+            continue
 
     if need_classify:
         classify_images(
