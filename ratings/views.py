@@ -1308,15 +1308,23 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
 
     Scoring is allowed on any image, not just unscored ones, so an already-rated
     image opened from the gallery for re-review can be re-scored here. Navigation
-    differs by origin: an in-queue image advances to its neighbour (rate-and-
-    advance); an out-of-queue image (re-review) stays put so the user sees the
-    updated score instead of being thrown into the rate queue. next_hash is
-    captured before scoring because scoring changes which images are in-queue.
+    differs by origin: rating an *unrated* image is a rate-and-advance, so it
+    moves to the queue neighbour; re-scoring an *already-rated* image (gallery
+    re-review) stays put so the user sees the updated score instead of being
+    thrown into the rate queue. next_hash is captured before scoring because
+    scoring changes which images are in-queue.
+
+    The advance/stay decision keys on whether the image was already rated, NOT
+    on current queue membership: `_taste_prediction` lazily writes a
+    predicted_score while rendering the card, which can drop a just-shown
+    unrated image below the vision cutoff and out of the queue. Keying on
+    queue membership there would wrongly treat it as a re-review and re-render
+    the same image, stalling the rate flow (the user has to tap again).
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
     qs = qs_fn(show_nsfw)
-    if qs.filter(content_hash=content_hash).exists():
+    if image.score is None:
         next_hash = _queue_neighbor_hash(qs, image)
     else:
         next_hash = content_hash

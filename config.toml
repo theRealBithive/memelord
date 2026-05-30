@@ -21,11 +21,7 @@ accounts = []
 [mastodon]
 base_url = "https://mastodon.social/"
 # access_token can be set here or via env MASTODON_ACCESS_TOKEN
-<<<<<<< HEAD
 access_token = " REDACTED "
-=======
-access_token = " Tx8L3Nl2V29JDcemseEkFKq1BM-1ks0uCha-oE3RuRI "
->>>>>>> 84dcdeb4ffd7994ce1ff399f4f49650758d74830
 
 # Vision thresholds: hide low-confidence images from the review queue.
 # Range 1-6 (1 = show everything, 6 = only top ~17%). The taste model's
