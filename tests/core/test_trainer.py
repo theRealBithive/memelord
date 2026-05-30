@@ -124,6 +124,119 @@ class TrainerTests(TestCase):
 
     @patch.object(brain, "get_encoder")
     @patch.object(brain, "encode")
+    def test_run_uses_cached_embeddings_without_encoding(
+        self, mock_encode, mock_get_encoder
+    ) -> None:
+        """With every row's embedding cached, run() skips the DINOv2 encoder."""
+        self._write_image("images/pos.png")
+        self._write_image("images/neg.png")
+        ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex,
+            file_path="images/pos.png",
+            source_label="t",
+            score=5,
+            embedding=brain.embedding_to_bytes(
+                np.full(768, 0.1, dtype=np.float32)
+            ),
+        )
+        ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex,
+            file_path="images/neg.png",
+            source_label="t",
+            score=1,
+            embedding=brain.embedding_to_bytes(
+                np.full(768, 0.2, dtype=np.float32)
+            ),
+        )
+
+        weights_path = self.data_dir / "weights.pkl"
+        trainer.run(data_dir=self.data_dir, weights_path=weights_path)
+
+        self.assertTrue(weights_path.exists())
+        mock_encode.assert_not_called()
+        mock_get_encoder.assert_not_called()
+
+    @patch.object(brain, "get_encoder")
+    @patch.object(brain, "encode")
+    def test_run_encodes_only_uncached_rows(
+        self, mock_encode, mock_get_encoder
+    ) -> None:
+        """With a partial cache, run() encodes exactly the rows missing an embedding."""
+        self._write_image("images/pos.png")
+        neg = self._write_image("images/neg.png")
+        ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex,
+            file_path="images/pos.png",
+            source_label="t",
+            score=5,
+            embedding=brain.embedding_to_bytes(
+                np.full(768, 0.1, dtype=np.float32)
+            ),
+        )
+        ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex,
+            file_path="images/neg.png",
+            source_label="t",
+            score=1,
+        )
+        mock_get_encoder.return_value = None
+        mock_encode.return_value = (
+            np.full((1, 768), 0.2, dtype=np.float32),
+            [neg],
+        )
+
+        weights_path = self.data_dir / "weights.pkl"
+        trainer.run(data_dir=self.data_dir, weights_path=weights_path)
+
+        self.assertTrue(weights_path.exists())
+        mock_encode.assert_called_once()
+        # encode() must receive only the uncached path, not the whole training set.
+        encoded_paths = mock_encode.call_args.args[1]
+        self.assertEqual(encoded_paths, [neg])
+
+    @patch.object(brain, "get_encoder")
+    @patch.object(brain, "encode")
+    def test_run_reencodes_corrupt_cached_embedding(
+        self, mock_encode, mock_get_encoder
+    ) -> None:
+        """A wrong-dimension cached blob must not crash train; it falls through to encode."""
+        self._write_image("images/pos.png")
+        bad = self._write_image("images/neg.png")
+        ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex,
+            file_path="images/pos.png",
+            source_label="t",
+            score=5,
+            embedding=brain.embedding_to_bytes(
+                np.full(768, 0.1, dtype=np.float32)
+            ),
+        )
+        # A 512-d blob bypasses embedding_to_bytes' dimension guard but raises
+        # ValueError in bytes_to_embedding — simulates an encoder-dimension swap.
+        ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex,
+            file_path="images/neg.png",
+            source_label="t",
+            score=1,
+            embedding=np.full(512, 0.2, dtype=np.float32).tobytes(),
+        )
+        mock_get_encoder.return_value = None
+        mock_encode.return_value = (
+            np.full((1, 768), 0.2, dtype=np.float32),
+            [bad],
+        )
+
+        weights_path = self.data_dir / "weights.pkl"
+        trainer.run(data_dir=self.data_dir, weights_path=weights_path)
+
+        self.assertTrue(weights_path.exists())
+        # The corrupt row must be re-encoded, not propagated as a crash.
+        mock_encode.assert_called_once()
+        encoded_paths = mock_encode.call_args.args[1]
+        self.assertEqual(encoded_paths, [bad])
+
+    @patch.object(brain, "get_encoder")
+    @patch.object(brain, "encode")
     def test_run_saves_nsfw_weights_when_labels_exist(
         self, mock_encode, mock_get_encoder
     ) -> None:

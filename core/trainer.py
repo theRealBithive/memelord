@@ -103,6 +103,52 @@ def _get_negative_weights(data_dir: Path) -> dict[str, float]:
     return result
 
 
+def _load_cached_embeddings(
+    data_dir: Path, paths: list[Path]
+) -> dict[str, np.ndarray]:
+    """
+    Return {absolute_path_str: embedding} for the subset of `paths` whose Image
+    row already has a stored DINOv2 vector in the `embedding` column.
+
+    Scoped to the caller's path list (not the whole table) so the returned dict
+    matches the training set exactly — downstream phash backfill iterates these
+    keys, and widening them would scan rows this run never trains on.
+
+    Re-encoding the whole corpus through DINOv2 on every train run was the
+    dominant cost on large libraries — a ViT-B/14 forward pass over tens of
+    thousands of images on CPU runs for hours and previously tripped the
+    django-q worker timeout. The embeddings are already persisted at scrape time
+    and by classify_images, so training reads them back here and only encodes the
+    (normally empty) set of rows still missing one.
+
+    Cache validity is model-scoped: the stored vectors are only correct while the
+    DINOv2 variant + transform are unchanged. eval()-mode DINOv2 is deterministic
+    so cached == freshly-encoded today, but there is no version stamp on the
+    column. A bad blob is skipped rather than fatal: bytes_to_embedding raises on
+    any vector that isn't exactly EMBEDDING_DIM floats, so an encoder swap that
+    changes dimensionality would otherwise crash every train run with no path to
+    rebuild the column. Skipping lets the row fall through to the re-encode set
+    and self-heal, mirroring brain.encode's "a moved file doesn't kill the job".
+    """
+    from ratings.models import Image
+
+    # Filter relative file_paths in the query so we touch only rows this run may
+    # train on, not every embedded row in the table.
+    rel_paths = [str(p.relative_to(data_dir)) for p in paths]
+    cache: dict[str, np.ndarray] = {}
+    for img in Image.objects.filter(
+        is_purged=False, embedding__isnull=False, file_path__in=rel_paths
+    ):
+        path_str = str(data_dir / img.file_path)
+        try:
+            cache[path_str] = brain.bytes_to_embedding(bytes(img.embedding))
+        except ValueError as exc:
+            logger.warning(
+                "train: ignoring bad cached embedding for {} ({})", path_str, exc
+            )
+    return cache
+
+
 def _backfill_phash_embedding(
     path_to_emb: dict[str, np.ndarray],
     data_dir: Path,
@@ -159,9 +205,12 @@ def run(
     Train taste classifier on good (score >= HIGH_SCORE) vs bad (score <= LOW_SCORE)
     samples, and optionally an NSFW head.
 
-    All unique image paths are encoded once with DINOv2 in a single forward pass,
-    then the embeddings are sliced for each classifier — this avoids running the
-    encoder multiple times when training both taste and NSFW heads together.
+    Embeddings are read from the cached `embedding` column (see
+    _load_cached_embeddings); only rows still missing one are encoded with
+    DINOv2. On a warm cache this skips the encoder entirely and training is a
+    matter of seconds — the whole-corpus forward pass it replaces ran for hours
+    and tripped the worker timeout. The freshly-encoded vectors are then sliced
+    for each classifier so the encoder runs at most once per train.
     """
     good_paths, bad_paths = collect_image_paths(data_dir)
     if not good_paths:
@@ -191,15 +240,28 @@ def run(
         logger.info(
             "Training data: {} good + {} bad", len(good_paths), len(bad_paths)
         )
-    logger.info("Loading DINOv2 encoder…")
-    encoder = brain.get_encoder()
-    transform = brain.get_transform()
-    X_all, valid_all_paths = brain.encode(
-        encoder, all_paths, transform=transform, progress_label="train"
-    )
-    path_to_emb = {str(p): X_all[i] for i, p in enumerate(valid_all_paths)}
+    path_to_emb = _load_cached_embeddings(data_dir, all_paths)
+    missing = [p for p in all_paths if str(p) not in path_to_emb]
+    if missing:
+        logger.info(
+            "Encoding {} of {} images missing a cached embedding…",
+            len(missing), len(all_paths),
+        )
+        encoder = brain.get_encoder()
+        transform = brain.get_transform()
+        X_missing, valid_missing = brain.encode(
+            encoder, missing, transform=transform, progress_label="train"
+        )
+        for p, emb in zip(valid_missing, X_missing):
+            path_to_emb[str(p)] = emb
+    else:
+        logger.info(
+            "All {} training images have cached embeddings; skipping encode",
+            len(all_paths),
+        )
 
-    # Re-filter each list to paths that were actually encoded (handles files moved mid-run).
+    # Re-filter each list to paths present in path_to_emb (cached or just-encoded);
+    # a scored row with neither a cached embedding nor a readable file is dropped.
     good_paths = [p for p in good_paths if str(p) in path_to_emb]
     bad_paths = [p for p in bad_paths if str(p) in path_to_emb]
     nsfw_paths = [p for p in nsfw_paths if str(p) in path_to_emb]
