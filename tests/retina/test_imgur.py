@@ -8,9 +8,10 @@ from retina import imgur
 from tests.conftest import minimal_png_bytes
 
 
-def test_imgur_module_imports() -> None:
-    """Imgur scraper module can be imported."""
-    assert imgur is not None
+def test_imgur_module_exposes_scraper_interface() -> None:
+    """Module exposes the iter/download interface scraper.run() relies on."""
+    assert callable(imgur.iter_image_urls)
+    assert callable(imgur.download_images)
 
 
 def test_image_urls_from_item_single_image() -> None:
@@ -97,6 +98,21 @@ def test_iter_image_urls_deduplicates() -> None:
             rate_limit_sec=0,
         )
     assert urls == ["https://i.imgur.com/same.jpg"]
+
+
+def test_iter_image_urls_swallows_read_timeout() -> None:
+    """A socket read timeout while fetching a gallery page must not abort the scrape.
+
+    Read timeouts on resp.read() raise socket.timeout/TimeoutError, an OSError
+    that is NOT wrapped in URLError. The API page-fetch catch widens to OSError
+    so a slow imgur response stops paging gracefully instead of propagating out
+    and killing every later source in the multi-source batch.
+    """
+    with patch.object(imgur, "get_topic_page", side_effect=TimeoutError("timed out")):
+        urls = imgur.iter_image_urls(
+            topic="funny", client_id="test_id", max_items=10, rate_limit_sec=0
+        )
+    assert urls == []
 
 
 def test_download_images_writes_files_with_topic_prefix() -> None:

@@ -11,9 +11,11 @@ from sklearn.linear_model import LogisticRegression
 from core import brain
 
 
-def test_brain_module_imports() -> None:
-    """Brain module can be imported."""
-    assert brain is not None
+def test_brain_module_exposes_encoder_interface() -> None:
+    """Module exposes the encoder/classifier interface the pipeline relies on."""
+    assert callable(brain.get_encoder)
+    assert callable(brain.get_transform)
+    assert callable(brain.encode)
 
 
 def test_get_transform_returns_compose() -> None:

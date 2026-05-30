@@ -8,9 +8,34 @@ from retina import _mastoapi, pixelfed
 from tests.conftest import minimal_png_bytes
 
 
-def test_pixelfed_module_imports() -> None:
-    """pixelfed module can be imported."""
-    assert pixelfed is not None
+def test_pixelfed_module_exposes_scraper_interface() -> None:
+    """Module exposes the iter/download interface scraper.run() relies on."""
+    assert callable(pixelfed.iter_image_items)
+    assert callable(pixelfed.download_images)
+
+
+def test_lookup_account_id_swallows_read_timeout() -> None:
+    """A socket read timeout during account lookup returns None, not a crash.
+
+    Read timeouts on resp.read() raise socket.timeout/TimeoutError, an OSError
+    that is NOT wrapped in URLError. _lookup_account_id's catch widens to OSError
+    so a slow instance leaves the cursor untouched and skips the account rather
+    than aborting every later source in the multi-source batch. This helper is
+    shared by both pixelfed and mastodon.
+    """
+    with patch.object(_mastoapi, "_get_json", side_effect=TimeoutError("timed out")):
+        assert _mastoapi._lookup_account_id("pixelfed.social", "art") is None
+
+
+def test_fetch_statuses_page_swallows_read_timeout() -> None:
+    """A socket read timeout while fetching a statuses page returns [], not a crash.
+
+    Same OSError-vs-URLError reasoning as the lookup case: returning [] stops the
+    pagination loop gracefully so a slow instance never propagates out of the
+    shared _mastoapi helper used by both pixelfed and mastodon.
+    """
+    with patch.object(_mastoapi, "_get_json", side_effect=TimeoutError("timed out")):
+        assert _mastoapi._fetch_statuses_page("pixelfed.social", "99") == []
 
 
 def test_filename_for_item_uses_pixelfed_prefix() -> None:

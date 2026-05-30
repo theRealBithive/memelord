@@ -9,9 +9,10 @@ from retina import fourchan
 from tests.conftest import minimal_png_bytes
 
 
-def test_fourchan_module_imports() -> None:
-    """Fourchan scraper module can be imported."""
-    assert fourchan is not None
+def test_fourchan_module_exposes_scraper_interface() -> None:
+    """Module exposes the iter/download interface scraper.run() relies on."""
+    assert callable(fourchan.iter_image_urls)
+    assert callable(fourchan.download_images)
 
 
 def test_image_url_from_post_returns_url_when_valid() -> None:

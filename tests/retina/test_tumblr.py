@@ -8,9 +8,10 @@ from retina import tumblr
 from tests.conftest import minimal_png_bytes
 
 
-def test_tumblr_module_imports() -> None:
-    """Tumblr scraper module can be imported."""
-    assert tumblr is not None
+def test_tumblr_module_exposes_scraper_interface() -> None:
+    """Module exposes the iter/download interface scraper.run() relies on."""
+    assert callable(tumblr.iter_image_urls)
+    assert callable(tumblr.download_images)
 
 
 def test_image_urls_from_post_returns_url_for_photo_url_key() -> None:
@@ -133,6 +134,19 @@ def test_iter_image_urls_deduplicates() -> None:
             rate_limit_sec=0,
         )
     assert urls == ["https://same.com/img.jpg"]
+
+
+def test_iter_image_urls_swallows_read_timeout() -> None:
+    """A socket read timeout while fetching a page must not abort the scrape.
+
+    Read timeouts on resp.read() raise socket.timeout/TimeoutError, an OSError
+    that is NOT wrapped in URLError. The page-fetch catch widens to OSError so a
+    slow tumblr response stops paging gracefully (returns what we have) instead
+    of propagating out and killing every later source in the multi-source batch.
+    """
+    with patch.object(tumblr, "get_posts", side_effect=TimeoutError("timed out")):
+        urls = tumblr.iter_image_urls(blog="testblog", num_posts=20, rate_limit_sec=0)
+    assert urls == []
 
 
 def test_download_images_writes_files_with_blog_prefix() -> None:
