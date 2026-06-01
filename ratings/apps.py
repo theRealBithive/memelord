@@ -32,12 +32,31 @@ def _set_sqlite_pragmas(sender, connection, **kwargs):
 
     Fires on Django's connection_created signal so it applies to connections
     from *both* gunicorn and the django-q cluster, not just a one-off init.
+
+    `PRAGMA journal_mode=WAL` reports the mode actually adopted: on a filesystem
+    that can't back WAL's shared-memory mapping (some network mounts, read-only
+    volumes) SQLite silently keeps the rollback journal and returns e.g.
+    "delete". We read that result back and warn, so a deployment where the
+    responsiveness fix didn't take is visible in the logs instead of silently
+    re-introducing the UI-freeze stall.
     """
     if connection.vendor != "sqlite":
         return
     with connection.cursor() as cursor:
+        # Two statements rather than chaining .fetchone() off .execute(): the
+        # latter relies on the cursor returning itself, which Django's
+        # CursorWrapper does not guarantee across backends.
         cursor.execute("PRAGMA journal_mode=WAL;")
+        adopted = cursor.fetchone()
         cursor.execute("PRAGMA synchronous=NORMAL;")
+    if adopted and adopted[0].lower() != "wal":
+        from loguru import logger
+
+        logger.warning(
+            "SQLite WAL mode not adopted (journal_mode={}); the app may stall "
+            "during background scrape/train on this filesystem.",
+            adopted[0],
+        )
 
 
 def _bootstrap_schedule(sender, **kwargs):
