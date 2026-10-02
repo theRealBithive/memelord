@@ -242,3 +242,25 @@ def test_keyboard_help_is_a_tappable_disclosure() -> None:
     nav = (ROOT / "templates" / "ratings" / "_nav.html").read_text()
     assert '<details class="nav-help">' in nav
     assert "help-tooltip" not in nav
+
+
+# --- template comments never reach the browser ---------------------------------
+
+
+def test_no_template_comment_leaks_as_text() -> None:
+    """`{# … #}` is a comment only within one line; wrapped, Django renders it as text.
+
+    Lexing every template the way Django does and looking for comment markers
+    inside TEXT tokens catches exactly the wrapped ones. Multi-line notes
+    belong in `{% comment %} … {% endcomment %}`.
+    """
+    from django.template.base import Lexer, TokenType
+
+    leaks = []
+    for template in sorted((ROOT / "templates").rglob("*.html")):
+        for token in Lexer(template.read_text()).tokenize():
+            if token.token_type is not TokenType.TEXT:
+                continue
+            if "{#" in token.contents or "#}" in token.contents:
+                leaks.append((template.relative_to(ROOT).as_posix(), token.contents.strip()[:60]))
+    assert leaks == []
