@@ -1,29 +1,40 @@
 [project]
-name = "janulon"
+name = "memelord"
 version = "0.0.1"
-description = "Add your description here"
+description = "Mobile-first image curation webapp with a personal DINOv3 taste classifier"
 readme = "README.md"
 requires-python = ">=3.14"
+# Lower bounds are the versions the test suite and the real DINOv3 load path
+# were last verified against (October 2026). uv.lock pins the exact versions.
 dependencies = [
     "loguru>=0.7",
-    "pillow>=12.1.1",
-    "scikit-learn>=1.8.0",
-    "torch>=2.10.0",
-    "torchvision>=0.25.0",
-    "playwright>=1.40",
-    "django>=5.0",
-    "django-htmx>=1.21",
-    "django-q2>=1.7",
-    "gunicorn>=23.0",
-    "whitenoise>=6.8",
-    "requests>=2.32",
-    "timm>=1.0.27",
+    "pillow>=12.3",
+    "scikit-learn>=1.9",
+    "torch>=2.14",
+    "torchvision>=0.29",
+    "playwright>=1.63",
+    "django>=6.1",
+    "django-htmx>=1.29",
+    "django-q2>=1.11",
+    "gunicorn>=26.2",
+    "whitenoise>=6.12",
+    "requests>=2.34",
+    # DINOv3 is loaded through transformers from a gated Hugging Face repo;
+    # torchvision stays because the fast image processors are built on it.
+    "transformers>=5.18",
 ]
 
-[project.optional-dependencies]
+# PEP 735 dependency group instead of an optional extra: `uv sync` installs it
+# by default, so `uv run pytest` always resolves to the venv's pytest. With the
+# old `--extra dev` scheme a plain `uv run` re-synced the venv without pytest
+# and silently fell through to a system-wide pytest that could not see Django.
+[dependency-groups]
 dev = [
-    "pytest>=8",
-    "python-semantic-release>=10.5.3",
+    "pytest>=9.1",
+    "python-semantic-release>=10.7",
+    "ruff>=0.16",
+    "hypothesis>=6",
+    "mutmut>=3",
 ]
 
 [tool.semantic_release]
@@ -33,9 +44,50 @@ allow_zero_version = true
 major_on_zero = true
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "integration: slow tests that load real models or need network access",
 ]
+
+[tool.ruff]
+target-version = "py314"
+extend-exclude = ["ratings/migrations"]
+
+[tool.ruff.lint]
+# Pinned explicitly so results do not drift with ruff's default rule set.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "RUF012",  # mutable class attributes: the Django Meta / choices idiom
+    "RUF001",  # typographic characters (×, –) in strings, comments and
+    "RUF002",  # docstrings are used on purpose throughout the prose
+    "RUF003",
+    "SIM105",  # try/except/pass is more explicit than contextlib.suppress
+    "SIM108",  # an if/else block reads better than a ternary
+    "SIM117",  # nested `with` blocks for two patches are the obvious form
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test modules call django.setup() before importing models, so imports
+# necessarily follow executable code.
+"tests/**" = ["E402"]
+
+# Mutation testing (mutmut 3). Scoped to the embedding-generation logic: the
+# big view/scraper modules have no measured mutation score. mutmut copies
+# source_paths + also_copy into mutants/ and runs pytest from there, so the
+# tests must be copied too and selected relative to mutants/. Run with
+# DATA_DIR pointing at the real data dir (the tests use the dev SQLite DB) and
+# HYPOTHESIS_PROFILE=mutmut, single child because the tests share one SQLite file:
+#   DJANGO_DEBUG=true DATA_DIR=$PWD/data HYPOTHESIS_PROFILE=mutmut uv run mutmut run --max-children 1
+[tool.mutmut]
+source_paths = ["core", "ratings"]
+only_mutate = ["core/brain.py", "core/dedup.py", "ratings/embeddings.py"]
+do_not_mutate = ["ratings/migrations/*", "ratings/management/*"]
+also_copy = ["memelord", "retina", "tests", "templates", "static", "manage.py"]
+pytest_add_cli_args_test_selection = ["tests/core", "tests/ratings"]
+# Each mutant child pays the lazy transformers/torchvision import (~10 s wall)
+# that the covering tests themselves never show in their timing, so the
+# default wall limit of 15 s flags fast, cleanly killed mutants as timeouts.
+timeout_constant = 3.0
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -43,4 +95,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "retina*"]
+include = ["core*", "retina*", "ratings*", "memelord*"]

@@ -16,9 +16,11 @@ htmlcov/
 
 # Local data (not part of image)
 data/
+janulon-data/
 output/
 out/
 working_dir/
+staticfiles/
 *.pkl
 config.toml
 
@@ -32,3 +34,7 @@ build/
 .idea/
 .vscode/
 .DS_Store
+
+# mutmut working tree
+mutants/
+.hypothesis/

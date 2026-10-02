@@ -81,6 +81,7 @@ def run_train():
     render the success/failure fragment without keeping state elsewhere.
     """
     from loguru import logger
+
     from core import trainer
     from ratings.scraper import classify_images, populate_knn_tag_suggestions
 

@@ -1,15 +1,20 @@
 import re
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
+import ratings.notifiers as notifiers
+from ratings import reset
+from ratings.embeddings import has_current_embedding
 from ratings.models import (
     Image,
     LogEntry,
@@ -26,8 +31,8 @@ from ratings.queue_rules import (
     pred_score_visible,
     visibility_q,
 )
+from ratings.toast import with_toast
 from ratings.utils import purge_image as _purge_image_util
-import ratings.notifiers as notifiers
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 
@@ -37,18 +42,20 @@ DATA_DIR = Path(settings.DATA_DIR)
 _taste_clf_cache = None
 _taste_clf_mtime: float | None = None
 
-_similar_index_cache: dict | None = None
-_similar_index_built_at: float = 0.0
-_SIMILAR_INDEX_TTL = 300.0
-
-
 def _get_taste_clf():
-    """Load (and cache) the taste classifier, reloading if weights change on disk."""
+    """
+    Load (and cache) the taste classifier, reloading if weights change on disk.
+
+    The cached value may legitimately be None: load_classifier returns None for
+    a file trained on another encoder (V5). Keying the reload on the file's
+    mtime alone, rather than on "cache is None", keeps that None from being
+    unpickled again on every render.
+    """
     global _taste_clf_cache, _taste_clf_mtime
     if not WEIGHTS_PATH.exists():
         return None
     mtime = WEIGHTS_PATH.stat().st_mtime
-    if _taste_clf_cache is None or mtime != _taste_clf_mtime:
+    if mtime != _taste_clf_mtime:
         from core import brain
 
         _taste_clf_cache = brain.load_classifier(WEIGHTS_PATH)
@@ -70,7 +77,9 @@ def _taste_prediction(image) -> int | None:
         return None
     if image.predicted_score is not None:
         return round(float(image.predicted_score) * 100)
-    if not image.embedding:
+    # A vector from an older encoder must never meet the current classifier
+    # (V2); the row stays unpredicted until it is re-encoded.
+    if not has_current_embedding(image):
         return None
     clf = _get_taste_clf()
     if clf is None:
@@ -82,115 +91,6 @@ def _taste_prediction(image) -> int | None:
     image.predicted_score = prob
     image.save(update_fields=["predicted_score"])
     return round(prob * 100)
-
-
-def _get_similar_index() -> dict | None:
-    """
-    Cache (hashes, embeddings) of every rated image for fast kNN at view time.
-
-    Held at module scope with a 5-minute TTL plus explicit invalidation on
-    rating writes — the matrix multiplication itself is sub-millisecond but
-    rebuilding the matrix from a DB scan of binary blobs would dominate the
-    per-request cost without this cache.
-    """
-    global _similar_index_cache, _similar_index_built_at
-    import time
-
-    now = time.monotonic()
-    if (
-        _similar_index_cache is not None
-        and now - _similar_index_built_at < _SIMILAR_INDEX_TTL
-    ):
-        return _similar_index_cache
-
-    rows = list(
-        Image.objects.filter(is_purged=False, score__isnull=False)
-        .exclude(embedding=None)
-        .values_list("content_hash", "embedding")
-    )
-    if not rows:
-        _similar_index_cache = None
-    else:
-        import numpy as np
-        from loguru import logger
-
-        from core.brain import EMBEDDING_DIM
-
-        # Guard against corrupt blobs (truncated writes, schema drift): a single
-        # wrong-size row would raise ValueError inside np.stack and 500 every
-        # review/gallery render until the offending row was hunted down and
-        # deleted. Drop the bad rows here, log them so they can be repaired,
-        # and stack the survivors.
-        expected_bytes = EMBEDDING_DIM * 4
-        hashes: list[str] = []
-        vectors: list = []
-        for content_hash, blob in rows:
-            buf = bytes(blob)
-            if len(buf) != expected_bytes:
-                logger.warning(
-                    "similar_index: skipping {} — embedding blob is {} bytes, expected {}",
-                    content_hash, len(buf), expected_bytes,
-                )
-                continue
-            hashes.append(content_hash)
-            vectors.append(np.frombuffer(buf, dtype=np.float32))
-        if not vectors:
-            _similar_index_cache = None
-        else:
-            _similar_index_cache = {
-                "hashes": hashes,
-                "embeddings": np.stack(vectors),
-            }
-    _similar_index_built_at = now
-    return _similar_index_cache
-
-
-def _invalidate_similar_index() -> None:
-    """Drop the kNN cache so the next request rebuilds it with fresh ratings."""
-    global _similar_index_cache
-    _similar_index_cache = None
-
-
-def _get_similar_rated(image, k: int = 6) -> list[dict]:
-    """
-    Return the top-K most cosine-similar already-rated images.
-
-    Shown alongside the rate card so the user can see how they (or the model)
-    treated visually-comparable images before — a consistency aid, and a
-    live read on whether the embedding neighbourhood reflects actual taste.
-    """
-    if not image or not image.embedding:
-        return []
-    idx = _get_similar_index()
-    if not idx:
-        return []
-    import numpy as np
-
-    from core import brain
-
-    q = brain.bytes_to_embedding(bytes(image.embedding))
-    sims = brain.cosine_similarity_matrix(q, idx["embeddings"])
-    own_hash = image.content_hash
-    order = np.argsort(-sims)
-    picks: list[tuple[str, float]] = []
-    for i in order:
-        h = idx["hashes"][int(i)]
-        if h == own_hash:
-            continue
-        picks.append((h, float(sims[int(i)])))
-        if len(picks) >= k:
-            break
-    if not picks:
-        return []
-    hashes = [h for h, _ in picks]
-    images = {
-        img.content_hash: img for img in Image.objects.filter(content_hash__in=hashes)
-    }
-    return [
-        {"image": images[h], "similarity": round(s * 100)}
-        for h, s in picks
-        if h in images
-    ]
 
 
 @login_required
@@ -302,7 +202,7 @@ def _elapsed_from_session(request, kind: str = "training") -> int | None:
     if not started_at_str:
         return None
     started_at = datetime.fromisoformat(started_at_str)
-    return int((datetime.now(dt_timezone.utc) - started_at).total_seconds())
+    return int((datetime.now(UTC) - started_at).total_seconds())
 
 
 def _clear_training_session(request, task_id: str | None = None) -> None:
@@ -408,7 +308,6 @@ def _scrape_ctx(request) -> dict:
 def _purge_image(image: Image) -> None:
     """Local wrapper around the utility purge so cache invalidation stays centralised."""
     _purge_image_util(image)
-    _invalidate_similar_index()
 
 
 def _queue_position_filters(image: Image) -> tuple[Q, Q]:
@@ -485,9 +384,22 @@ def rate_nsfw_corpus(request, content_hash: str | None = None):
 @login_required
 @require_POST
 def nsfw_toggle(request):
-    """Session toggle for the show-NSFW preference; redirects back to the previous page."""
+    """
+    Session toggle for the show-NSFW preference; redirects back to the page
+    the switch was pressed on.
+
+    The Referer header is client-supplied, so it is only followed when it
+    points at this host (OWASP A01: unvalidated redirect); anything else
+    falls back to the index.
+    """
     request.session["show_nsfw"] = not request.session.get("show_nsfw", False)
-    return redirect(request.META.get("HTTP_REFERER") or "index")
+    referer = request.META.get("HTTP_REFERER", "")
+    referer_is_local = url_has_allowed_host_and_scheme(
+        referer, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    )
+    if referer_is_local:
+        return redirect(referer)
+    return redirect("index")
 
 
 @login_required
@@ -511,7 +423,7 @@ def stats(request):
     last_trained = None
     try:
         mtime = WEIGHTS_PATH.stat().st_mtime
-        last_trained = datetime.fromtimestamp(mtime, tz=dt_timezone.utc)
+        last_trained = datetime.fromtimestamp(mtime, tz=UTC)
     except FileNotFoundError:
         pass
 
@@ -554,7 +466,7 @@ def stats(request):
     gallery_total = gallery_qs.count()
     # Disjoint from below_cutoff_count (score <= 2) and matches the trainer's split,
     # so the "Training data" line on the page doesn't double-count scores 0-2.
-    liked_count = scored_qs.filter(score__gte=3).count()
+    positive_count = scored_qs.filter(score__gte=3).count()
 
     score_dist = list(
         scored_qs.values("score").annotate(n=Count("content_hash")).order_by("-score")
@@ -600,13 +512,12 @@ def stats(request):
         "ratings/stats.html",
         {
             **counts,
-            **_training_ctx(request),
-            **_scrape_ctx(request),
             "show_nsfw": show_nsfw,
             "last_trained": last_trained,
             "last_train": last_train_info,
             "gallery_total": gallery_total,
-            "liked_count": liked_count,
+            "positive_count": positive_count,
+            "mode": "stats",
             "score_dist": score_dist,
             "score_dist_max": score_dist_max,
             "source_breakdown": source_breakdown,
@@ -747,7 +658,7 @@ def trigger_train(request):
     """
     Enqueue a training job via django-q and return a polling fragment.
 
-    Training blocks for several minutes (DINOv2 encoding + LogReg fit), so it
+    Training blocks for several minutes (DINOv3 encoding + LogReg fit), so it
     runs in a background worker. The session stores the task ID so the polling
     template knows which job to watch via train_status.
     """
@@ -841,8 +752,8 @@ def train_status(request, task_id: str):
             # Disjoint counts matching the trainer's split: positives (score>=3)
             # vs below-cutoff negatives (score<=2). Together they're the full
             # training set, so the "+" in the message doesn't double-count.
-            "liked_n": Image.objects.filter(score__gte=3).count(),
-            "below_cutoff_n": Image.objects.filter(score__lte=2).count(),
+            "positive_n": Image.objects.filter(score__gte=3).count(),
+            "negative_n": Image.objects.filter(score__lte=2).count(),
         },
     )
 
@@ -888,7 +799,6 @@ def set_vision_thresholds(request):
             **_counts(show_nsfw),
             "show_nsfw": show_nsfw,
             "mode": "config",
-            **_training_ctx(request),
         },
     )
 
@@ -920,9 +830,9 @@ def config_view(request):
         request,
         "ratings/config.html",
         {
+            "mode": "config",
             "sources": Source.objects.all(),
             "show_nsfw": show_nsfw,
-            **_training_ctx(request),
             **counts,
             **_schedule_ctx(),
             **_vision_ctx(),
@@ -1007,7 +917,7 @@ def source_toggle(request, pk):
 def source_delete(request, pk):
     """Permanently remove a source; past scraped images are unaffected."""
     get_object_or_404(Source, pk=pk).delete()
-    return HttpResponse("")
+    return with_toast(HttpResponse(""), "Source deleted")
 
 
 @login_required
@@ -1017,11 +927,9 @@ def source_import(request):
     from ratings.scraper import import_from_config
 
     n = import_from_config(Path(settings.CONFIG_PATH))
-    return render(
-        request,
-        "ratings/_source_list.html",
-        {"sources": Source.objects.all(), "imported": n},
-    )
+    response = render(request, "ratings/_source_list.html", {"sources": Source.objects.all()})
+    noun = "source" if n == 1 else "sources"
+    return with_toast(response, f"Imported {n} new {noun} from config.toml", kind="info")
 
 
 _LOG_SOURCES = {"scrape", "train"}
@@ -1054,11 +962,11 @@ def logs_page(request):
         "ratings/logs.html",
         {
             **_counts(show_nsfw),
-            **_training_ctx(request),
             "show_nsfw": show_nsfw,
             "entries": entries,
             "next_since": next_since,
             "active_source": source or "all",
+            "mode": "logs",
         },
     )
 
@@ -1092,6 +1000,7 @@ def log_entries(request):
 def log_clear(request):
     """Truncate all log entries — useful before a scrape to keep the log view clean."""
     LogEntry.objects.all().delete()
+    messages.success(request, "Log cleared")
     return redirect("logs")
 
 
@@ -1157,8 +1066,6 @@ def _browse_ctx(
             "prediction": _taste_prediction(image),
             **base,
         }
-        if request is not None:
-            ctx.update(_training_ctx(request))
         return ctx
 
     # No content_hash, or the requested image is gone (purged/deleted) — show
@@ -1169,8 +1076,6 @@ def _browse_ctx(
 
     if image is None:
         ctx = {"image": None, "mode": mode, **base}
-        if request is not None:
-            ctx.update(_training_ctx(request))
         return ctx
 
     prev_filter, next_filter = _queue_position_filters(image)
@@ -1196,8 +1101,6 @@ def _browse_ctx(
         "prediction": _taste_prediction(image),
         **base,
     }
-    if request is not None:
-        ctx.update(_training_ctx(request))
     return ctx
 
 
@@ -1250,6 +1153,9 @@ def _review_ctx(
         extra={
             "scores": range(1, 7),
             "score_url": "score_corpus",
+            "nsfw_url": "toggle_nsfw",
+            "hx_target": "#review-card",
+            "hx_swap": "outerHTML",
             "purge_url": "purge_corpus",
             "image_url": "review_corpus_image",
         },
@@ -1269,6 +1175,9 @@ def _review_nsfw_ctx(
         extra={
             "scores": range(1, 7),
             "score_url": "score_nsfw_corpus",
+            "nsfw_url": "toggle_nsfw",
+            "hx_target": "#review-card",
+            "hx_swap": "outerHTML",
             "purge_url": "purge_nsfw_corpus",
             "image_url": "review_nsfw_corpus_image",
         },
@@ -1328,17 +1237,11 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
         next_hash = _queue_neighbor_hash(qs, image)
     else:
         next_hash = content_hash
-    try:
-        # 0 is "trash" — below the 1-6 scale; still a real rating, so it leaves
-        # the queue and counts as the strongest negative training sample.
-        score_val = int(request.POST.get("score", -1))
-        if 0 <= score_val <= 6:
-            image.score = score_val
-            image.rated_at = timezone.now()
-            image.save(update_fields=["score", "rated_at"])
-            _invalidate_similar_index()
-    except (ValueError, TypeError):
-        pass
+    score_val = _score_from_post(request)
+    if score_val is not None:
+        image.score = score_val
+        image.rated_at = timezone.now()
+        image.save(update_fields=["score", "rated_at"])
     ctx = ctx_fn(next_hash, show_nsfw, request)
     _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
@@ -1363,7 +1266,8 @@ def _purge_impl(request, content_hash: str, qs_fn, ctx_fn):
     _purge_image(image)
     ctx = ctx_fn(next_hash, show_nsfw, request)
     _mark_queue_seen(ctx.get("image"))
-    return render(request, "ratings/_review_htmx.html", ctx)
+    response = render(request, "ratings/_review_htmx.html", ctx)
+    return with_toast(response, "Image purged")
 
 
 @login_required
@@ -1476,7 +1380,6 @@ def below_cutoff(request):
         "ratings/gallery.html",
         {
             **_counts(show_nsfw),
-            **_training_ctx(request),
             "images": images,
             "total": len(images),
             "min_score": 1,
@@ -1536,7 +1439,6 @@ def gallery(request):
         "ratings/gallery.html",
         {
             **_counts(show_nsfw),
-            **_training_ctx(request),
             "images": images,
             "total": len(images),
             "min_score": min_score,
@@ -1582,7 +1484,7 @@ def update_image_tags(request, content_hash: str):
 def tag_list(request):
     """List all tags with image counts for management (rename / delete)."""
     tags = list(Tag.objects.annotate(n=Count("images")).order_by("-n", "name"))
-    return render(request, "ratings/tags.html", {"tags": tags, **_counts()})
+    return render(request, "ratings/tags.html", {"tags": tags, "mode": "tags", **_counts()})
 
 
 @login_required
@@ -1624,43 +1526,7 @@ def tag_rename(request, pk: int):
 def tag_delete(request, pk: int):
     """Delete a tag and remove it from all images that carry it."""
     get_object_or_404(Tag, pk=pk).delete()
-    return HttpResponse("")
-
-
-@login_required
-@require_POST
-def gallery_action(request, content_hash: str):
-    """
-    Handle inline score/nsfw/purge actions from the gallery grid.
-
-    Returns JSON so the gallery JS can update the card in-place without a full
-    page reload. Purge returns {"deleted": True} as a signal to remove the card
-    from the DOM. Purge is a hard-delete — distinct from review's score-0
-    "trash", which keeps the file as a strong negative training example.
-    """
-    action = request.POST.get("action", "")
-    image = get_object_or_404(Image, content_hash=content_hash)
-    now = timezone.now()
-
-    if action == "purge":
-        _purge_image(image)
-        return JsonResponse({"deleted": True})
-
-    if action == "score":
-        try:
-            # 0 = trash (strongest negative); -1 default keeps a missing param a no-op.
-            score_val = int(request.POST.get("score", -1))
-            if 0 <= score_val <= 6:
-                image.score = score_val
-                image.rated_at = now
-                image.save(update_fields=["score", "rated_at"])
-        except (ValueError, TypeError):
-            pass
-    elif action == "nsfw":
-        image.is_nsfw = not image.is_nsfw
-        image.save(update_fields=["is_nsfw"])
-
-    return JsonResponse({"score": image.score, "nsfw": image.is_nsfw})
+    return with_toast(HttpResponse(""), "Tag deleted")
 
 
 @login_required
@@ -1688,9 +1554,16 @@ def share_image(request, content_hash):
             sent.append(ch.name)
         except Exception as exc:
             errors.append(f"{ch.name}: {exc}")
-    return render(
-        request, "ratings/_share_toast.html", {"sent": sent, "errors": errors}
-    )
+    # Nothing to swap: the outcome travels as a toast (204 keeps htmx from
+    # touching the DOM while still processing the HX-Trigger header).
+    parts = []
+    if sent:
+        parts.append("Shared to " + ", ".join(sent))
+    parts.extend(errors)
+    if not parts:
+        parts.append("No channels selected")
+    kind = "ok" if sent and not errors else "error"
+    return with_toast(HttpResponse(status=204), " · ".join(parts), kind)
 
 
 def _channel_list_ctx() -> dict:
@@ -1769,4 +1642,162 @@ def channel_toggle(request, pk: int):
 def channel_delete(request, pk: int):
     """Permanently delete a notification channel."""
     get_object_or_404(NotificationChannel, pk=pk).delete()
-    return HttpResponse("")
+    return with_toast(HttpResponse(""), "Channel deleted")
+
+
+@login_required
+def job_indicator(request):
+    """
+    Polling target for the nav's job indicator (UI contract V8).
+
+    The context comes from the active_jobs context processor, so this view
+    only picks the partial; it is polled every few seconds while a job runs
+    and the partial stops polling itself once it renders the idle state.
+    """
+    return render(request, "ratings/_nav_job.html")
+
+
+def _job_is_running(request) -> bool:
+    """
+    True while a scrape or train job is queued or running anywhere.
+
+    The session knows about jobs this browser started; OrmQ (django-q's ORM
+    broker table) still holds every task that is queued or running, including
+    scheduled scrapes and jobs started from another session, until the worker
+    acknowledges it after completion.
+    """
+    from django_q.models import OrmQ
+
+    if _training_ctx(request)["active_task_id"]:
+        return True
+    if _scrape_ctx(request)["active_scrape_task_id"]:
+        return True
+    return OrmQ.objects.exists()
+
+
+@login_required
+@require_POST
+def fresh_start_view(request):
+    """
+    Start over: wipe the library, keep the configuration (UI contract V12).
+
+    Three guards, all enforced here and not only in the UI: login and POST via
+    the decorators (OWASP A01), no running scrape or train job (its worker
+    would write rows and files into the wiped library), and the exact
+    confirmation word in the body (OWASP A04: a confirmation that lives only in
+    the sheet is one crafted request away from nothing).
+    """
+    if _job_is_running(request):
+        messages.error(
+            request, "A scrape or train job is running. Wait for it to finish before starting over."
+        )
+        return redirect("config")
+    if request.POST.get("confirm", "").strip() != reset.CONFIRM_WORD:
+        messages.error(
+            request, f"Type {reset.CONFIRM_WORD} to confirm the fresh start. Nothing was deleted."
+        )
+        return redirect("config")
+    result = reset.fresh_start(
+        Path(settings.DATA_DIR),
+        [Path(settings.WEIGHTS_PATH), Path(settings.NSFW_WEIGHTS_PATH)],
+    )
+    messages.success(
+        request,
+        f"Fresh start done: {result['images']} images and {result['weights']} classifier "
+        "file(s) removed. Sources, channels and settings kept.",
+    )
+    return redirect("config")
+
+
+def _score_from_post(request) -> int | None:
+    """
+    The score a form submitted, or None when it is missing or outside 0–6.
+
+    0 is "trash": below the 1–6 scale but a real rating. Anything else (a
+    missing field, text, 7) is ignored instead of answered with an error: the
+    buttons only ever send 0–6, so a bad value means a stale page, and
+    re-rendering the current state is the right answer to that.
+    """
+    try:
+        value = int(request.POST.get("score", -1))
+    except (ValueError, TypeError):
+        return None
+    if 0 <= value <= 6:
+        return value
+    return None
+
+
+# ── Gallery lightbox (UI contract V9) ────────────────────────────────────────
+
+
+def _lightbox_ctx(image: Image) -> dict:
+    """
+    Context for the lightbox panel. It names the same shared partials as the
+    review card (score row, action row, tag editor) with its own endpoints,
+    and `lightbox=True` makes prev/next client-side so the order is the
+    grid's, which only the browser knows (random sort, tag filter).
+    """
+    return {
+        "image": image,
+        "prediction": _taste_prediction(image),
+        "scores": range(1, 7),
+        "lightbox": True,
+        "score_url": "lightbox_score",
+        "purge_url": "lightbox_purge",
+        "nsfw_url": "lightbox_nsfw",
+        "hx_target": "#lightbox-content",
+        "hx_swap": "innerHTML",
+    }
+
+
+def _lightbox_update(request, image: Image | None, deleted_hash: str | None = None):
+    """
+    Answer a lightbox action with the panel plus, out of band, the grid card
+    and the nav badges, so one response keeps every view of the image in step.
+    A purged image has no panel; its card is deleted from the grid instead.
+    """
+    show_nsfw = request.session.get("show_nsfw", False)
+    ctx = {**_counts(show_nsfw), "show_nsfw": show_nsfw, "deleted_hash": deleted_hash}
+    if image is not None:
+        ctx.update(_lightbox_ctx(image))
+    return render(request, "ratings/_lightbox_update.html", ctx)
+
+
+@login_required
+def lightbox(request, content_hash: str):
+    image = get_object_or_404(
+        Image.objects.prefetch_related("tags"), content_hash=content_hash, is_purged=False
+    )
+    return render(request, "ratings/_lightbox.html", _lightbox_ctx(image))
+
+
+@login_required
+@require_POST
+def lightbox_score(request, content_hash: str):
+    """Re-score from the gallery or Below cutoff; the image stays in view (no rate-and-advance there)."""
+    image = get_object_or_404(Image, content_hash=content_hash, is_purged=False)
+    score_val = _score_from_post(request)
+    if score_val is not None:
+        image.score = score_val
+        image.rated_at = timezone.now()
+        image.save(update_fields=["score", "rated_at"])
+    return _lightbox_update(request, image)
+
+
+@login_required
+@require_POST
+def lightbox_nsfw(request, content_hash: str):
+    image = get_object_or_404(Image, content_hash=content_hash, is_purged=False)
+    image.is_nsfw = not image.is_nsfw
+    image.save(update_fields=["is_nsfw"])
+    return _lightbox_update(request, image)
+
+
+@login_required
+@require_POST
+def lightbox_purge(request, content_hash: str):
+    """Hard-delete from the lightbox; the grid card leaves with the response and the toast reports it."""
+    image = get_object_or_404(Image, content_hash=content_hash, is_purged=False)
+    _purge_image(image)
+    response = _lightbox_update(request, None, deleted_hash=content_hash)
+    return with_toast(response, "Image purged")

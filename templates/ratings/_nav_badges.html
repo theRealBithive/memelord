@@ -1,0 +1,4 @@
+{# Out-of-band nav badge refresh for responses that change counts without re-rendering the nav. #}
+<span class="badge" id="badge-queue" hx-swap-oob="true">{{ queue_count }}</span>
+<span class="badge" id="badge-below" hx-swap-oob="true">{{ below_cutoff_count }}</span>
+{% if not show_nsfw %}<span class="badge" id="badge-nsfw-queue" hx-swap-oob="true">{{ nsfw_queue_count }}</span>{% endif %}

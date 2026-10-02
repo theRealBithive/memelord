@@ -64,7 +64,12 @@ class ScrapeStatusSessionTests(TestCase):
     def test_completed_poll_does_not_clear_session_for_unrelated_task_id(
         self, mock_fetch
     ) -> None:
-        mock_fetch.return_value = _completed_task()
+        # Only the polled task is finished; the session's own job is still
+        # running, which is what every page load (via the active_jobs context
+        # processor) checks before keeping or clearing the session.
+        mock_fetch.side_effect = (
+            lambda task_id: _completed_task() if task_id == "other-task" else _running_task()
+        )
 
         response = self.client.get(reverse("scrape_status", args=["other-task"]))
 
@@ -204,11 +209,13 @@ class ScrapeCtxStaleTests(TestCase):
         session["scrape_started_at"] = timezone.now().isoformat()
         session.save()
 
-        response = self.client.get(reverse("stats"))
+        response = self.client.get(reverse("config"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.session["scrape_task_id"], "running-task")
+        # The scrape panel lives on Config since the UI overhaul; the nav shows the job everywhere.
         self.assertContains(response, "train-pending")
+        self.assertContains(response, "Scraping")
 
     @patch("django_q.tasks.fetch", return_value=None)
     def test_scrape_ctx_clears_lost_task_on_page_load(self, mock_fetch) -> None:

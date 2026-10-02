@@ -35,6 +35,13 @@ class Image(models.Model):
     is_purged = models.BooleanField(default=False)
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
     embedding = models.BinaryField(null=True, blank=True)
+    # Name of the encoder that produced `embedding` (core.brain.ENCODER_ID at
+    # write time), empty when there is no vector. Vectors from different
+    # encoders live in different spaces, so every similarity computation
+    # filters on this stamp and a mismatch marks the row for re-encoding.
+    embedding_model = models.CharField(
+        max_length=32, blank=True, default="", db_index=True
+    )
     predicted_score = models.FloatField(null=True, blank=True, db_index=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="images")
     queue_seen_at = models.DateTimeField(null=True, blank=True)
@@ -52,7 +59,7 @@ class Image(models.Model):
         Parsed knn_tag_suggestions field as a list, excluding already-applied tags.
 
         Suggestions are the user's own tags inherited from visually similar
-        already-tagged images via DINOv2 kNN — they encode taste/theme, not
+        already-tagged images via DINO kNN — they encode taste/theme, not
         objects, so they line up with how the user actually labels things.
 
         Reads `applied` from `tags.all()` rather than `tags.values_list(...)` so

@@ -9,8 +9,10 @@ from django.db import IntegrityError
 from loguru import logger
 
 from core import brain, dedup, nsfw
+from ratings.embeddings import has_current_embedding, stale_images
 from ratings.models import Image, Source
-from retina import fourchan, imgur, mastodon as mastodon_scraper, pixelfed, tumblr
+from retina import fourchan, imgur, pixelfed, tumblr
+from retina import mastodon as mastodon_scraper
 
 # Maps Source.type → (toml_section, toml_key, result_key) for list-based sources.
 _SOURCE_MAP = [
@@ -181,7 +183,7 @@ def _process_candidates(
     embeddings, valid_paths = brain.encode(
         encoder, paths, transform=transform, progress_label="scrape"
     )
-    path_to_emb = dict(zip(valid_paths, embeddings))
+    path_to_emb = dict(zip(valid_paths, embeddings, strict=True))
     inserted = 0
 
     for path, source_url, source_label, h, ph in candidates:
@@ -205,6 +207,7 @@ def _process_candidates(
                 is_nsfw=is_nsfw,
                 phash=ph,
                 embedding=brain.embedding_to_bytes(emb),
+                embedding_model=brain.ENCODER_ID,
             )
         except IntegrityError:
             # A concurrent scrape (gunicorn manual trigger vs. qcluster auto)
@@ -269,10 +272,13 @@ def classify_images(
 
     logger.info("Auto-classifying {} images.", len(images))
 
-    # Only encode images missing an embedding or phash — the common case is
-    # that everything was encoded at scrape time and we can read from the DB.
-    backfill = [img for img in images if img.embedding is None or not img.phash]
-    path_to_emb: dict[Path, "object"] = {}
+    # Only encode images whose vector is missing or from an older encoder, or
+    # that lack a phash — the common case is that everything was encoded at
+    # scrape time with the current encoder and we can read from the DB (V3).
+    backfill = [
+        img for img in images if not has_current_embedding(img) or not img.phash
+    ]
+    path_to_emb: dict[Path, object] = {}
     if backfill:
         if encoder is None:
             encoder = brain.get_encoder()
@@ -285,7 +291,7 @@ def classify_images(
             transform=transform,
             progress_label="classify_images",
         )
-        path_to_emb = dict(zip(valid_paths, embeddings))
+        path_to_emb = dict(zip(valid_paths, embeddings, strict=True))
 
     taste_clf = None
     if need_vision:
@@ -299,14 +305,15 @@ def classify_images(
         path = data_dir / img.file_path
         update_fields: list[str] = []
 
-        if img.embedding is not None:
+        if has_current_embedding(img):
             emb = brain.bytes_to_embedding(bytes(img.embedding))
         else:
             emb = path_to_emb.get(path)
             if emb is None:
                 continue
             img.embedding = brain.embedding_to_bytes(emb)
-            update_fields.append("embedding")
+            img.embedding_model = brain.ENCODER_ID
+            update_fields.extend(["embedding", "embedding_model"])
 
         if not img.phash:
             from core import phash as phash_mod
@@ -346,7 +353,7 @@ def populate_knn_tag_suggestions(
 ) -> dict[str, int]:
     """
     Fill Image.knn_tag_suggestions by inheriting tags from k visually-similar
-    already-tagged images via cosine similarity over DINOv2 embeddings.
+    already-tagged images via cosine similarity over DINOv3 embeddings.
 
     The point: kNN over embeddings is the cheapest way to surface the user's
     own taste tags ("warhammer40k", "cursed") on new images without ever
@@ -360,8 +367,12 @@ def populate_knn_tag_suggestions(
 
     from core import brain
 
+    # Anchors and targets are both restricted to the current encoder (V2);
+    # a neighbour from another embedding space would inherit tags by chance.
     anchors = list(
-        Image.objects.filter(is_purged=False, tags__isnull=False)
+        Image.objects.filter(
+            is_purged=False, tags__isnull=False, embedding_model=brain.ENCODER_ID
+        )
         .exclude(embedding=None)
         .distinct()
         .prefetch_related("tags")
@@ -382,7 +393,9 @@ def populate_knn_tag_suggestions(
     anchor_tags = [list(a.tags.values_list("name", flat=True)) for a in anchors]
     anchor_hashes = [a.content_hash for a in anchors]
 
-    qs = Image.objects.filter(is_purged=False).exclude(embedding=None)
+    qs = Image.objects.filter(
+        is_purged=False, embedding_model=brain.ENCODER_ID
+    ).exclude(embedding=None)
     if not refill:
         qs = qs.filter(knn_tag_suggestions="")
     if limit:
@@ -454,6 +467,14 @@ def run(
     images_dir.mkdir(parents=True, exist_ok=True)
     skip_dirs = [images_dir]
     index = dedup.DedupIndex.from_db()
+    stale = stale_images().exclude(embedding=None).count()
+    if stale:
+        logger.warning(
+            "{} images still carry embeddings from an older encoder; the cosine "
+            "dedup layer skips them until they are re-encoded (run Train or "
+            "`manage.py reencode_embeddings`).",
+            stale,
+        )
 
     encoder = brain.get_encoder()
     transform = brain.get_transform()

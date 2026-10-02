@@ -4,14 +4,14 @@
   </td>
   <td class="tag-cell-count">{{ tag.n }}</td>
   <td class="tag-cell-actions">
-    <button class="tag-btn tag-btn-edit"
+    <button class="btn-pill btn-pill--accent"
             hx-get="{% url 'tag_rename' tag.pk %}?edit=1"
             hx-target="#tag-row-{{ tag.pk }}"
             hx-swap="outerHTML">rename</button>
-    <button class="tag-btn tag-btn-delete"
+    <button class="btn-pill btn-pill--danger"
             hx-post="{% url 'tag_delete' tag.pk %}"
             hx-target="#tag-row-{{ tag.pk }}"
             hx-swap="outerHTML"
-            {% if tag.n > 0 %}hx-confirm="Remove tag #{{ tag.name }} from {{ tag.n }} image{{ tag.n|pluralize }}?"{% endif %}>delete</button>
+            hx-confirm="Delete tag #{{ tag.name }}? It is on {{ tag.n }} image{{ tag.n|pluralize }}.">delete</button>
   </td>
 </tr>

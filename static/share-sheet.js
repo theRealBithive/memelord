@@ -1,9 +1,10 @@
 /*
  * share-sheet.js — Singleton bottom-sheet channel picker.
  *
- * Opens a slide-up panel listing notification channels as checkboxes.
- * All channels are pre-checked (faster on mobile: uncheck to skip).
- * POSTs selected PKs to `shareUrl` and calls `onResult(html)` on success.
+ * Opens a slide-up panel listing notification channels as checkboxes and
+ * POSTs the selected PKs to `shareUrl` through htmx.ajax, so the response's
+ * HX-Trigger toast is shown by toast.js exactly like a share from the
+ * single-channel form. `onResult()` is called after a completed request.
  *
  * window.ShareSheet.open({ channels, shareUrl, onResult })
  * window.ShareSheet.close()
@@ -11,7 +12,7 @@
 (function () {
   "use strict";
 
-  let sheet, backdrop, channelList, sendBtn, triggerEl, inFlight;
+  let sheet, channelList, sendBtn, triggerEl;
 
   function resetSendBtn() {
     if (!sendBtn) return;
@@ -22,36 +23,30 @@
   function hideSheet() {
     if (!sheet || sheet.hidden) return;
     sheet.hidden = true;
-    document.body.classList.remove("share-sheet--open");
+    document.body.classList.remove("sheet-open");
     if (triggerEl) {
       triggerEl.focus();
       triggerEl = null;
     }
   }
 
-  function getCsrf() {
-    const v = `; ${document.cookie}`;
-    const p = v.split("; csrftoken=");
-    return p.length === 2 ? p.pop().split(";").shift() : "";
-  }
-
   function build() {
     sheet = document.createElement("div");
-    sheet.className = "share-sheet";
+    sheet.className = "sheet";
     sheet.setAttribute("role", "dialog");
     sheet.setAttribute("aria-modal", "true");
     sheet.setAttribute("aria-label", "Share");
     sheet.hidden = true;
 
-    backdrop = document.createElement("div");
-    backdrop.className = "share-sheet-backdrop";
+    const backdrop = document.createElement("div");
+    backdrop.className = "sheet-backdrop";
     backdrop.addEventListener("click", close);
 
     const inner = document.createElement("div");
-    inner.className = "share-sheet-inner";
+    inner.className = "sheet-inner";
 
     const title = document.createElement("div");
-    title.className = "share-sheet-title";
+    title.className = "sheet-title";
     title.textContent = "Share to…";
 
     channelList = document.createElement("div");
@@ -59,12 +54,12 @@
 
     sendBtn = document.createElement("button");
     sendBtn.type = "button";
-    sendBtn.className = "share-sheet-send";
+    sendBtn.className = "sheet-send";
     sendBtn.textContent = "Send";
 
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
-    cancelBtn.className = "share-sheet-cancel";
+    cancelBtn.className = "sheet-cancel";
     cancelBtn.textContent = "Cancel";
     cancelBtn.addEventListener("click", close);
 
@@ -83,10 +78,6 @@
   }
 
   function close() {
-    if (inFlight) {
-      inFlight.abort();
-      inFlight = null;
-    }
     resetSendBtn();
     hideSheet();
   }
@@ -113,7 +104,7 @@
       channelList.appendChild(label);
     });
 
-    // Swap sendBtn to drop stale listeners from previous open.
+    // Swap sendBtn to drop stale listeners from the previous open.
     const newSend = sendBtn.cloneNode(true);
     sendBtn.replaceWith(newSend);
     sendBtn = newSend;
@@ -128,45 +119,29 @@
       sendBtn.disabled = true;
       sendBtn.textContent = "Sending…";
 
-      const params = new URLSearchParams();
-      selected.forEach((pk) => params.append("channels", pk));
-
-      const ac = new AbortController();
-      inFlight = ac;
-
-      fetch(shareUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "X-CSRFToken": getCsrf(),
-        },
-        body: params,
-        signal: ac.signal,
-      })
-        .then((r) => r.text())
-        .then((html) => {
-          inFlight = null;
-          resetSendBtn();
-          hideSheet();
-          if (onResult) onResult(html);
-        })
-        .catch((err) => {
-          if (err.name === "AbortError") return;
-          resetSendBtn();
-        })
-        .finally(() => {
-          if (inFlight === ac) inFlight = null;
-        });
+      htmx.ajax("POST", shareUrl, { source: sheet, swap: "none", values: { channels: selected } })
+        .then(() => { if (onResult) onResult(); })
+        .finally(() => { resetSendBtn(); hideSheet(); });
     });
 
     triggerEl = document.activeElement;
     sheet.hidden = false;
-    document.body.classList.add("share-sheet--open");
+    document.body.classList.add("sheet-open");
 
-    // Move focus to the first checkbox for keyboard/screen-reader users.
     const firstCb = channelList.querySelector("input");
     if (firstCb) firstCb.focus();
   }
+
+  // One picker trigger for every page: any .share-btn--picker (review card,
+  // lightbox) opens the sheet with the channels base.html embeds.
+  const shareChannels = JSON.parse(
+    document.getElementById("share-channels-data")?.textContent || "[]"
+  );
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".share-btn--picker");
+    if (!btn || !btn.dataset.shareUrl || !shareChannels.length) return;
+    open({ channels: shareChannels, shareUrl: btn.dataset.shareUrl });
+  });
 
   window.ShareSheet = { open, close };
 })();

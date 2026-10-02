@@ -1,18 +1,21 @@
 {% if share_channels %}
 {% if share_channels|length == 1 %}
-<form class="share-form"
+<form class="action-form"
       hx-post="{% url 'share_image' image.content_hash %}"
-      hx-target="#share-toast"
-      hx-swap="outerHTML">
+      hx-swap="none">
   {% csrf_token %}
   <input type="hidden" name="channels" value="{{ share_channels.0.pk }}">
-  <button type="submit" class="share-btn" title="Share to {{ share_channels.0.name }}">↗</button>
+  <button type="submit" class="action-btn share-btn" data-action="share" title="Share to {{ share_channels.0.name }}">
+    <span class="action-icon">↗</span><span class="action-label">Share</span>
+  </button>
 </form>
 {% else %}
 <button type="button"
-        class="share-btn share-btn--picker"
+        class="action-btn share-btn share-btn--picker"
+        data-action="share"
         data-share-url="{% url 'share_image' image.content_hash %}"
-        title="Share…">↗</button>
+        title="Share…">
+  <span class="action-icon">↗</span><span class="action-label">Share</span>
+</button>
 {% endif %}
-<span id="share-toast"></span>
 {% endif %}

@@ -2,7 +2,7 @@
 
 Covers POST /review/<hash>/score/ (score_corpus) — setting the score, advancing
 to the next queue item, end-of-queue behaviour — and re-scoring a below-cutoff
-image from the gallery lightbox (gallery_action).
+image from the gallery lightbox (lightbox_score / lightbox_purge).
 """
 
 import os
@@ -180,7 +180,7 @@ class ScoreCorpusTests(TestCase):
 
 @override_settings(DEBUG=True)
 class BelowCutoffRescoreTests(TestCase):
-    """Re-scoring a low-scored image from the gallery lightbox (gallery_action)."""
+    """Re-scoring a low-scored image from the gallery lightbox (lightbox_score / lightbox_purge)."""
 
     def setUp(self) -> None:
         Image.objects.all().delete()
@@ -200,13 +200,11 @@ class BelowCutoffRescoreTests(TestCase):
         )
         return h
 
-    def test_rescore_updates_score_and_returns_json(self) -> None:
+    def test_rescore_updates_score_and_rerenders_the_panel(self) -> None:
         h = self._scored(1)
-        response = self.client.post(
-            reverse("gallery_action", args=[h]), {"action": "score", "score": "5"}
-        )
+        response = self.client.post(reverse("lightbox_score", args=[h]), {"score": "5"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["score"], 5)
+        self.assertIn("score-btn--5 score-active", response.content.decode())
         self.assertEqual(Image.objects.get(content_hash=h).score, 5)
 
     def test_rescored_image_leaves_below_cutoff(self) -> None:
@@ -215,41 +213,32 @@ class BelowCutoffRescoreTests(TestCase):
         before = self.client.get(reverse("below_cutoff")).content.decode()
         self.assertIn(h, before)
 
-        self.client.post(
-            reverse("gallery_action", args=[h]), {"action": "score", "score": "5"}
-        )
+        self.client.post(reverse("lightbox_score", args=[h]), {"score": "5"})
 
         after = self.client.get(reverse("below_cutoff")).content.decode()
         self.assertNotIn(h, after)
 
     def test_purge_hard_deletes_and_marks_purged(self) -> None:
         h = self._scored(1)
-        response = self.client.post(
-            reverse("gallery_action", args=[h]), {"action": "purge"}
-        )
+        response = self.client.post(reverse("lightbox_purge", args=[h]))
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json().get("deleted"))
+        self.assertIn(f'id="item-{h}" hx-swap-oob="delete"', response.content.decode())
         self.assertTrue(Image.objects.get(content_hash=h).is_purged)
 
-    def test_legacy_trash_action_does_not_hard_delete(self) -> None:
-        """The hard-delete action is 'purge' now; a stray 'trash' must not delete."""
+    def test_scoring_never_deletes(self) -> None:
+        """Only the purge endpoint deletes; no score value can (the old JSON API had an action field)."""
         h = self._scored(1)
-        response = self.client.post(
-            reverse("gallery_action", args=[h]), {"action": "trash"}
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn("deleted", response.json())
-        self.assertFalse(Image.objects.get(content_hash=h).is_purged)
+        for value in ("0", "purge", "trash", ""):
+            self.client.post(reverse("lightbox_score", args=[h]), {"score": value})
+            self.assertFalse(Image.objects.get(content_hash=h).is_purged, value)
 
     def test_rescore_requires_post(self) -> None:
         h = self._scored(1)
-        response = self.client.get(reverse("gallery_action", args=[h]))
+        response = self.client.get(reverse("lightbox_score", args=[h]))
         self.assertEqual(response.status_code, 405)
 
     def test_rescore_requires_login(self) -> None:
         h = self._scored(1)
-        response = Client().post(
-            reverse("gallery_action", args=[h]), {"action": "score", "score": "5"}
-        )
+        response = Client().post(reverse("lightbox_score", args=[h]), {"score": "5"})
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login/", response.url)

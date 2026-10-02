@@ -1,0 +1,4 @@
+{% include "ratings/_lightbox.html" %}
+{% if image %}{% include "ratings/_gallery_item.html" with oob=True %}{% endif %}
+{% if deleted_hash %}<a id="item-{{ deleted_hash }}" hx-swap-oob="delete"></a>{% endif %}
+{% include "ratings/_nav_badges.html" %}

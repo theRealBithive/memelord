@@ -1,7 +1,4 @@
 <div id="source-list">
-{% if imported is not None %}
-<p class="import-notice">Imported {{ imported }} new source{{ imported|pluralize }} from config.toml.</p>
-{% endif %}
 {% for source in sources %}
   {% include "ratings/_source_row.html" %}
 {% empty %}

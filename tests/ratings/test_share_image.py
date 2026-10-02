@@ -1,4 +1,5 @@
-"""Tests for share_image view — channel dispatch, disabled-channel filtering, toast output."""
+"""Tests for share_image view — channel dispatch, disabled-channel filtering, and the
+toast that reports the outcome (UI contract V7: the response is a 204 carrying HX-Trigger)."""
 
 import os
 import uuid
@@ -65,9 +66,9 @@ class ShareImageDispatchTests(TestCase):
             reverse("share_image", args=[self.image.content_hash]),
             {"channels": [ch.pk]},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 204)
         mock_mm.assert_called_once()
-        self.assertIn(ch.name, response.content.decode())
+        self.assertIn(ch.name, response["HX-Trigger"])
 
     @patch("ratings.notifiers.send_to_signal")
     def test_dispatches_to_selected_signal_channel(self, mock_sig) -> None:
@@ -76,9 +77,9 @@ class ShareImageDispatchTests(TestCase):
             reverse("share_image", args=[self.image.content_hash]),
             {"channels": [ch.pk]},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 204)
         mock_sig.assert_called_once()
-        self.assertIn(ch.name, response.content.decode())
+        self.assertIn(ch.name, response["HX-Trigger"])
 
     @patch("ratings.notifiers.send_to_mattermost")
     @patch("ratings.notifiers.send_to_signal")
@@ -89,10 +90,10 @@ class ShareImageDispatchTests(TestCase):
             reverse("share_image", args=[self.image.content_hash]),
             {"channels": [mm.pk, sig.pk]},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 204)
         mock_mm.assert_called_once()
         mock_sig.assert_called_once()
-        body = response.content.decode()
+        body = response["HX-Trigger"]
         self.assertIn("TownSquare", body)
         self.assertIn("Aurea", body)
 
@@ -103,10 +104,10 @@ class ShareImageDispatchTests(TestCase):
             reverse("share_image", args=[self.image.content_hash]),
             {"channels": [disabled.pk]},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 204)
         mock_mm.assert_not_called()
         # No channel sent → "No channels selected" or empty sent list
-        body = response.content.decode()
+        body = response["HX-Trigger"]
         self.assertNotIn("Disabled", body)
 
     @patch("ratings.notifiers.send_to_mattermost")
@@ -115,9 +116,9 @@ class ShareImageDispatchTests(TestCase):
             reverse("share_image", args=[self.image.content_hash]),
             {},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 204)
         mock_mm.assert_not_called()
-        self.assertIn("No channels", response.content.decode())
+        self.assertIn("No channels", response["HX-Trigger"])
 
     @patch("ratings.notifiers.send_to_mattermost", side_effect=RuntimeError("timeout"))
     def test_notifier_error_appears_in_toast(self, mock_mm) -> None:
@@ -126,6 +127,6 @@ class ShareImageDispatchTests(TestCase):
             reverse("share_image", args=[self.image.content_hash]),
             {"channels": [ch.pk]},
         )
-        self.assertEqual(response.status_code, 200)
-        body = response.content.decode()
+        self.assertEqual(response.status_code, 204)
+        body = response["HX-Trigger"]
         self.assertIn("timeout", body)

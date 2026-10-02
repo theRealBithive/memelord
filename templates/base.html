@@ -1,0 +1,42 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <link rel="manifest" href="{% static 'manifest.json' %}">
+  <link rel="icon" type="image/png" sizes="192x192" href="{% static 'icons/icon-192.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+  <title>memelord — {% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="{% static 'vendor/htmx.min.js' %}" defer></script>
+  <script src="{% static 'nav.js' %}" defer></script>
+  <script src="{% static 'sheet.js' %}" defer></script>
+  <script src="{% static 'toast.js' %}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  {% block nav %}{% include "ratings/_nav.html" %}{% endblock %}
+  {% block content %}{% endblock %}
+  <div id="toast-slot" aria-live="polite"></div>
+  {% if server_toasts %}{{ server_toasts|json_script:"server-toasts" }}{% endif %}
+  <div id="confirm-sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-sheet-title" hidden>
+    <div class="sheet-backdrop"></div>
+    <div class="sheet-inner">
+      <div class="sheet-title" id="confirm-sheet-title">Are you sure?</div>
+      <p class="sheet-text"></p>
+      <label class="sheet-word" hidden>
+        <span class="sheet-word-label"></span>
+        <input class="field sheet-word-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      </label>
+      <button type="button" class="sheet-confirm">Delete</button>
+      <button type="button" class="sheet-cancel">Cancel</button>
+    </div>
+  </div>
+  <script id="share-channels-data" type="application/json">[{% for ch in share_channels %}{"pk": {{ ch.pk }}, "name": "{{ ch.name|escapejs }}"}{% if not forloop.last %}, {% endif %}{% endfor %}]</script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -5,9 +5,9 @@
           hx-swap="outerHTML"
           class="tag-rename-form">
       {% csrf_token %}
-      <input class="tag-rename-input" name="name" value="{{ tag.name }}" autofocus>
-      <button type="submit" class="tag-btn tag-btn-edit">save</button>
-      <button type="button" class="tag-btn"
+      <input class="field" name="name" value="{{ tag.name }}" autofocus>
+      <button type="submit" class="btn-pill btn-pill--accent">save</button>
+      <button type="button" class="btn-pill"
               hx-get="{% url 'tag_rename' tag.pk %}"
               hx-target="#tag-row-{{ tag.pk }}"
               hx-swap="outerHTML">cancel</button>

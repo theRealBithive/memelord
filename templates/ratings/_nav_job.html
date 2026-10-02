@@ -1,0 +1,10 @@
+{% if active_task_id or active_scrape_task_id %}
+<span id="nav-job" class="nav-job" role="status"
+      hx-get="{% url 'job_indicator' %}" hx-trigger="every 5s" hx-swap="outerHTML"{% if nav_job_oob %} hx-swap-oob="true"{% endif %}
+      title="{% if active_task_id %}Training{% else %}Scraping{% endif %} in progress">
+  <span class="nav-job-spinner" aria-hidden="true">⟳</span>
+  <span class="nav-job-label">{% if active_task_id %}Training {{ training_elapsed|default:"" }}{% else %}Scraping {{ scrape_elapsed|default:"" }}{% endif %}</span>
+</span>
+{% else %}
+<span id="nav-job" class="nav-job nav-job--idle"{% if nav_job_oob %} hx-swap-oob="true"{% endif %}></span>
+{% endif %}

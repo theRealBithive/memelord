@@ -75,7 +75,10 @@ class BelowCutoffViewTests(TestCase):
 
         self.assertIn("gallery-item-score--unrated", content)
         self.assertIn(">unrated<", content)
-        self.assertIn(f'data-predicted="{reject.predicted_score}"', content)
+        # The prediction is shown in the lightbox panel, which the grid card opens.
+        self.assertIn(reverse("lightbox", args=[reject.content_hash]), content)
+        panel = self.client.get(reverse("lightbox", args=[reject.content_hash])).content.decode()
+        self.assertIn('class="meta-pred">20%<', panel)
 
     def test_unrated_null_predicted_not_in_below(self) -> None:
         """Unclassified images belong in review only until classify runs."""

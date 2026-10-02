@@ -1,9 +1,10 @@
 <div id="train-result" class="train-result {% if ok %}train-ok{% else %}train-err{% endif %}">
 {% if ok %}
   <span class="train-icon">✓</span>
-  <span>Trained on {{ liked_n }} liked + {{ below_cutoff_n }} below-cutoff images. Weights saved.</span>
+  <span>Trained on {{ positive_n }} positive (score ≥ 3) and {{ negative_n }} negative (score ≤ 2) images. Weights saved.</span>
 {% else %}
   <span class="train-icon">✕</span>
   <span>{{ error }}</span>
 {% endif %}
 </div>
+{% include "ratings/_nav_job.html" with nav_job_oob=True %}

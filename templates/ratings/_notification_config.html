@@ -1,7 +1,7 @@
 {% include "ratings/_channel_list.html" %}
 
-<div style="margin-top:1rem">
-  <div class="section-title" style="margin-bottom:0.6rem">Add channel</div>
+<div class="subsection">
+  <div class="section-title">Add channel</div>
   <!-- Errors render into #channel-add-error; on success the refreshed list is
        swapped in out-of-band and this slot is cleared, so a validation failure
        never blows away the existing channel list. -->
@@ -11,12 +11,12 @@
         hx-swap="innerHTML"
         hx-on::after-request="this.querySelector('input[name=name]').value=''">
     {% csrf_token %}
-    <select name="service">
+    <select name="service" class="field">
       <option value="mattermost">Mattermost</option>
       <option value="signal">Signal</option>
     </select>
-    <input type="text" name="name" placeholder="Channel name (e.g. Aurea)" required autocomplete="off">
-    <button type="submit">Add</button>
+    <input class="field" type="text" name="name" placeholder="Channel name (e.g. Aurea)" required autocomplete="off">
+    <button type="submit" class="btn-primary">Add</button>
   </form>
   <div id="channel-add-error"></div>
 </div>

@@ -1,14 +1,7 @@
-{% load static %}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0a0a0a">
-  <title>memelord — login</title>
-  <link rel="stylesheet" href="{% static 'app.css' %}">
-</head>
-<body>
+{% extends "base.html" %}
+{% block title %}login{% endblock %}
+{% block nav %}{% endblock %}
+{% block content %}
   <div class="login-wrap">
     <form class="login-form" method="post">
       {% csrf_token %}
@@ -16,10 +9,9 @@
       {% if form.errors %}
         <p class="login-error">Invalid credentials.</p>
       {% endif %}
-      <input type="text" name="username" placeholder="Username" autofocus required autocomplete="username">
-      <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
-      <button type="submit">Sign in</button>
+      <input class="field" type="text" name="username" placeholder="Username" autofocus required autocomplete="username">
+      <input class="field" type="password" name="password" placeholder="Password" required autocomplete="current-password">
+      <button type="submit" class="btn-primary">Sign in</button>
     </form>
   </div>
-</body>
-</html>
+{% endblock %}

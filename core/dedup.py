@@ -40,7 +40,7 @@ class DedupIndex:
 
         rows = list(
             Image.objects.all().values_list(
-                "content_hash", "phash", "embedding"
+                "content_hash", "phash", "embedding", "embedding_model"
             )
         )
         content_hashes = {r[0] for r in rows}
@@ -48,7 +48,16 @@ class DedupIndex:
         # the per-candidate scan (PERF-8). The `if r[1]` guard drops NULL/empty
         # phashes; a "0000…" hash is kept (int 0 is a valid fingerprint).
         phash_ints = [int(r[1], 16) for r in rows if r[1]]
-        embeddings_list = [brain.bytes_to_embedding(r[2]) for r in rows if r[2]]
+        # Only vectors from the current encoder enter the cosine layer (V2): a
+        # vector from another encoder makes every similarity against it noise,
+        # and noise around the 0.92 threshold means random rejections of new
+        # images. Hashes from every row stay in, so the SHA and pHash layers are
+        # independent of the embedding generation (V7).
+        embeddings_list = [
+            brain.bytes_to_embedding(r[2])
+            for r in rows
+            if r[2] and r[3] == brain.ENCODER_ID
+        ]
         embeddings = (
             np.vstack(embeddings_list)
             if embeddings_list
@@ -65,17 +74,15 @@ class DedupIndex:
         Keeps the index current after each DB insert so a second image with
         near-identical content scraped in the same session is caught by the
         DINO check rather than slipping through because the index only reflects
-        the state at scrape startup. vstack on an empty (0, 768) array raises,
-        so the first embedding replaces the zero-row matrix outright.
+        the state at scrape startup. np.vstack accepts the empty (0, 768) start
+        matrix, so the first row needs no special case.
         """
         self.content_hashes.add(content_hash)
         if ph:
             self.phash_ints.append(int(ph, 16))
         if emb is not None:
             row = np.asarray(emb, dtype=np.float32).reshape(1, -1)
-            self.embeddings = (
-                row if self.embeddings.size == 0 else np.vstack([self.embeddings, row])
-            )
+            self.embeddings = np.vstack([self.embeddings, row])
 
 
 def content_hash_for_file(path: Path) -> str:

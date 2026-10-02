@@ -86,7 +86,7 @@ class _CannedCursor:
     def fetchone(self) -> tuple[str]:
         return ("delete",)
 
-    def __enter__(self) -> "_CannedCursor":
+    def __enter__(self) -> _CannedCursor:
         return self
 
     def __exit__(self, *exc: object) -> bool:

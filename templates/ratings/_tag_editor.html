@@ -1,0 +1,11 @@
+{# Tag editor shared by the review card and the gallery lightbox (UI contract V9). tags.js wires every .card-tags it finds. #}
+<div class="card-tags">
+  {% for tag in image.tags.all %}<span class="tag-pill" data-tag="{{ tag.name }}">#{{ tag.name }} <button class="tag-remove" aria-label="remove tag">×</button></span>{% endfor %}
+  <input class="tag-input" type="text" placeholder="+ tag"
+         data-tag-url="{% url 'update_image_tags' image.content_hash %}"
+         data-autocomplete-url="{% url 'tag_autocomplete' %}"
+         autocomplete="off">
+  <button type="button" class="tag-modal-open" aria-label="Edit tags">+ tag</button>
+  <div class="tag-autocomplete" hidden></div>
+  {% if image.knn_tag_suggestions_list %}<div class="suggestion-group">{% for kw in image.knn_tag_suggestions_list %}<button class="tag-suggestion-pill" data-tag="{{ kw }}" data-tag-url="{% url 'update_image_tags' image.content_hash %}">{{ kw }}</button>{% endfor %}</div>{% endif %}
+</div>

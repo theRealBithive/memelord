@@ -1,68 +1,135 @@
-"""The neural logic: DINOv2 encoder + classifier (taste matrix)."""
+"""The neural logic: DINOv3 encoder + classifier (taste matrix)."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import torch
-import torchvision.transforms as T
 from PIL import Image
 from sklearn.linear_model import LogisticRegression
-
-# ImageNet normalization for DINOv2
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
 
 # Supported image extensions
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 EMBEDDING_DIM = 768
 
+# Name of the embedding generation every stored vector is stamped with
+# (Image.embedding_model). A vector stamped with anything else was produced by
+# a different encoder and lives in a different space, so it is never compared
+# with current ones. Bumping this constant is the whole "invalidate all
+# embeddings" switch; ratings/embeddings.py is how stale rows then self-heal.
+ENCODER_ID = "dinov3_vitb16"
 
-def get_transform() -> T.Compose:
+# Gated repo: the operator accepts Meta's DINOv3 licence once on this page and
+# provides a read token via the HF_TOKEN environment variable. huggingface_hub
+# reads that variable itself, so no code here ever sees the token.
+HF_MODEL_ID = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+
+ImageTransform = Callable[[Image.Image], torch.Tensor]
+
+
+class EncoderUnavailableError(RuntimeError):
+    """The DINOv3 weights could not be loaded; the message says what to do."""
+
+
+class _PooledEncoder(torch.nn.Module):
     """
-    DINOv2 ViT-B/14 was pretrained with exactly this pipeline (256→224 bicubic
-    crop, ImageNet mean/std). Deviating produces out-of-distribution inputs and
-    degrades embedding quality, which in turn harms dedup precision and taste
-    classifier accuracy.
+    Adapter that gives the Hugging Face model the shape of the old torch.hub
+    one: a Module whose forward takes a (B, 3, H, W) batch and returns the
+    (B, 768) CLS embedding. encode() and every test double were written against
+    that contract, so the adapter keeps the encoder swap contained to this file.
+    pooler_output is the CLS token after the final LayerNorm, which is exactly
+    what Meta's own hub model returns in eval mode (forward -> x_norm_clstoken).
     """
-    return T.Compose(
-        [
-            T.Resize(256, interpolation=T.InterpolationMode.BICUBIC),
-            T.CenterCrop(224),
-            T.ToTensor(),
-            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-        ]
-    )
+
+    def __init__(self, model: torch.nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        return self.model(pixel_values=pixel_values).pooler_output
+
+
+def _load_from_hub(loader, model_id: str):
+    """
+    Translate the ways a gated download fails into one actionable message.
+
+    transformers surfaces "no token / licence not accepted" and plain network
+    failures alike as OSError with a multi-paragraph text (huggingface_hub's
+    own HTTP errors are OSError subclasses too). The scrape and train jobs show
+    str(exc) in the UI, so what the operator needs is a short line that names
+    HF_TOKEN and the licence page (contract V9), not the stack of hub internals.
+    """
+    try:
+        return loader.from_pretrained(model_id)
+    except OSError as exc:
+        text = str(exc)
+        looks_gated = "gated" in text.lower() or "401" in text or "403" in text
+        if looks_gated:
+            raise EncoderUnavailableError(
+                f"{model_id} is a gated model: accept the licence on "
+                f"https://huggingface.co/{model_id} and set HF_TOKEN to a read token."
+            ) from exc
+        first_line = text.splitlines()[0] if text else repr(exc)
+        raise EncoderUnavailableError(
+            f"Could not load {model_id} (network or cache problem): {first_line}"
+        ) from exc
+
+
+def get_transform() -> ImageTransform:
+    """
+    The image processor shipped with the checkpoint encodes exactly the
+    preprocessing DINOv3 was evaluated with (resize geometry, ImageNet
+    mean/std). Re-implementing it as a torchvision pipeline would be a second
+    source of truth that drifts silently and produces out-of-distribution
+    inputs, which degrades dedup precision and classifier accuracy. So the
+    processor is wrapped into the PIL -> tensor callable that encode() expects,
+    one image at a time; encode() stacks the results into a batch.
+    """
+    from transformers import AutoImageProcessor
+
+    processor = _load_from_hub(AutoImageProcessor, HF_MODEL_ID)
+
+    def to_tensor(image: Image.Image) -> torch.Tensor:
+        return processor(images=image, return_tensors="pt")["pixel_values"][0]
+
+    return to_tensor
 
 
 def get_encoder(device: str | torch.device | None = None) -> torch.nn.Module:
     """
-    ViT-B/14 is the quality/speed sweet spot for this workload — ViT-S loses
+    ViT-B/16 is the quality/speed sweet spot for this workload: ViT-S loses
     too much semantic detail for taste discrimination, ViT-L is too slow for
-    scrape-time dedup on a single GPU. eval() is required for deterministic
-    outputs: stochastic layers in train mode would produce different embeddings
-    for the same image, breaking cosine-similarity dedup comparisons.
+    scrape-time dedup on a single GPU. The LVD-1689M checkpoint is the web-image
+    one (the SAT variant is satellite imagery). eval() is required for
+    deterministic outputs: stochastic layers in train mode would produce
+    different embeddings for the same image, breaking cosine-similarity dedup.
+    Loaded through transformers rather than torch.hub so the model code is
+    pinned by the package version instead of fetched from a GitHub branch at
+    runtime.
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", pretrained=True)
+    from transformers import AutoModel
+
+    model = _load_from_hub(AutoModel, HF_MODEL_ID)
     model.eval()
-    return model.to(device)
+    return _PooledEncoder(model).to(device)
 
 
 def encode(
     encoder: torch.nn.Module,
     image_paths: list[Path],
-    transform: T.Compose | None = None,
+    transform: ImageTransform | None = None,
     device: str | torch.device | None = None,
     batch_size: int = 32,
     progress_label: str = "encode",
 ) -> tuple[np.ndarray, list[Path]]:
     """
-    Encode images to 768-d DINOv2 embeddings.
+    Encode images to 768-d DINOv3 embeddings.
 
     Per-batch progress is logged via loguru so the in-app log viewer shows the
-    job is alive — a silent ViT-B/14 forward pass over thousands of images on
+    job is alive — a silent ViT-B/16 forward pass over thousands of images on
     CPU can take 30+ minutes, which previously looked indistinguishable from a
     crashed worker. progress_label disambiguates concurrent encode passes (e.g.
     "train", "scrape") in the log stream.
@@ -117,9 +184,6 @@ def encode(
         batch = torch.stack(tensors, dim=0).to(device)
         with torch.no_grad():
             out = encoder(batch)
-        # DINOv2 returns (B, 768) for the CLS token
-        if out.dim() == 3:
-            out = out[:, 0, :]
         embeddings.append(out.cpu().numpy().astype(np.float32))
         valid_paths.extend(batch_valid)
         done = start + len(batch_paths)
@@ -139,32 +203,60 @@ def encode(
     return np.vstack(embeddings), valid_paths
 
 
-def load_classifier(path: Path) -> LogisticRegression:
+def load_classifier(path: Path) -> LogisticRegression | None:
     """
     Classifiers (taste and NSFW) are trained separately in trainer.py and
     persisted so scrape runs can auto-classify without retraining. Pickle is
     the standard sklearn serialisation format; there is no safer alternative
     for arbitrary estimators. The caller is responsible for checking that
     path exists before calling — see scraper.vision_config_from_settings().
+
+    Returns None, with a warning, unless the file records that its estimator
+    was fitted on the current encoder (contract V5). A classifier is a
+    hyperplane in one embedding space and yields meaningless probabilities in
+    another, which would silently steer the review queue. None makes every
+    caller behave as if no classifier existed, the pre-training state the UI
+    already handles. A bare estimator is the pre-DINOv3 file format and carries
+    no stamp, so it counts as foreign too.
     """
     import pickle
 
+    from loguru import logger
+
     with path.open("rb") as f:
-        return pickle.load(f)
+        payload = pickle.load(f)
+    if not isinstance(payload, dict):
+        logger.warning(
+            "{}: classifier predates encoder stamping; ignored until the next train run",
+            path,
+        )
+        return None
+    trained_on = payload.get("encoder")
+    if trained_on != ENCODER_ID:
+        logger.warning(
+            "{}: classifier was trained on {} but the encoder is {}; "
+            "ignored until the next train run",
+            path, trained_on, ENCODER_ID,
+        )
+        return None
+    return payload["classifier"]
 
 
 def save_classifier(classifier: LogisticRegression, path: Path) -> None:
     """
     Writes the fitted estimator to DATA_DIR so the next scrape run can load it
-    via load_classifier() without requiring a retraining pass. mkdir is
-    included here so the function is safe to call before DATA_DIR is fully
+    via load_classifier() without requiring a retraining pass. The estimator is
+    wrapped together with the encoder name it was fitted on, so load_classifier
+    can refuse to apply it to vectors from another encoder (contract V5). mkdir
+    is included here so the function is safe to call before DATA_DIR is fully
     bootstrapped (e.g. during tests with a temp directory).
     """
     import pickle
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"encoder": ENCODER_ID, "classifier": classifier}
     with path.open("wb") as f:
-        pickle.dump(classifier, f)
+        pickle.dump(payload, f)
 
 
 def predict_proba(
@@ -216,17 +308,12 @@ def bytes_to_embedding(data: bytes) -> np.ndarray:
 
 def cosine_similarity_matrix(query: np.ndarray, bank: np.ndarray) -> np.ndarray:
     """
-    Cosine similarity is the right metric here because DINOv2 embeddings lie on
+    Cosine similarity is the right metric here because DINOv3 embeddings lie on
     a hypersphere — angular distance is meaningful, Euclidean distance is not.
     Zero-norm guard prevents division-by-zero on degenerate images (solid-colour
     fills) that produce all-zero activations. Returns shape (M,) when query is
     1-d so is_embedding_duplicate() can call np.max() directly without squeezing.
     """
-    if bank.size == 0:
-        if query.ndim == 1:
-            return np.array([], dtype=np.float32)
-        return np.zeros((query.shape[0], 0), dtype=np.float32)
-
     q = np.atleast_2d(query.astype(np.float32))
     b = bank.astype(np.float32)
     q_norm = np.linalg.norm(q, axis=1, keepdims=True)

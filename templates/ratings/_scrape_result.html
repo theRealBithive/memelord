@@ -1,7 +1,7 @@
 <div id="scrape-result" class="train-result {% if ok %}train-ok{% else %}train-err{% endif %}">
 {% if ok %}
   <span class="train-icon">✓</span>
-  <span>{{ total }} new image{{ total|pluralize }} added to inbox.
+  <span>{{ total }} new image{{ total|pluralize }} added to the review queue.
     {% for source, n in counts.items %}{{ source }}: {{ n }}{% if not forloop.last %} · {% endif %}{% endfor %}
   </span>
 {% else %}
@@ -9,3 +9,4 @@
   <span>{{ error }}</span>
 {% endif %}
 </div>
+{% include "ratings/_nav_job.html" with nav_job_oob=True %}

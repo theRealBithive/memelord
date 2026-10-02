@@ -1,0 +1,86 @@
+{# Score row + action row, shared by the review card and the gallery lightbox (UI contract V9).
+   Context: image, scores, score_url, purge_url, nsfw_url, hx_target, hx_swap, mode.
+   Review passes prev_hash/next_hash/image_url; the lightbox passes lightbox=True and
+   steps through the grid on the client, so its prev/next carry no request. #}
+{# Row 1: only the scale. Trash is score 0 — kept on disk as the strongest negative example. #}
+<div class="score-row">
+  <button class="score-btn score-btn--0{% if image.score == 0 %} score-active{% endif %}"
+          data-score="0"
+          hx-post="{% url score_url image.content_hash %}"
+          hx-target="{{ hx_target }}"
+          hx-swap="{{ hx_swap }}"
+          hx-vals='{"score": "0"}'
+          aria-label="Trash (score 0)"
+          title="Trash — below the scale; kept on disk as the strongest negative example">
+    <span class="score-num">🗑</span>
+  </button>
+  {% for s in scores %}
+  <button class="score-btn score-btn--{{ s }}{% if image.score == s %} score-active{% endif %}"
+          data-score="{{ s }}"
+          hx-post="{% url score_url image.content_hash %}"
+          hx-target="{{ hx_target }}"
+          hx-swap="{{ hx_swap }}"
+          hx-vals='{"score": "{{ s }}"}'>
+    <span class="score-num">{{ s }}</span>
+  </button>
+  {% endfor %}
+</div>
+
+{# Row 2: navigation and per-image actions. Purge sits at the far right, never beside a score, and asks first. #}
+<div class="action-row">
+  {% if lightbox %}
+  <button type="button" class="action-btn" data-action="prev" title="Previous image">
+    <span class="action-icon">←</span><span class="action-label">prev</span>
+  </button>
+  {% elif prev_hash %}
+  <button class="action-btn"
+          data-action="prev"
+          hx-get="{% url image_url prev_hash %}"
+          hx-target="{{ hx_target }}"
+          hx-swap="{{ hx_swap }}"
+          hx-push-url="true"
+          title="Previous image">
+    <span class="action-icon">←</span><span class="action-label">prev</span>
+  </button>
+  {% else %}
+  <span class="action-btn action-btn--disabled" aria-hidden="true"><span class="action-icon">←</span><span class="action-label">prev</span></span>
+  {% endif %}
+  <button class="action-btn action-btn--nsfw{% if image.is_nsfw %} action-btn--on{% endif %}"
+          data-action="nsfw"
+          hx-post="{% url nsfw_url image.content_hash %}"
+          hx-target="{{ hx_target }}"
+          hx-swap="{{ hx_swap }}"
+          {% if not lightbox %}hx-vals='{"mode": "{{ mode }}"}'{% endif %}
+          aria-pressed="{% if image.is_nsfw %}true{% else %}false{% endif %}"
+          title="{% if image.is_nsfw %}Marked NSFW — tap to clear{% else %}Mark this image as NSFW{% endif %}">
+    <span class="action-icon">🔞</span><span class="action-label">NSFW</span>
+  </button>
+  {% include "ratings/_share_button.html" %}
+  <button class="action-btn action-btn--danger"
+          data-action="purge"
+          hx-post="{% url purge_url image.content_hash %}"
+          hx-target="{{ hx_target }}"
+          hx-swap="{{ hx_swap }}"
+          hx-confirm="Permanently delete this image? It will never be downloaded again."
+          data-confirm-label="Purge"
+          title="Purge — delete the file for good">
+    <span class="action-icon">⊘</span><span class="action-label">Purge</span>
+  </button>
+  {% if lightbox %}
+  <button type="button" class="action-btn" data-action="next" title="Next image">
+    <span class="action-label">next</span><span class="action-icon">→</span>
+  </button>
+  {% elif next_hash %}
+  <button class="action-btn"
+          data-action="next"
+          hx-get="{% url image_url next_hash %}"
+          hx-target="{{ hx_target }}"
+          hx-swap="{{ hx_swap }}"
+          hx-push-url="true"
+          title="Next image">
+    <span class="action-label">next</span><span class="action-icon">→</span>
+  </button>
+  {% else %}
+  <span class="action-btn action-btn--disabled" aria-hidden="true"><span class="action-label">next</span><span class="action-icon">→</span></span>
+  {% endif %}
+</div>

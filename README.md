@@ -10,11 +10,11 @@ It is a machine that watches you suffer, learns from it, and tries to suffer mor
 
 ## The loop
 
-1. **Scrape** — pull images from 4chan, Tumblr, Imgur, Pixelfed, Mastodon into an inbox
-2. **Review** — swipe inbox images good/bad/fav, then score the keepers 1–6
-3. **Train** — DINOv2 encodes your rated images; a logistic regression learns your damage
+1. **Scrape** — pull images from 4chan, Tumblr, Imgur, Pixelfed and Mastodon into one flat `data/images/` directory
+2. **Review** — give every new image a score from 0 (trash) to 6 (favourite)
+3. **Train** — DINOv3 encodes your rated images; a logistic regression learns your damage
 
-After enough ratings the classifier starts auto-sorting new scrapes before they reach your queue. High-confidence good matches go straight to corpus. High-confidence bad matches go straight to void. You only see the confusing middle ground — and a 🎯 toggle on the inbox card lets you actively *target* that middle for fastest model improvement.
+After enough ratings the classifier predicts a score for every new download. Set a visibility cutoff (Config → Review thresholds, separately for the SFW and NSFW queues) and anything the model rates below it stays out of your review queue until you lower the cutoff again. Nothing is moved or deleted by a prediction, so a wrong guess never costs you an image.
 
 ---
 
@@ -26,6 +26,9 @@ After enough ratings the classifier starts auto-sorting new scrapes before they 
 cp .env.example .env
 # set DJANGO_SECRET_KEY (generation hint is inside the file)
 # set ALLOWED_HOSTS to your server hostname if not running locally
+# set HF_TOKEN: DINOv3 is a gated model — accept the licence once on
+#   https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m and
+#   create a read token in your Hugging Face settings
 ```
 
 Drop a `config.toml` in the `data/` directory with your sources (see below).
@@ -37,7 +40,7 @@ docker compose up -d
 ```
 
 Two containers start from the same image:
-- **memelord** — web UI on port 8000, runs migrations on first start
+- **memelord** — web UI on port 8000, runs migrations on every start
 - **qcluster** — background worker for scrape/train jobs; waits for the web service to be healthy before starting
 
 ### 3. Create a user
@@ -78,6 +81,21 @@ docker compose run --rm memelord train    # train now
 > `docker compose run --rm memelord python manage.py dumpdata ratings > backup.json`
 > (or copy `data/memelord.db`). A fresh install has nothing to lose and needs no action.
 
+## Upgrading to DINOv3 — one Train run migrates the library
+
+The encoder moved from DINOv2 ViT-B/14 to DINOv3 ViT-B/16. Every stored
+embedding carries the name of the encoder that produced it; vectors from the
+old encoder are never compared with new ones, so nothing is mixed silently.
+Until re-encoded, old vectors drop out of the cosine dedup layer and of the
+similar-image / kNN features. SHA-256 and pHash dedup are unaffected.
+
+After deploying: set `HF_TOKEN`, then press **Train** once (or run
+`docker compose run --rm memelord reencode_embeddings` on a GPU host for a
+progress bar). Training re-encodes every rated image, the classification pass
+that follows re-encodes the unrated ones, and both classifiers are retrained.
+Classifier files from the old encoder are ignored until then; existing
+predictions stay in place and are overwritten by the first training run.
+
 ---
 
 ## Sources (`data/config.toml`)
@@ -114,33 +132,29 @@ New downloads are deduplicated in three layers — SHA-256, perceptual hash, and
 
 ## Curating images
 
-Two flows, depending on whether you're triaging a fresh inbox or polishing the corpus.
+The score is the whole model: unrated, `0` = trash, `1`–`6` = your taste scale. A score is a single database write — files never move. Trash keeps the file on disk as the strongest negative training example; **purge** is the only action that deletes a file, and its content hash stays blacklisted so it can't be re-downloaded.
 
-### Swipe flow (inbox & NSFW inbox)
+### Review
 
-Full-screen card, mobile-first, gesture-driven.
+One full-screen card at a time, mobile-first, with separate SFW and NSFW queues.
 
-| Gesture | Key | Action |
-|---|---|---|
-| Swipe right | `→` | Good — moves to corpus |
-| Swipe left | `←` | Bad — moves to void |
-| Swipe up | `↑` | Fav — moves to corpus with high training weight |
-| Swipe down | `↓` | Skip |
-| — | `N` | Toggle NSFW flag |
+| Key | Action |
+|---|---|
+| `0` | Trash — kept as a negative example, advance |
+| `1`–`6` | Score, advance |
+| `n` | Toggle the NSFW flag |
+| `s` | Open the share sheet |
+| `←` / `→` | Previous / next image |
 
-Each card shows the classifier's confidence (`P(corpus)` as a percentage), a tag editor with kNN tag suggestions (full-screen modal on mobile, inline on desktop), and a horizontal strip of the six visually-most-similar already-rated images (with score / fav / trash badges) so you can rate consistently and see whether the model's neighborhood actually matches your taste.
+Each card carries a tag editor with kNN tag suggestions (full-screen modal on mobile, inline on desktop) and a purge button.
 
-Tap the 🎯 button in the meta row to switch from random ordering to **active-learning mode** — the queue surfaces the images the classifier is least sure about, concentrating your ratings where they teach the model the most per click.
+### Below Cutoff
 
-The card preloads the next image while you're looking at the current one, so the rate→next swap is instant on mobile.
+Everything you scored `0`–`2`, as a grid. Changed your mind? Re-score upward from the lightbox. Sure about it? Purge. Rescuing an image is just giving it a better score.
 
-### Corpus review
+### Gallery
 
-A grid of scored corpus images for re-grading, re-tagging, or trashing. Keyboard: `1`–`6` to score, `f` to favourite, `t` to trash, `n` to toggle NSFW, arrows to navigate.
-
-### Void grid
-
-Bulk-review trashed images — rescue back to corpus or permanently **purge** (deletes from disk and blocks re-download by content hash).
+Everything at or above the minimum score you pick, sortable newest / oldest / random and filterable by `#tag`. The lightbox supports swipe navigation and lets you re-score, re-tag, purge or share.
 
 ---
 
@@ -154,11 +168,13 @@ The **Tags** page (under the `⋯` menu) lists all tags by image count. Rename i
 
 ---
 
-## Gallery & stats
+## Training
 
-The **Gallery** shows scored corpus images with controls for minimum score, sort order (newest / oldest / random), fav-only, and tag filter.
+Positive class is score ≥ 3, negative is score ≤ 2; unrated images are excluded. Scores 5–6 and trash (0) carry weight 3.0, everything else 1.0, so your strongest opinions pull hardest on the decision boundary. Trigger it from the **Stats** page or with `make train`. A separate NSFW classifier on the same embeddings feeds the NSFW queue.
 
-The **Stats** page summarises queue / collection counts, score distribution, source breakdown, tagging coverage (tagged vs untagged corpus), top tags by image count, average inbox dwell time, the last training run's success/failure with error trace, and recent 7-day scrape & rate velocity.
+## Stats & logs
+
+The **Stats** page summarises queue sizes (to rate / gallery / below cutoff), score distribution, source breakdown, tagging coverage, top tags, average time from scrape to rating, the last training run (with error trace on failure), and 7-day scrape & rate velocity.
 
 The **Logs** page surfaces background scrape and train output for in-app debugging.
 
@@ -166,7 +182,7 @@ The **Logs** page surfaces background scrape and train output for in-app debuggi
 
 ## Sharing
 
-Configure Mattermost (personal access token, posts from your own account) or Signal (via signal-cli-rest-api) under Config → Notifications. Then any image gets a share button that posts the image URL to the configured channel / recipients with an optional prefix.
+Configure one or more channels — Mattermost (personal access token, posts from your own account) or Signal (via signal-cli-rest-api) — under Config → Notifications. The share sheet (`s` in review, or the share button in the gallery lightbox) posts the image to the channel you pick, with an optional message prefix.
 
 ---
 
@@ -183,20 +199,23 @@ docker pull ghcr.io/therealbiwhive/memelord:latest
 ## Development
 
 ```bash
-uv sync --extra dev
+uv sync         # runtime + dev dependencies, exactly as pinned in uv.lock
 make run        # Django dev server on :8000
-make qcluster   # background worker (separate terminal — required for Train button)
+make qcluster   # background worker (separate terminal — required for the Scrape/Train buttons)
 make migrate
 make test
+make lint       # ruff
 ```
+
+The Makefile exports `DJANGO_DEBUG=true`, so the insecure default secret key is accepted for local runs. After changing `pyproject.toml` run `uv lock` — the Docker build installs with `uv sync --locked` and fails on a stale lock. To upgrade everything, run `uv lock --upgrade`, re-run the tests, and run the opt-in model test: `uv run pytest --run-integration tests/core/test_brain_integration.py` (needs `HF_TOKEN` with access to the gated repo).
 
 ### Stack
 
-- Django 6 + django-htmx (mobile-first UI, swipe gestures, image preload, haptic feedback)
+- Python 3.14, Django 6.1 + django-htmx (mobile-first, HTMX-driven UI)
 - django-q2 (background jobs, SQLite broker — no Redis)
-- PyTorch + DINOv2 ViT-B/14 (768-d image embeddings for taste classifier + dedup + kNN)
+- PyTorch 2.14 + DINOv3 ViT-B/16 via Hugging Face Transformers (768-d image embeddings for the taste classifier, dedup and kNN tag suggestions)
 - scikit-learn LogisticRegression (the taste oracle + a separate NSFW classifier)
-- Playwright optional: used as fallback for Imgur topic pages and Pixelfed instances that don't serve the API without auth
+- Playwright optional: fallback for Imgur topic pages that refuse the plain HTTP scraper
 
 ---
 

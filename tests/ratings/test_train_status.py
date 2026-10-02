@@ -58,7 +58,12 @@ class TrainStatusSessionTests(TestCase):
     def test_completed_poll_does_not_clear_session_for_unrelated_task_id(
         self, mock_fetch
     ) -> None:
-        mock_fetch.return_value = _completed_task()
+        # Only the polled task is finished; the session's own job is still
+        # running, which is what every page load (via the active_jobs context
+        # processor) checks before keeping or clearing the session.
+        mock_fetch.side_effect = (
+            lambda task_id: _completed_task() if task_id == "other-task" else _running_task()
+        )
 
         response = self.client.get(reverse("train_status", args=["other-task"]))
 
@@ -257,7 +262,8 @@ class TrainingCtxStaleTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.session["training_task_id"], "running-task")
-        self.assertContains(response, 'class="nav-training"')
+        self.assertContains(response, 'id="nav-job" class="nav-job"')
+        self.assertContains(response, "Training")
 
     @patch("django_q.tasks.fetch", return_value=_running_task())
     def test_training_ctx_clears_task_past_timeout(self, mock_fetch) -> None:

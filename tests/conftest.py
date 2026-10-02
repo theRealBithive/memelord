@@ -8,8 +8,24 @@ import pytest
 # Provide a dummy key so the settings guard doesn't fire during tests.
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-not-for-production")
 os.environ.setdefault("DJANGO_DEBUG", "true")
+from hypothesis import HealthCheck
+from hypothesis import settings as hypothesis_settings
 from loguru import logger
 from PIL import Image
+
+# Hypothesis profiles. The DB-backed property tests are slow by nature (each
+# example inserts rows into SQLite), so too_slow is a tooling signal here, not a
+# property. Under mutmut the same test method runs twice in one process, which
+# trips differing_executors; that profile is selected with
+# HYPOTHESIS_PROFILE=mutmut and exists only for that runner.
+hypothesis_settings.register_profile(
+    "default", suppress_health_check=[HealthCheck.too_slow]
+)
+hypothesis_settings.register_profile(
+    "mutmut",
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.differing_executors],
+)
+hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

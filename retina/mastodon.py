@@ -4,11 +4,15 @@ from pathlib import Path
 
 from retina._mastoapi import (
     _filename_for_item as _shared_filename,
+)
+from retina._mastoapi import (
     download_images as _shared_download,
+)
+from retina._mastoapi import (
     iter_image_items,
 )
 
-__all__ = ["iter_image_items", "download_images", "_filename_for_item"]
+__all__ = ["_filename_for_item", "download_images", "iter_image_items"]
 
 
 def _filename_for_item(account_handle: str, image_url: str) -> str:

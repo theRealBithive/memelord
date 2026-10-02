@@ -17,6 +17,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from core import brain
 from ratings.models import Image, ReviewThresholds
 
 
@@ -41,6 +42,7 @@ class ReproStall(TestCase):
             source_label="t",
             predicted_score=predicted,
             embedding=embedding,
+            embedding_model=brain.ENCODER_ID if embedding is not None else "",
         )
         Image.objects.filter(content_hash=h).update(
             downloaded_at=timezone.now() - timedelta(hours=age_hours)

@@ -1,10 +1,20 @@
-.PHONY: run migrate superuser test build push release release-push
+.PHONY: run migrate superuser sync lint test test-fast scrape train qcluster build push release release-push
 
 REGISTRY_HOST       ?= registry.exkulpa.de
 REGISTRY_IMAGE_BASE ?= registry.exkulpa.de/maximilian/janulon-registry
 REGISTRY_IMAGE      ?= $(REGISTRY_IMAGE_BASE):latest
 
+# Dev targets talk to the local SQLite DB with the insecure default SECRET_KEY,
+# which the settings guard only permits in debug mode. Exported here so a plain
+# `make run` works; an explicit DJANGO_DEBUG in the caller's shell wins (?=).
+# Containers are unaffected: docker compose takes its env from .env, not from
+# the shell.
+export DJANGO_DEBUG ?= true
+
 # === development
+sync:
+	uv sync
+
 run:
 	uv run python manage.py runserver
 
@@ -15,7 +25,10 @@ migrate:
 superuser:
 	uv run python manage.py createsuperuser
 
-# === testing
+# === quality
+lint:
+	uv run ruff check .
+
 test:
 	uv run pytest -v
 

@@ -1,141 +1,31 @@
-{% load static %}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0a0a0a">
-  <title>memelord — config</title>
-  <link rel="stylesheet" href="{% static 'app.css' %}">
-  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
-  <style>
-    .config-page { padding: calc(var(--nav-h) + 1.5rem) 1.25rem 3rem; max-width: 560px; margin: 0 auto; }
-    .config-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
-    .config-title { font-size: 1rem; font-weight: 600; }
+{% extends "base.html" %}
+{% block title %}config{% endblock %}
+{% block content %}
 
-    #source-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.5rem; min-height: 2rem; }
 
-    .source-row {
-      display: flex; align-items: center; gap: 0.75rem;
-      padding: 0.6rem 0.75rem; border-radius: 6px;
-      background: var(--surface); border: 1px solid var(--border);
-      transition: opacity 150ms;
-    }
-    .source-disabled { opacity: 0.45; }
+  <div class="page">
 
-    .source-type-badge {
-      font-size: 0.65rem; font-weight: 700; letter-spacing: 0.06em;
-      text-transform: uppercase; padding: 0.2rem 0.45rem; border-radius: 4px;
-      flex-shrink: 0;
-    }
-    .source-type-4chan    { background: #16a34a22; color: #4ade80; border: 1px solid #16a34a55; }
-    .source-type-imgur    { background: #15803d22; color: #86efac; border: 1px solid #15803d55; }
-    .source-type-tumblr   { background: #1d4ed822; color: #93c5fd; border: 1px solid #1d4ed855; }
-    .source-type-pixelfed { background: #7c3aed22; color: #c4b5fd; border: 1px solid #7c3aed55; }
-    .source-type-mastodon { background: #6364ff22; color: #b4b5ff; border: 1px solid #6364ff55; }
-
-    .source-name { flex: 1; font-size: 0.875rem; font-family: monospace; word-break: break-all; }
-    .source-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
-
-    .src-btn {
-      padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted); cursor: pointer; font-size: 0.8rem;
-      transition: color 100ms, border-color 100ms;
-    }
-    .src-toggle:hover { color: var(--green); border-color: var(--green); }
-    .src-delete:hover { color: var(--red); border-color: var(--red); }
-    .src-nsfw:hover { color: var(--purple, #a855f7); border-color: var(--purple, #a855f7); }
-    .src-nsfw-on { color: var(--purple, #a855f7); border-color: var(--purple, #a855f7); }
-
-    .section-title { font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
-                     letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.75rem; }
-
-    .add-form { display: flex; gap: 0.5rem; align-items: flex-start; flex-wrap: wrap; }
-    .add-form select, .add-form input {
-      padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: 6px;
-      background: var(--surface); color: var(--text); font-size: 0.875rem; outline: none;
-    }
-    .add-form select:focus, .add-form input:focus { border-color: #555; }
-    .add-form select { flex-shrink: 0; }
-    .add-form input { flex: 1; min-width: 160px; }
-    .add-form button {
-      padding: 0.6rem 1rem; border: none; border-radius: 6px;
-      background: #fff; color: #000; font-size: 0.875rem; font-weight: 600; cursor: pointer;
-    }
-
-    .add-error { color: var(--red); font-size: 0.8rem; margin-top: 0.5rem; }
-    .empty-hint { color: var(--muted); font-size: 0.875rem; padding: 0.5rem 0; }
-    .import-notice { color: var(--green); font-size: 0.8rem; margin-bottom: 0.5rem; }
-
-    .hint { color: var(--muted); font-size: 0.75rem; margin-top: 0.4rem; }
-
-    .import-btn {
-      padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted); font-size: 0.75rem; cursor: pointer;
-    }
-    .import-btn:hover { border-color: #555; color: var(--text); }
-
-    .vision-section { margin-bottom: 2rem; }
-    .vision-form { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
-    .vision-row { display: flex; align-items: center; gap: 0.35rem; }
-    .vision-label {
-      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.06em; color: var(--muted);
-    }
-
-    .schedule-section { margin-bottom: 2rem; }
-    #schedule-status { display: flex; flex-direction: column; gap: 0.5rem; }
-    .schedule-info { font-size: 0.8rem; color: var(--muted); }
-    .schedule-on { color: var(--green); }
-    .schedule-off { color: var(--muted); }
-    .schedule-next { margin-left: 0.5rem; }
-    .schedule-form { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
-    .schedule-select {
-      padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: 4px;
-      background: var(--surface); color: var(--text); font-size: 0.8rem; cursor: pointer;
-    }
-
-    .notif-section { margin-bottom: 2rem; }
-    .notif-service {
-      margin-bottom: 1.25rem;
-      padding: 0.75rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--surface);
-    }
-    .notif-service-header {
-      display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;
-    }
-    .notif-service-name { font-size: 0.8rem; font-weight: 600; }
-    .notif-badge { font-size: 0.7rem; }
-    .notif-badge--on { color: var(--green); }
-    .notif-badge--off { color: var(--muted); }
-    .notif-fields { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.6rem; }
-    .notif-input {
-      padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 5px;
-      background: var(--bg, #0a0a0a); color: var(--text); font-size: 0.8rem; outline: none;
-      width: 100%; box-sizing: border-box;
-    }
-    .notif-input:focus { border-color: #555; }
-    .notif-actions { display: flex; gap: 0.4rem; }
-
-    .share-btn {
-      padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted); cursor: pointer; font-size: 0.85rem;
-      line-height: 1;
-    }
-    .share-btn:hover { color: var(--text); border-color: #555; }
-    .share-form { display: inline; }
-    .share-toast { font-size: 0.75rem; margin-left: 0.4rem; transition: opacity 0.3s; }
-    .share-toast--ok { color: var(--green); }
-    .share-toast--error { color: var(--red); }
-  </style>
-</head>
-<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
-
-  {% include "ratings/_nav.html" with mode="config" %}
-
-  <div class="config-page">
+    <div class="section">
+      <div class="section-title">Jobs</div>
+      <div class="job-actions">
+        <button type="button" class="btn-pill btn-pill--accent"
+                hx-post="{% url 'trigger_scrape' %}" hx-target="#scrape-result" hx-swap="outerHTML"
+                {% if active_scrape_task_id %}disabled{% endif %}>↻ Scrape now</button>
+        <button type="button" class="btn-pill btn-pill--accent"
+                hx-post="{% url 'trigger_train' %}" hx-target="#train-result" hx-swap="outerHTML"
+                {% if active_task_id %}disabled{% endif %}>⟳ Train</button>
+      </div>
+      {% if active_scrape_task_id %}
+        {% include "ratings/_scrape_pending.html" with task_id=active_scrape_task_id elapsed=scrape_elapsed %}
+      {% else %}
+        <div id="scrape-result"></div>
+      {% endif %}
+      {% if active_task_id %}
+        {% include "ratings/_train_pending.html" with task_id=active_task_id elapsed=training_elapsed %}
+      {% else %}
+        <div id="train-result"></div>
+      {% endif %}
+    </div>
 
     <div class="schedule-section">
       <div class="section-title">Auto-scrape</div>
@@ -154,7 +44,7 @@
 
     <div class="config-header">
       <span class="config-title">Scrape sources</span>
-      <button class="import-btn"
+      <button class="btn-pill"
               hx-post="{% url 'source_import' %}"
               hx-target="#source-list"
               hx-swap="outerHTML">
@@ -170,23 +60,41 @@
             hx-post="{% url 'source_add' %}"
             hx-target="#source-list"
             hx-swap="afterbegin"
-            hx-on::after-request="this.querySelector('input').value=''">>
-        <select name="type" id="src-type" onchange="updateHint(this)">
+            hx-on::after-request="this.querySelector('input').value=''">
+        <select name="type" id="src-type" class="field" onchange="updateHint(this)">
           <option value="4chan">4chan</option>
           <option value="imgur">Imgur</option>
           <option value="tumblr">Tumblr</option>
           <option value="pixelfed">Pixelfed</option>
           <option value="mastodon">Mastodon</option>
         </select>
-        <input type="text" name="name" id="src-name" placeholder="board (e.g. wg)" required autocomplete="off">
-        <button type="submit">Add</button>
+        <input class="field" type="text" name="name" id="src-name" placeholder="board (e.g. wg)" required autocomplete="off">
+        <button type="submit" class="btn-primary">Add</button>
       </form>
       <p class="hint" id="src-hint">4chan board name, e.g. <code>wg</code></p>
       <div id="add-error"></div>
     </div>
 
-  </div>
+    <div class="section danger-zone">
+      <div class="section-title">Danger zone</div>
+      <p class="hint">
+        Start over deletes every image: files, scores, embeddings, predictions and image tags,
+        plus both classifier weight files, and resets the scrape cursors.
+        Sources, channels, review thresholds, the schedule, users, the tag vocabulary and the log stay.
+      </p>
+      <form method="post" action="{% url 'fresh_start' %}"
+            data-confirm="This deletes every image and both trained classifiers. Sources, channels and settings stay."
+            data-confirm-label="Start over" data-confirm-word="RESET">
+        {% csrf_token %}
+        <input type="hidden" name="confirm" value="" data-confirm-field>
+        <button type="submit" class="btn-pill btn-pill--danger"
+                {% if active_task_id or active_scrape_task_id %}disabled title="Wait for the running job to finish"{% endif %}>Start over…</button>
+      </form>
+    </div>
 
+  </div>
+{% endblock %}
+{% block scripts %}
   <script>
     const hints = {
       "4chan":    '4chan board name, e.g. <code>wg</code>',
@@ -207,5 +115,4 @@
       document.getElementById("src-name").placeholder = placeholders[sel.value] || "";
     }
   </script>
-</body>
-</html>
+{% endblock %}

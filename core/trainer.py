@@ -108,23 +108,24 @@ def _load_cached_embeddings(
 ) -> dict[str, np.ndarray]:
     """
     Return {absolute_path_str: embedding} for the subset of `paths` whose Image
-    row already has a stored DINOv2 vector in the `embedding` column.
+    row already has a stored vector from the current encoder.
 
     Scoped to the caller's path list (not the whole table) so the returned dict
     matches the training set exactly — downstream phash backfill iterates these
     keys, and widening them would scan rows this run never trains on.
 
-    Re-encoding the whole corpus through DINOv2 on every train run was the
-    dominant cost on large libraries — a ViT-B/14 forward pass over tens of
+    Re-encoding the whole corpus on every train run was the
+    dominant cost on large libraries — a ViT-B forward pass over tens of
     thousands of images on CPU runs for hours and previously tripped the
     django-q worker timeout. The embeddings are already persisted at scrape time
     and by classify_images, so training reads them back here and only encodes the
     (normally empty) set of rows still missing one.
 
-    Cache validity is model-scoped: the stored vectors are only correct while the
-    DINOv2 variant + transform are unchanged. eval()-mode DINOv2 is deterministic
-    so cached == freshly-encoded today, but there is no version stamp on the
-    column. A bad blob is skipped rather than fatal: bytes_to_embedding raises on
+    Cache validity is model-scoped: a stored vector is only usable while the
+    encoder that produced it is the current one, so the query filters on the
+    embedding_model stamp and a row from an older encoder simply counts as
+    missing and gets re-encoded (V3). A bad blob is skipped rather than fatal:
+    bytes_to_embedding raises on
     any vector that isn't exactly EMBEDDING_DIM floats, so an encoder swap that
     changes dimensionality would otherwise crash every train run with no path to
     rebuild the column. Skipping lets the row fall through to the re-encode set
@@ -137,7 +138,10 @@ def _load_cached_embeddings(
     rel_paths = [str(p.relative_to(data_dir)) for p in paths]
     cache: dict[str, np.ndarray] = {}
     for img in Image.objects.filter(
-        is_purged=False, embedding__isnull=False, file_path__in=rel_paths
+        is_purged=False,
+        embedding__isnull=False,
+        embedding_model=brain.ENCODER_ID,
+        file_path__in=rel_paths,
     ):
         path_str = str(data_dir / img.file_path)
         try:
@@ -159,9 +163,13 @@ def _backfill_phash_embedding(
     Only fills rows that don't already have a value — re-saving every row on
     every training run was previously the dominant cost on large libraries
     (one disk read for phash plus one DB write per image, even when both
-    fields were already populated from the prior scrape).
+    fields were already populated from the prior scrape). A vector from an
+    older encoder counts as "no value" and is replaced together with its
+    stamp (V3), which is how a Train run migrates the rated part of the
+    library to a new encoder.
     """
     from core import phash as phash_mod
+    from ratings.embeddings import has_current_embedding
     from ratings.models import Image
 
     path_to_img = {
@@ -180,9 +188,10 @@ def _backfill_phash_embedding(
             img.phash = phash_mod.compute_phash(Path(path_str))
             update_fields.append("phash")
             backfilled_phash += 1
-        if img.embedding is None:
+        if not has_current_embedding(img):
             img.embedding = brain.embedding_to_bytes(emb)
-            update_fields.append("embedding")
+            img.embedding_model = brain.ENCODER_ID
+            update_fields.extend(["embedding", "embedding_model"])
             backfilled_emb += 1
         if update_fields:
             img.save(update_fields=update_fields)
@@ -206,8 +215,8 @@ def run(
     samples, and optionally an NSFW head.
 
     Embeddings are read from the cached `embedding` column (see
-    _load_cached_embeddings); only rows still missing one are encoded with
-    DINOv2. On a warm cache this skips the encoder entirely and training is a
+    _load_cached_embeddings); only rows still missing a current-encoder vector
+    are encoded. On a warm cache this skips the encoder entirely and training is a
     matter of seconds — the whole-corpus forward pass it replaces ran for hours
     and tripped the worker timeout. The freshly-encoded vectors are then sliced
     for each classifier so the encoder runs at most once per train.
@@ -252,7 +261,7 @@ def run(
         X_missing, valid_missing = brain.encode(
             encoder, missing, transform=transform, progress_label="train"
         )
-        for p, emb in zip(valid_missing, X_missing):
+        for p, emb in zip(valid_missing, X_missing, strict=True):
             path_to_emb[str(p)] = emb
     else:
         logger.info(

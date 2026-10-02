@@ -1,11 +1,17 @@
-# Janulon: sources to scrape when running with --source all
-# Add board/blog/topic names; leave empty or omit section to skip that source.
+# Memelord scraper config.
 #
-# Copy this file to config.toml and fill in your sources/tokens.
-# config.toml is gitignored — keep real access tokens out of version control.
+# Copy this file to data/config.toml (Docker) or ./config.toml (local dev) and
+# fill in your sources. Every section is optional: omit it, or leave its list
+# empty, to skip that source. Sources can also be added, toggled and deleted
+# on the Config page in the UI, which can import this file.
+#
+# config.toml is gitignored in data/ — keep real access tokens out of version
+# control.
 
 [4chan]
 boards = ["wg", "tg", "b", "gif"]
+# Optional safety valve: cap the number of threads fetched per board and run.
+# max_threads = 50
 
 [tumblr]
 blogs = []
@@ -13,36 +19,22 @@ blogs = []
 [imgur]
 topics = ["funny", "warhammer40k", "architecture"]
 
-# Pixelfed: account-handle targeting — same @user@instance format as Mastodon.
-# Create an app on your instance to get an access_token if the API requires auth.
-# Set the token here OR via env PIXELFED_ACCESS_TOKEN (env takes precedence over a blank value).
+# Pixelfed and Mastodon both target accounts as @user@instance handles.
+# access_token is only needed when the instance does not serve its public
+# API anonymously.
 [pixelfed]
 accounts = []
 # access_token = ""
 
-# Mastodon: for "post" command (post random corpus image).
-# Create an app and get access_token from your instance (Settings → Development).
 [mastodon]
-base_url = "https://mastodon.social/"
-# Set the token here OR via env MASTODON_ACCESS_TOKEN (env takes precedence over a blank value).
-access_token = ""
+accounts = []
+# access_token = ""
 
-# Vision thresholds: hide low-confidence images from the review queue.
-# Range 1-6 (1 = show everything, 6 = only top ~17%). The taste model's
-# predicted probability is bucketed against (threshold - 1) / 6, and
-# anything below the cutoff is hidden from the corresponding review queue
-# without being moved on disk — so lowering the threshold makes them
-# reappear without re-classifying.
+# Visibility cutoff for the review queues, 1-6 (1 = show everything, 6 = only
+# the top bucket). The taste model's predicted score is bucketed against this
+# value and anything below is hidden from the matching queue — without being
+# moved or deleted, so lowering the value makes images reappear immediately.
+# Also adjustable live on the Config page.
 [vision]
 sfw_threshold = 1
 nsfw_threshold = 1
-
-# Schedule: for "schedule" command (run scrape/post/retrain/sync on intervals).
-# Cleanup is not scheduled; run `python -m main cleanup` manually when needed.
-# Values are in hours; fractional allowed (e.g. post_every_hours = 0.5 for 30 min).
-# sync_every_hours: align DB with filesystem and post "Alignment with reality restored." (default 48).
-[schedule]
-scrape_every_hours = 6
-post_every_hours = 0.333
-retrain_every_hours = 168
-sync_every_hours = 48

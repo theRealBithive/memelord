@@ -3,9 +3,9 @@
 import base64
 import mimetypes
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 import requests
 from PIL import Image as PilImage

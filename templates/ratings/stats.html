@@ -1,137 +1,9 @@
-{% load static %}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0a0a0a">
-  <title>memelord — stats</title>
-  <link rel="stylesheet" href="{% static 'app.css' %}">
-  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
-  <style>
-    .stats-page {
-      padding: calc(var(--nav-h) + 1.5rem) 1.25rem 3rem;
-      max-width: 640px;
-      margin: 0 auto;
-    }
-    .section { margin-bottom: 2rem; }
-    .section-title {
-      font-size: 0.7rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: var(--muted);
-      margin-bottom: 0.75rem;
-    }
-    .stat-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-      gap: 0.6rem;
-    }
-    .stat-card {
-      padding: 0.9rem 1rem;
-      border-radius: 8px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      text-align: center;
-      text-decoration: none;
-      color: inherit;
-      display: block;
-    }
-    .stat-card .big { font-size: 1.9rem; font-weight: 700; line-height: 1; }
-    .stat-card .label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.35rem; }
-    .stat-card.c-inbox .big  { color: #60a5fa; }
-    .stat-card.c-unrated .big { color: var(--amber); }
-    .stat-card.c-gallery .big { color: var(--green); }
-    .stat-card.c-fav .big    { color: var(--amber); }
-    .stat-card.c-trash .big  { color: var(--red); }
+{% extends "base.html" %}
+{% block title %}stats{% endblock %}
+{% block content %}
 
-    .meta-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 0.5rem 0;
-      border-bottom: 1px solid var(--border);
-      font-size: 0.875rem;
-    }
-    .meta-row:last-child { border-bottom: none; }
-    .meta-val { color: var(--muted); }
 
-    .score-row {
-      display: flex;
-      align-items: center;
-      gap: 0.65rem;
-      padding: 0.3rem 0;
-    }
-    .score-label {
-      width: 1.2rem;
-      font-size: 0.85rem;
-      font-weight: 700;
-      text-align: right;
-      flex-shrink: 0;
-    }
-    .score-bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
-    .score-bar-fill { height: 100%; border-radius: 4px; }
-    .score-bar-fill--0 { background: #ef4444; }
-    .score-bar-fill--1 { background: #71717a; }
-    .score-bar-fill--2 { background: #60a5fa; }
-    .score-bar-fill--3 { background: #4ade80; }
-    .score-bar-fill--4 { background: #facc15; }
-    .score-bar-fill--5 { background: #fb923c; }
-    .score-bar-fill--6 { background: #f59e0b; }
-    .score-bar-n { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; flex-shrink: 0; }
-
-    .source-row {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      padding: 0.35rem 0;
-    }
-    .source-name {
-      width: 130px;
-      font-size: 0.8rem;
-      color: var(--muted);
-      flex-shrink: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; }
-    .bar-fill  { height: 100%; background: var(--green); border-radius: 3px; }
-    .bar-n     { font-size: 0.75rem; color: var(--muted); width: 36px; text-align: right; }
-
-    .action-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.75rem; }
-
-    .train-status {
-      margin-top: 0.5rem;
-      padding: 0.6rem 0.8rem;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      font-size: 0.8rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.3rem;
-    }
-    .train-status.ok    { border-color: var(--green); }
-    .train-status.fail  { border-color: var(--red); }
-    .train-status .lbl  { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-    .train-status.ok   .lbl { color: var(--green); }
-    .train-status.fail .lbl { color: var(--red); }
-    .train-status .err {
-      font-family: monospace;
-      font-size: 0.72rem;
-      color: var(--red);
-      word-break: break-word;
-      white-space: pre-wrap;
-      max-height: 8rem;
-      overflow-y: auto;
-    }
-  </style>
-</head>
-<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
-
-  {% include "ratings/_nav.html" with mode="stats" %}
-
-  <div class="stats-page">
+  <div class="page">
 
     <div class="section">
       <div class="section-title">Queue</div>
@@ -161,13 +33,13 @@
     <div class="section">
       <div class="section-title">Score distribution</div>
       {% for row in score_dist %}
-      <div class="score-row">
-        <span class="score-label meta-score--{{ row.score }}">{{ row.score }}</span>
-        <div class="score-bar-track">
-          <div class="score-bar-fill score-bar-fill--{{ row.score }}"
+      <div class="dist-row">
+        <span class="dist-label meta-score--{{ row.score }}">{{ row.score }}</span>
+        <div class="dist-track">
+          <div class="dist-fill dist-fill--{{ row.score }}"
                style="width:{% widthratio row.n score_dist_max 100 %}%"></div>
         </div>
-        <span class="score-bar-n">{{ row.n }}</span>
+        <span class="dist-n">{{ row.n }}</span>
       </div>
       {% endfor %}
     </div>
@@ -175,9 +47,9 @@
 
     <div class="section">
       <div class="section-title">Model</div>
-      <div class="meta-row">
+      <div class="kv-row">
         <span>Weights saved</span>
-        <span class="meta-val">{% if last_trained %}{{ last_trained|date:"Y-m-d H:i" }} UTC{% else %}Never{% endif %}</span>
+        <span class="kv-val">{% if last_trained %}{{ last_trained|date:"Y-m-d H:i" }} UTC{% else %}Never{% endif %}</span>
       </div>
       {% if last_train %}
       <div class="train-status {% if last_train.ok %}ok{% else %}fail{% endif %}">
@@ -186,45 +58,21 @@
         {% if last_train.error %}<span class="err">{{ last_train.error }}</span>{% endif %}
       </div>
       {% endif %}
-      <div class="meta-row">
+      <div class="kv-row">
         <span>Training data</span>
-        <span class="meta-val">{{ liked_count }} liked + {{ below_cutoff_count }} below cutoff</span>
+        <span class="kv-val">{{ positive_count }} positive (score ≥ 3) + {{ below_cutoff_count }} negative (score ≤ 2)</span>
       </div>
-      <div class="action-row">
-        <button class="done-btn done-btn-scrape"
-                hx-post="{% url 'trigger_scrape' %}"
-                hx-target="#scrape-result" hx-swap="outerHTML"
-                {% if active_scrape_task_id %}disabled{% endif %}>
-          {% if active_scrape_task_id %}Scraping…{% else %}Scrape more{% endif %}
-        </button>
-        <button class="done-btn done-btn-train"
-                hx-post="{% url 'trigger_train' %}"
-                hx-target="#train-result" hx-swap="outerHTML"
-                {% if active_task_id %}disabled{% endif %}>
-          {% if active_task_id %}Training…{% else %}Train model{% endif %}
-        </button>
-      </div>
-      {% if active_scrape_task_id %}
-        {% include "ratings/_scrape_pending.html" with task_id=active_scrape_task_id elapsed=scrape_elapsed %}
-      {% else %}
-        <div id="scrape-result"></div>
-      {% endif %}
-      {% if active_task_id %}
-        {% include "ratings/_train_pending.html" with task_id=active_task_id elapsed=training_elapsed %}
-      {% else %}
-        <div id="train-result"></div>
-      {% endif %}
     </div>
 
     <div class="section">
       <div class="section-title">Last 7 days</div>
       <div class="stat-grid">
         <div class="stat-card">
-          <div class="big" style="color:var(--green)">{{ scraped_7d }}</div>
+          <div class="big big--green">{{ scraped_7d }}</div>
           <div class="label">Scraped</div>
         </div>
         <div class="stat-card">
-          <div class="big" style="color:#60a5fa">{{ rated_7d }}</div>
+          <div class="big big--blue">{{ rated_7d }}</div>
           <div class="label">Rated</div>
         </div>
       </div>
@@ -234,17 +82,17 @@
       <div class="section-title">Tagging</div>
       <div class="stat-grid">
         <div class="stat-card">
-          <div class="big" style="color:#a78bfa">{{ tagged_count }}</div>
+          <div class="big big--purple">{{ tagged_count }}</div>
           <div class="label">Tagged</div>
         </div>
         <div class="stat-card">
-          <div class="big" style="color:var(--muted)">{{ untagged_count }}</div>
+          <div class="big big--muted">{{ untagged_count }}</div>
           <div class="label">Untagged</div>
         </div>
         {% if avg_inbox_hours is not None %}
         <div class="stat-card">
-          <div class="big" style="color:var(--amber)">{{ avg_inbox_hours }}h</div>
-          <div class="label">Avg inbox wait</div>
+          <div class="big big--amber">{{ avg_inbox_hours }}h</div>
+          <div class="label">Avg time to rate</div>
         </div>
         {% endif %}
       </div>
@@ -255,10 +103,10 @@
       <div class="section-title">Top tags</div>
       {% with max_n=tag_breakdown.0.n %}
       {% for tag in tag_breakdown %}
-      <div class="source-row">
-        <a href="{% url 'gallery' %}?tag={{ tag.name }}" class="source-name" title="{{ tag.name }}">#{{ tag.name }}</a>
+      <div class="bar-row">
+        <a href="{% url 'gallery' %}?tag={{ tag.name }}" class="bar-label" title="{{ tag.name }}">#{{ tag.name }}</a>
         <div class="bar-track">
-          <div class="bar-fill" style="width:{% widthratio tag.n max_n 100 %}%; background:#a78bfa;"></div>
+          <div class="bar-fill bar-fill--tag" style="width:{% widthratio tag.n max_n 100 %}%"></div>
         </div>
         <span class="bar-n">{{ tag.n }}</span>
       </div>
@@ -272,8 +120,8 @@
       <div class="section-title">Gallery by source</div>
       {% with max_n=source_breakdown.0.n %}
       {% for row in source_breakdown %}
-      <div class="source-row">
-        <span class="source-name" title="{{ row.source_label }}">{{ row.source_label }}</span>
+      <div class="bar-row">
+        <span class="bar-label" title="{{ row.source_label }}">{{ row.source_label }}</span>
         <div class="bar-track">
           <div class="bar-fill" style="width:{% widthratio row.n max_n 100 %}%"></div>
         </div>
@@ -285,5 +133,4 @@
     {% endif %}
 
   </div>
-</body>
-</html>
+{% endblock %}

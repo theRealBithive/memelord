@@ -161,7 +161,7 @@ def test_download_images_writes_files_with_blog_prefix() -> None:
             mock_resp.read.return_value = content
             result = tumblr.download_images([url], out, "myblog", rate_limit_sec=0)
         assert len(result) == 1
-        path, source_url, source_label = result[0]
+        path, _source_url, source_label = result[0]
         assert path.read_bytes() == content
         assert path.parent == out
         assert path.name.startswith("myblog_")

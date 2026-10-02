@@ -1,0 +1,13 @@
+<a href="{% url 'review_corpus_image' image.content_hash %}"
+   id="item-{{ image.content_hash }}"
+   class="gallery-item"
+   data-hash="{{ image.content_hash }}"
+   data-lightbox-url="{% url 'lightbox' image.content_hash %}"
+   {% if oob %}hx-swap-oob="true"{% endif %}>
+  <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
+  {% if image.score is not None %}
+  <span class="gallery-item-score gallery-item-score--{{ image.score }}">{{ image.score }}</span>
+  {% else %}
+  <span class="gallery-item-score gallery-item-score--unrated">unrated</span>
+  {% endif %}
+</a>

@@ -1,6 +1,8 @@
 """Template context processors for the ratings app."""
 
 from django.conf import settings
+from django.contrib import messages
+from django.contrib.messages import get_messages
 
 
 def app_version(request):
@@ -31,3 +33,35 @@ def notification_config(request):
     return {
         "share_channels": [ch for ch in channels if ch.is_configured],
     }
+
+
+def server_toasts(request):
+    """
+    Django messages as toast data for base.html (UI contract V7).
+
+    A full-page POST (clearing the log) cannot deliver an HX-Trigger header to
+    a page that is being redirected to, so it flashes a message instead and the
+    next page renders it into #server-toasts with json_script; toast.js shows
+    it like any htmx toast. Iterating the storage marks the messages consumed,
+    which is right because base.html is the only template that renders them.
+    """
+    kinds = {messages.SUCCESS: "ok", messages.ERROR: "error"}
+    toasts = []
+    for message in get_messages(request):
+        toasts.append({"message": str(message), "kind": kinds.get(message.level, "info")})
+    return {"server_toasts": toasts}
+
+
+def active_jobs(request):
+    """
+    Background-job state for the nav indicator on every page (UI contract V8).
+
+    The session bookkeeping lives in views next to trigger_train/trigger_scrape
+    and their pollers; it is imported lazily here because Django loads this
+    module while reading settings, before the app registry is ready.
+    """
+    if not hasattr(request, "session"):
+        return {}
+    from ratings import views
+
+    return {**views._training_ctx(request), **views._scrape_ctx(request)}

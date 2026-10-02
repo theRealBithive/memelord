@@ -8,7 +8,7 @@ from ratings.scraper import populate_knn_tag_suggestions
 
 
 class Command(BaseCommand):
-    help = "Train the DINOv2+LogisticRegression classifier on rated images."
+    help = "Train the DINOv3+LogisticRegression classifier on rated images."
 
     def handle(self, *args, **options):
         trainer.run(

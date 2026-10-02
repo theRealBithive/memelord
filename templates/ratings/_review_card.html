@@ -12,83 +12,11 @@
       <span class="source">{{ image.source_label }}</span>
     {% endif %}
     <span class="review-position">{% if total %}{{ position }} / {{ total }}{% endif %}{% if image.score is not None %}{% if total %} · {% endif %}<span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% endif %}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
-    {% include "ratings/_share_button.html" %}
   </div>
 
-  <div class="card-tags">
-    {% for tag in image.tags.all %}<span class="tag-pill" data-tag="{{ tag.name }}">#{{ tag.name }} <button class="tag-remove" aria-label="remove tag">×</button></span>{% endfor %}
-    <input class="tag-input" type="text" placeholder="+ tag"
-           data-tag-url="{% url 'update_image_tags' image.content_hash %}"
-           data-autocomplete-url="{% url 'tag_autocomplete' %}"
-           autocomplete="off">
-    <button type="button" class="tag-modal-open" aria-label="Edit tags">+ tag</button>
-    <div class="tag-autocomplete" hidden></div>
-    {% if image.knn_tag_suggestions_list %}<div class="suggestion-group">{% for kw in image.knn_tag_suggestions_list %}<button class="tag-suggestion-pill" data-tag="{{ kw }}" data-tag-url="{% url 'update_image_tags' image.content_hash %}">{{ kw }}</button>{% endfor %}</div>{% endif %}
-  </div>
+  {% include "ratings/_tag_editor.html" %}
 
-  <div class="score-row">
-    <button class="review-trash-btn"
-            data-score="0"
-            hx-post="{% url score_url image.content_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML"
-            hx-vals='{"score": "0"}'
-            title="Trash — below the scale; kept on disk as the strongest negative example">
-      <span class="review-trash-icon">🗑</span>
-    </button>
-    {% for s in scores %}
-    <button class="score-btn score-btn--{{ s }}{% if image.score == s %} score-active{% endif %}"
-            data-score="{{ s }}"
-            hx-post="{% url score_url image.content_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML"
-            hx-vals='{"score": "{{ s }}"}'>
-      <span class="score-num">{{ s }}</span>
-    </button>
-    {% endfor %}
-    <button class="review-nsfw-btn{% if image.is_nsfw %} review-nsfw-btn--on{% endif %}"
-            data-action="nsfw"
-            hx-post="{% url 'toggle_nsfw' image.content_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML"
-            hx-vals='{"mode": "{{ mode }}"}'
-            title="{% if image.is_nsfw %}Marked NSFW — click to clear{% else %}Click to mark NSFW{% endif %}">
-      <span class="review-nsfw-icon">🔞</span>
-    </button>
-    <button class="purge-btn"
-            data-action="purge"
-            hx-post="{% url purge_url image.content_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML"
-            hx-confirm="Permanently delete this image? It will never be downloaded again.">
-      <span class="purge-icon">⊘</span>
-      <span class="purge-label">PURGE</span>
-    </button>
-  </div>
-
-  <div class="review-nav">
-    {% if prev_hash %}
-    <button class="review-nav-btn"
-            data-action="prev"
-            hx-get="{% url image_url prev_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML"
-            hx-push-url="true">← prev</button>
-    {% else %}
-    <span class="review-nav-btn review-nav-btn--disabled">← prev</span>
-    {% endif %}
-
-    {% if next_hash %}
-    <button class="review-nav-btn"
-            data-action="next"
-            hx-get="{% url image_url next_hash %}"
-            hx-target="#review-card"
-            hx-swap="outerHTML"
-            hx-push-url="true">next →</button>
-    {% else %}
-    <span class="review-nav-btn review-nav-btn--disabled">next →</span>
-    {% endif %}
-  </div>
+  {% include "ratings/_score_actions.html" %}
 
 {% else %}
 
@@ -101,7 +29,17 @@
     <p class="done-hint">Scrape more images to keep rating.</p>
     {% endif %}
     <div class="done-actions">
+      <button type="button" class="done-btn done-btn-scrape"
+              hx-post="{% url 'trigger_scrape' %}" hx-target="#done-job" hx-swap="innerHTML"
+              {% if active_scrape_task_id %}disabled{% endif %}>↻ Scrape now</button>
+      <button type="button" class="done-btn done-btn-train"
+              hx-post="{% url 'trigger_train' %}" hx-target="#done-job" hx-swap="innerHTML"
+              {% if active_task_id %}disabled{% endif %}>⟳ Train</button>
       <a href="{% url 'gallery' %}" class="done-btn">→ Gallery</a>
+    </div>
+    <div id="done-job" class="done-job">
+      {% if active_scrape_task_id %}{% include "ratings/_scrape_pending.html" with task_id=active_scrape_task_id elapsed=scrape_elapsed %}{% endif %}
+      {% if active_task_id %}{% include "ratings/_train_pending.html" with task_id=active_task_id elapsed=training_elapsed %}{% endif %}
     </div>
   </div>
 

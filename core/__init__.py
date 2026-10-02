@@ -1,1 +1,1 @@
-"""Core neural logic: DINOv2 encoder and taste classifier."""
+"""Core neural logic: DINOv3 encoder and taste classifier."""

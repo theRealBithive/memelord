@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from retina import image_validation
 from tests.conftest import minimal_png_bytes
 

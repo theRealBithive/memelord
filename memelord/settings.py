@@ -125,6 +125,8 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "ratings.context_processors.notification_config",
                 "ratings.context_processors.app_version",
+                "ratings.context_processors.server_toasts",
+                "ratings.context_processors.active_jobs",
             ],
         },
     },

@@ -42,22 +42,26 @@ Thumbs.db
 bug-hunt-report.md
 
 # Project: data, output, weights, DB
-data/corpus/*
-!data/corpus/.gitkeep
-data/void/*
-!data/void/.gitkeep
-data/thumbs/
-data/*.db
-data/*.db-wal
-data/*.db-shm
+data/
+staticfiles/
 out/
+output/
 working_dir/
+janulon-data/
 *.pkl
 */janulon.db
 *.webp
 *.png
+# The home-screen icons are the one PNG set that belongs in the repo (CI builds the image from the checkout).
+!static/icons/*.png
 *.jpg
 *.gif
 
+# Live scraper config (local dev at the root, Docker under data/). Only
+# config.example.toml is tracked.
+/config.toml
 */config.toml
-janulon-data/memelord.db
+
+# mutmut working tree
+mutants/
+.hypothesis/

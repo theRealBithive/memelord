@@ -1,24 +1,8 @@
+{% extends "base.html" %}
 {% load static %}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0a0a0a">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <title>memelord — {% if is_below_cutoff %}below cutoff{% else %}gallery{% endif %}</title>
-  <link rel="stylesheet" href="{% static 'app.css' %}">
-  <script id="gallery-share-channels" type="application/json">
-  [{% for ch in share_channels %}{"pk": {{ ch.pk }}, "name": "{{ ch.name|escapejs }}"}{% if not forloop.last %}, {% endif %}{% endfor %}]
-  </script>
-  <script src="{% static 'share-sheet.js' %}" defer></script>
-  <script src="{% static 'tags.js' %}" defer></script>
-  <script src="{% static 'gallery.js' %}" defer></script>
-</head>
-<body>
+{% block title %}{% if is_below_cutoff %}below cutoff{% else %}gallery{% endif %}{% endblock %}
+{% block content %}
 
-  {% include "ratings/_nav.html" %}
 
   <div class="gallery-page">
 
@@ -54,29 +38,8 @@
     </div>
 
     {% if images %}
-    <div class="gallery-grid"
-         data-ac-url="{% url 'tag_autocomplete' %}">
-      {% for image in images %}
-      <a href="{% url 'review_corpus_image' image.content_hash %}"
-         class="gallery-item"
-         {% if image.score is not None %}data-score="{{ image.score }}"{% endif %}
-         {% if image.predicted_score is not None %}data-predicted="{{ image.predicted_score }}"{% endif %}
-         data-nsfw="{% if image.is_nsfw %}1{% else %}0{% endif %}"
-         data-action-url="{% url 'gallery_action' image.content_hash %}"
-         data-share-url="{% url 'share_image' image.content_hash %}"
-         data-tag-url="{% url 'update_image_tags' image.content_hash %}"
-         data-tags="{% for t in image.tags.all %}{{ t.name }}{% if not forloop.last %},{% endif %}{% endfor %}"
-         data-src="{% url 'serve_media' image.file_path %}">
-        <img src="{% url 'serve_thumbnail' image.file_path %}" alt="" loading="lazy">
-        <div class="gallery-item-overlay">
-          {% if image.score is not None %}
-          <span class="gallery-item-score gallery-item-score--{{ image.score }}">{{ image.score }}</span>
-          {% else %}
-          <span class="gallery-item-score gallery-item-score--unrated">unrated</span>
-          {% endif %}
-        </div>
-      </a>
-      {% endfor %}
+    <div class="gallery-grid">
+      {% for image in images %}{% include "ratings/_gallery_item.html" %}{% endfor %}
     </div>
     {% else %}
     <div class="done">
@@ -91,5 +54,13 @@
 
   </div>
 
-</body>
-</html>
+  <div id="lightbox" class="lightbox" hidden>
+    <div class="lb-backdrop"></div>
+    <div id="lightbox-content" class="lb-content"></div>
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{% static 'share-sheet.js' %}" defer></script>
+  <script src="{% static 'tags.js' %}" defer></script>
+  <script src="{% static 'gallery.js' %}" defer></script>
+{% endblock %}

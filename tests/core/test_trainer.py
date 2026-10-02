@@ -96,9 +96,10 @@ class TrainerTests(TestCase):
         for img in ImageModel.objects.filter(score__gte=3):
             self.assertNotIn(str(self.data_dir / img.file_path), weights)
 
+    @patch.object(brain, "get_transform")
     @patch.object(brain, "get_encoder")
     @patch.object(brain, "encode")
-    def test_run_saves_taste_weights(self, mock_encode, mock_get_encoder) -> None:
+    def test_run_saves_taste_weights(self, mock_encode, mock_get_encoder, mock_get_transform) -> None:
         """run() fits taste classifier and saves weights."""
         pos = self._write_image("images/pos.png")
         neg = self._write_image("images/neg.png")
@@ -122,12 +123,13 @@ class TrainerTests(TestCase):
         trainer.run(data_dir=self.data_dir, weights_path=weights_path)
         self.assertTrue(weights_path.exists())
 
+    @patch.object(brain, "get_transform")
     @patch.object(brain, "get_encoder")
     @patch.object(brain, "encode")
     def test_run_uses_cached_embeddings_without_encoding(
-        self, mock_encode, mock_get_encoder
+        self, mock_encode, mock_get_encoder, mock_get_transform
     ) -> None:
-        """With every row's embedding cached, run() skips the DINOv2 encoder."""
+        """With every row's embedding cached, run() skips the encoder entirely."""
         self._write_image("images/pos.png")
         self._write_image("images/neg.png")
         ImageModel.objects.create(
@@ -138,6 +140,7 @@ class TrainerTests(TestCase):
             embedding=brain.embedding_to_bytes(
                 np.full(768, 0.1, dtype=np.float32)
             ),
+            embedding_model=brain.ENCODER_ID,
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
@@ -147,6 +150,7 @@ class TrainerTests(TestCase):
             embedding=brain.embedding_to_bytes(
                 np.full(768, 0.2, dtype=np.float32)
             ),
+            embedding_model=brain.ENCODER_ID,
         )
 
         weights_path = self.data_dir / "weights.pkl"
@@ -156,10 +160,11 @@ class TrainerTests(TestCase):
         mock_encode.assert_not_called()
         mock_get_encoder.assert_not_called()
 
+    @patch.object(brain, "get_transform")
     @patch.object(brain, "get_encoder")
     @patch.object(brain, "encode")
     def test_run_encodes_only_uncached_rows(
-        self, mock_encode, mock_get_encoder
+        self, mock_encode, mock_get_encoder, mock_get_transform
     ) -> None:
         """With a partial cache, run() encodes exactly the rows missing an embedding."""
         self._write_image("images/pos.png")
@@ -172,6 +177,7 @@ class TrainerTests(TestCase):
             embedding=brain.embedding_to_bytes(
                 np.full(768, 0.1, dtype=np.float32)
             ),
+            embedding_model=brain.ENCODER_ID,
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
@@ -194,10 +200,11 @@ class TrainerTests(TestCase):
         encoded_paths = mock_encode.call_args.args[1]
         self.assertEqual(encoded_paths, [neg])
 
+    @patch.object(brain, "get_transform")
     @patch.object(brain, "get_encoder")
     @patch.object(brain, "encode")
     def test_run_reencodes_corrupt_cached_embedding(
-        self, mock_encode, mock_get_encoder
+        self, mock_encode, mock_get_encoder, mock_get_transform
     ) -> None:
         """A wrong-dimension cached blob must not crash train; it falls through to encode."""
         self._write_image("images/pos.png")
@@ -210,6 +217,7 @@ class TrainerTests(TestCase):
             embedding=brain.embedding_to_bytes(
                 np.full(768, 0.1, dtype=np.float32)
             ),
+            embedding_model=brain.ENCODER_ID,
         )
         # A 512-d blob bypasses embedding_to_bytes' dimension guard but raises
         # ValueError in bytes_to_embedding — simulates an encoder-dimension swap.
@@ -219,6 +227,7 @@ class TrainerTests(TestCase):
             source_label="t",
             score=1,
             embedding=np.full(512, 0.2, dtype=np.float32).tobytes(),
+            embedding_model=brain.ENCODER_ID,
         )
         mock_get_encoder.return_value = None
         mock_encode.return_value = (
@@ -235,10 +244,11 @@ class TrainerTests(TestCase):
         encoded_paths = mock_encode.call_args.args[1]
         self.assertEqual(encoded_paths, [bad])
 
+    @patch.object(brain, "get_transform")
     @patch.object(brain, "get_encoder")
     @patch.object(brain, "encode")
     def test_run_saves_nsfw_weights_when_labels_exist(
-        self, mock_encode, mock_get_encoder
+        self, mock_encode, mock_get_encoder, mock_get_transform
     ) -> None:
         """run() saves NSFW classifier when both classes exist."""
         self._write_image("images/pos.png")
@@ -287,3 +297,35 @@ class TrainerTests(TestCase):
         )
         self.assertTrue(taste_path.exists())
         self.assertTrue(nsfw_path.exists())
+
+    def test_backfill_skips_vectors_whose_file_has_no_row(self) -> None:
+        """Contract: V3 — only rows get stamped; a stray encoded file is ignored, the rest still lands."""
+        self._write_image("images/known.png")
+        self._write_image("images/stray.png")
+        known = ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex, file_path="images/known.png", source_label="t", score=5
+        )
+        vectors = {
+            str(self.data_dir / "images/known.png"): np.full(768, 0.3, dtype=np.float32),
+            str(self.data_dir / "images/stray.png"): np.full(768, 0.4, dtype=np.float32),
+        }
+        trainer._backfill_phash_embedding(vectors, self.data_dir)
+        known.refresh_from_db()
+        self.assertEqual(known.embedding_model, brain.ENCODER_ID)
+        self.assertTrue(known.phash)
+        np.testing.assert_array_equal(brain.bytes_to_embedding(bytes(known.embedding)), vectors[str(self.data_dir / "images/known.png")])
+
+    def test_backfill_writes_nothing_when_every_row_is_current(self) -> None:
+        """Contract: V3 — a current stamp is left alone (re-saving every row was the old dominant cost)."""
+        self._write_image("images/cur.png")
+        stored = np.full(768, 0.1, dtype=np.float32)
+        row = ImageModel.objects.create(
+            content_hash=uuid.uuid4().hex, file_path="images/cur.png", source_label="t", score=5,
+            phash="abcd", embedding=brain.embedding_to_bytes(stored), embedding_model=brain.ENCODER_ID,
+        )
+        vectors = {str(self.data_dir / "images/cur.png"): np.full(768, 0.9, dtype=np.float32)}
+        with patch.object(ImageModel, "save") as save:
+            trainer._backfill_phash_embedding(vectors, self.data_dir)
+        save.assert_not_called()
+        row.refresh_from_db()
+        np.testing.assert_array_equal(brain.bytes_to_embedding(bytes(row.embedding)), stored)

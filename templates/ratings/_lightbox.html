@@ -1,0 +1,15 @@
+{% if image %}
+<div class="lb-inner">
+  <div class="lb-stage">
+    <button type="button" class="lb-close" data-action="close" aria-label="Close">×</button>
+    <img class="lb-img" src="{% url 'serve_media' image.file_path %}" alt="">
+  </div>
+  <div class="meta">
+    <span class="review-position">{% if image.score is not None %}<span class="meta-score meta-score--{{ image.score }}">{{ image.score }}</span>{% else %}unrated{% endif %}{% if prediction is not None %} <span class="meta-pred">{{ prediction }}%</span>{% endif %}</span>
+    <span class="lb-pos" data-pos></span>
+    <a href="{% url 'review_corpus_image' image.content_hash %}" class="hint-link">open in review →</a>
+  </div>
+  {% include "ratings/_tag_editor.html" %}
+  {% include "ratings/_score_actions.html" %}
+</div>
+{% endif %}
