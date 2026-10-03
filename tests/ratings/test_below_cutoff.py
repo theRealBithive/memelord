@@ -119,7 +119,7 @@ class BelowCutoffQueueRulesTests(TestCase):
         )
 
     def test_review_hidden_image_in_below_q(self) -> None:
-        from ratings.views import _review_qs
+        from ratings.views.review import _review_qs
 
         reject = _image(score=None, predicted=0.1)
         self._set_thresholds(sfw=6, nsfw=1)

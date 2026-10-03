@@ -1,8 +1,15 @@
 <div id="review-card">
 {% if image %}
-
+  {% comment %}
+  The next images in queue order are fetched while this one is being judged, so
+  rate-and-advance paints its successor from the browser cache (review latency
+  contract R2). Low priority keeps them behind the image on screen; the media
+  responses are cacheable (R3), so the preloaded bytes are reused.
+  {% endcomment %}
+  {% for path in preload_paths %}<link rel="preload" as="image" href="{{ MEDIA_URL }}{{ path }}" fetchpriority="low">
+  {% endfor %}
   <div class="image-wrap">
-    <img src="{{ MEDIA_URL }}{{ image.file_path }}" alt="" loading="eager">
+    <img src="{{ MEDIA_URL }}{{ image.file_path }}" alt="" loading="eager" fetchpriority="high">
   </div>
 
   <div class="meta">

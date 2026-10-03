@@ -65,7 +65,7 @@ class ReproStall(TestCase):
         # Stub the classifier so rendering img2 computes 0.1 (below 0.333) and
         # _taste_prediction persists it.
         stub_model = taste.TasteModel(shared=object())
-        with mock.patch("ratings.views._get_taste_model", return_value=stub_model), \
+        with mock.patch("ratings.views.common.get_taste_model", return_value=stub_model), \
              mock.patch("ratings.features.taste_features", return_value=None), \
              mock.patch("core.brain.predict_proba", return_value=0.1):
             # Land on the page, then rate img1 → advances to img2 (renders +

@@ -82,7 +82,7 @@ from ratings.queue_rules import (
     normalize_queue_order,
     review_settings_row,
 )
-from ratings.views import (
+from ratings.views.review import (
     _browse_ctx,
     _queue_neighbor_hash,
     _review_nsfw_qs,

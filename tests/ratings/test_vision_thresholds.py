@@ -15,7 +15,7 @@ from django.urls import reverse
 
 from ratings.models import Image, ReviewThresholds
 from ratings.queue_rules import below_cutoff_q, bucket_to_cutoff, get_review_thresholds
-from ratings.views import _counts
+from ratings.views.common import nav_counts
 
 
 def test_bucket_to_cutoff_known_buckets():
@@ -81,7 +81,7 @@ class ReviewQueueThresholdFilterTests(TestCase):
         )
 
     def test_sfw_threshold_hides_low_score_images(self) -> None:
-        from ratings.views import _review_qs
+        from ratings.views.review import _review_qs
 
         keep = _make_image(predicted=0.7)
         hide = _make_image(predicted=0.2)
@@ -94,7 +94,7 @@ class ReviewQueueThresholdFilterTests(TestCase):
     def test_null_predicted_score_always_visible(self) -> None:
         """Never-classified images shouldn't be hidden — that would silently
         empty the queue after migration or after fresh scrapes pre-classify."""
-        from ratings.views import _review_qs
+        from ratings.views.review import _review_qs
 
         unscored = _make_image(predicted=None)
         self._set_thresholds(sfw=6, nsfw=6)  # strictest
@@ -103,7 +103,7 @@ class ReviewQueueThresholdFilterTests(TestCase):
         self.assertIn(unscored.content_hash, hashes)
 
     def test_nsfw_threshold_independent_of_sfw(self) -> None:
-        from ratings.views import _review_nsfw_qs
+        from ratings.views.review import _review_nsfw_qs
 
         keep_nsfw = _make_image(predicted=0.9, is_nsfw=True)
         hide_nsfw = _make_image(predicted=0.4, is_nsfw=True)
@@ -115,7 +115,7 @@ class ReviewQueueThresholdFilterTests(TestCase):
         self.assertNotIn(hide_nsfw.content_hash, hashes)
 
     def test_default_bucket_1_shows_everything(self) -> None:
-        from ratings.views import _review_qs
+        from ratings.views.review import _review_qs
 
         a = _make_image(predicted=0.0)
         b = _make_image(predicted=0.5)
@@ -127,7 +127,7 @@ class ReviewQueueThresholdFilterTests(TestCase):
 
     def test_dial_hides_low_confidence_at_max(self) -> None:
         """Images with low predicted_score are hidden at the strictest dial setting."""
-        from ratings.views import _review_qs
+        from ratings.views.review import _review_qs
 
         hide = _make_image(predicted=0.1)
         self._set_thresholds(sfw=6, nsfw=1)
@@ -165,12 +165,12 @@ class SetVisionThresholdsNavTests(TestCase):
         )
 
     def test_save_returns_oob_nav_with_updated_counts(self) -> None:
-        before = _counts(show_nsfw=False)
+        before = nav_counts(show_nsfw=False)
         response = self.client.post(
             reverse("set_vision_thresholds"),
             {"sfw_threshold": 4, "nsfw_threshold": 1},
         )
-        after = _counts(show_nsfw=False)
+        after = nav_counts(show_nsfw=False)
 
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()

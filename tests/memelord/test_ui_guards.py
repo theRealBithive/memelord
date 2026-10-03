@@ -73,24 +73,27 @@ def test_every_css_class_is_used_somewhere() -> None:
     assert unused == [], f"unused CSS classes: {unused}"
 
 
+# The view modules without the package __init__: its re-export lines would
+# count as a "caller" for every view and blind the dead-view check below.
+VIEW_MODULES = sorted(
+    p for p in (ROOT / "ratings" / "views").glob("*.py") if p.name != "__init__.py"
+)
+
+
 def test_every_view_function_has_a_caller() -> None:
     """Contract: V11"""
-    views_source = (ROOT / "ratings" / "views.py").read_text()
-    other_sources = "\n".join(
-        p.read_text()
-        for p in (ROOT / "ratings").glob("*.py")
-        if p.name not in ("views.py",)
-    )
-    tree = ast.parse(views_source)
+    views_source = "\n".join(p.read_text() for p in VIEW_MODULES)
+    other_sources = "\n".join(p.read_text() for p in (ROOT / "ratings").glob("*.py"))
     dead = []
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        name = node.name
-        references_inside_views = len(re.findall(r"\b" + name + r"\b", views_source)) - 1
-        references_elsewhere = len(re.findall(r"\b" + name + r"\b", other_sources))
-        if references_inside_views + references_elsewhere == 0:
-            dead.append(name)
+    for module in VIEW_MODULES:
+        for node in ast.parse(module.read_text()).body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            name = node.name
+            references_inside_views = len(re.findall(r"\b" + name + r"\b", views_source)) - 1
+            references_elsewhere = len(re.findall(r"\b" + name + r"\b", other_sources))
+            if references_inside_views + references_elsewhere == 0:
+                dead.append(name)
     assert dead == [], f"view functions without a caller: {dead}"
 
 
@@ -191,9 +194,13 @@ def test_scripts_never_fall_back_to_browser_dialogs() -> None:
 
 def test_destructive_views_require_login_and_post() -> None:
     """OWASP A01: every state-destroying endpoint is authenticated and never reachable by GET."""
-    tree = ast.parse((ROOT / "ratings" / "views.py").read_text())
+    view_functions = [
+        node
+        for module in VIEW_MODULES
+        for node in ast.parse(module.read_text()).body
+    ]
     seen = set()
-    for node in tree.body:
+    for node in view_functions:
         if isinstance(node, ast.FunctionDef) and node.name in DESTRUCTIVE_VIEWS:
             names = {d.id if isinstance(d, ast.Name) else getattr(d, "attr", "") for d in node.decorator_list}
             assert {"login_required", "require_POST"} <= names, node.name

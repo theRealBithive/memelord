@@ -56,17 +56,17 @@ def active_jobs(request):
     """
     Background-job state for the nav indicator on every page (UI contract V8).
 
-    The session bookkeeping lives in views next to trigger_train/trigger_scrape
-    and their pollers; it is imported lazily here because Django loads this
+    The session bookkeeping lives in ratings.views.jobs next to trigger_train /
+    trigger_scrape and their pollers; it is imported lazily here because Django loads this
     module while reading settings, before the app registry is ready.
     """
     if not hasattr(request, "session"):
         return {}
-    from ratings import views
+    from ratings.views import jobs
 
     return {
-        **views._training_ctx(request),
-        **views._scrape_ctx(request),
+        **jobs.training_ctx(request),
+        **jobs.scrape_ctx(request),
         **_index_job_ctx(),
         **_reencode_job_ctx(),
     }

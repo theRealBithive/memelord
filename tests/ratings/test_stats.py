@@ -21,8 +21,8 @@ from django.utils import timezone
 from sklearn.linear_model import LogisticRegression
 
 from core import taste
-from ratings import views
 from ratings.models import Image
+from ratings.views import common
 
 
 @override_settings(DEBUG=True)
@@ -81,7 +81,7 @@ class StatsAvgInboxHoursTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             weights = Path(tmp) / "w.pkl"
             taste.save_taste_model(taste.TasteModel(shared=clf, per_source={"tg": clf}), weights)
-            with mock.patch.object(views, "WEIGHTS_PATH", weights):
+            with mock.patch.object(common, "WEIGHTS_PATH", weights):
                 response = self.client.get(reverse("stats"))
 
         self.assertEqual(response.status_code, 200)
@@ -106,7 +106,7 @@ class StatsAvgInboxHoursTests(TestCase):
             taste.save_taste_model(
                 taste.TasteModel(shared=clf, per_source={taste.NSFW_GROUP: clf}), weights
             )
-            with mock.patch.object(views, "WEIGHTS_PATH", weights):
+            with mock.patch.object(common, "WEIGHTS_PATH", weights):
                 hidden = self.client.get(reverse("stats")).content.decode()
                 self.client.post(reverse("nsfw_toggle"))
                 shown = self.client.get(reverse("stats")).content.decode()
@@ -122,3 +122,20 @@ class StatsAvgInboxHoursTests(TestCase):
         self.assertIn(">3/2<", shown_tg, "the flagged tg rows count in the NSFW row, not here")
         self.assertIn('<span class="bar-own bar-own--shared">shared</span>', shown_tg)
         self.assertFalse(any(">wsg<" in row for row in rows), "wsg has no safe rated image, so no row")
+
+
+class WeightsLastModifiedTests(TestCase):
+    def test_missing_file_means_never_trained(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(common, "WEIGHTS_PATH", Path(tmp) / "none.pkl"):
+            self.assertIsNone(common.weights_last_modified())
+
+    def test_existing_file_reports_its_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            weights = Path(tmp) / "w.pkl"
+            weights.write_bytes(b"x")
+            expected_mtime = weights.stat().st_mtime
+            with mock.patch.object(common, "WEIGHTS_PATH", weights):
+                stamp = common.weights_last_modified()
+        self.assertIsNotNone(stamp)
+        self.assertAlmostEqual(stamp.timestamp(), expected_mtime, places=3)

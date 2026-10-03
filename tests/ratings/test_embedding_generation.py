@@ -59,13 +59,14 @@ from PIL import Image as PILImage
 from sklearn.linear_model import LogisticRegression
 
 from core import brain, dedup, siglip, taste, trainer
-from ratings import features, scraper, views
+from ratings import features, scraper
 from ratings.embeddings import (
     has_current_embedding,
     reencode_stale_embeddings,
     stale_images,
 )
 from ratings.models import Image, Tag
+from ratings.views import common
 
 CURRENT = brain.ENCODER_ID
 LEGACY = "dinov2_vitb14"
@@ -313,9 +314,9 @@ class TastePredictionGenerationTests(TestCase):
         """Contract: V2"""
         legacy = _row(generation=LEGACY, seed=1)
         stub_model = taste.TasteModel(shared=object())
-        with mock.patch.object(views, "_get_taste_model", return_value=stub_model), \
+        with mock.patch.object(common, "get_taste_model", return_value=stub_model), \
              mock.patch.object(brain, "predict_proba", return_value=0.7) as predict:
-            self.assertIsNone(views._taste_prediction(legacy))
+            self.assertIsNone(common.taste_prediction(legacy))
         predict.assert_not_called()
         legacy.refresh_from_db()
         self.assertIsNone(legacy.predicted_score)
@@ -324,18 +325,18 @@ class TastePredictionGenerationTests(TestCase):
         """Contract: V2 (positive branch)"""
         current = _row(seed=1)
         stub_model = taste.TasteModel(shared=object())
-        with mock.patch.object(views, "_get_taste_model", return_value=stub_model), \
+        with mock.patch.object(common, "get_taste_model", return_value=stub_model), \
              mock.patch.object(brain, "predict_proba", return_value=0.7):
-            self.assertEqual(views._taste_prediction(current), 70)
+            self.assertEqual(common.taste_prediction(current), 70)
         current.refresh_from_db()
         self.assertAlmostEqual(current.predicted_score, 0.7)
 
     def test_without_a_taste_model_nothing_is_predicted_or_persisted(self) -> None:
         """Contract: V5 — a foreign or missing weights file means no prediction, and the row is left alone."""
         current = _row(seed=1)
-        with mock.patch.object(views, "_get_taste_model", return_value=None), \
+        with mock.patch.object(common, "get_taste_model", return_value=None), \
              mock.patch.object(brain, "predict_proba") as predict:
-            self.assertIsNone(views._taste_prediction(current))
+            self.assertIsNone(common.taste_prediction(current))
         predict.assert_not_called()
         current.refresh_from_db()
         self.assertIsNone(current.predicted_score)
@@ -349,9 +350,9 @@ class TastePredictionGenerationTests(TestCase):
         stub_model = taste.TasteModel(
             shared=object(), per_source={"tg": tg_model, taste.NSFW_GROUP: nsfw_model}
         )
-        with mock.patch.object(views, "_get_taste_model", return_value=stub_model), \
+        with mock.patch.object(common, "get_taste_model", return_value=stub_model), \
              mock.patch.object(brain, "predict_proba", return_value=0.25) as predict:
-            self.assertEqual(views._taste_prediction(flagged), 25)
+            self.assertEqual(common.taste_prediction(flagged), 25)
         self.assertIs(predict.call_args.args[0], nsfw_model)
 
     def test_stored_prediction_is_kept_regardless_of_generation(self) -> None:
@@ -359,7 +360,7 @@ class TastePredictionGenerationTests(TestCase):
         legacy = _row(generation=LEGACY, seed=1)
         Image.objects.filter(pk=legacy.pk).update(predicted_score=0.42)
         legacy.refresh_from_db()
-        self.assertEqual(views._taste_prediction(legacy), 42)
+        self.assertEqual(common.taste_prediction(legacy), 42)
 
 
 class ClassifyImagesGenerationTests(TestCase):
@@ -1032,12 +1033,12 @@ class TasteClassifierCacheTests(TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.weights = Path(self._tmp.name) / "w.pkl"
-        views._taste_model_cache = None
-        views._taste_model_mtime = None
+        common._taste_model_cache = None
+        common._taste_model_mtime = None
 
     def tearDown(self) -> None:
-        views._taste_model_cache = None
-        views._taste_model_mtime = None
+        common._taste_model_cache = None
+        common._taste_model_mtime = None
         self._tmp.cleanup()
 
     def test_foreign_file_yields_none_and_is_read_once(self) -> None:
@@ -1046,34 +1047,34 @@ class TasteClassifierCacheTests(TestCase):
 
         with self.weights.open("wb") as f:
             pickle.dump({"encoder": LEGACY, "classifier": LogisticRegression()}, f)
-        with mock.patch.object(views, "WEIGHTS_PATH", self.weights), \
+        with mock.patch.object(common, "WEIGHTS_PATH", self.weights), \
              mock.patch.object(taste, "load_taste_model", wraps=taste.load_taste_model) as load:
-            self.assertIsNone(views._get_taste_model())
-            self.assertIsNone(views._get_taste_model())
+            self.assertIsNone(common.get_taste_model())
+            self.assertIsNone(common.get_taste_model())
         load.assert_called_once()
 
     def test_current_file_is_applied(self) -> None:
         """Contract: V5 (positive branch)"""
         _save_fitted_classifier(self.weights)
-        with mock.patch.object(views, "WEIGHTS_PATH", self.weights):
-            self.assertIsInstance(views._get_taste_model(), taste.TasteModel)
+        with mock.patch.object(common, "WEIGHTS_PATH", self.weights):
+            self.assertIsInstance(common.get_taste_model(), taste.TasteModel)
 
     def test_missing_file_yields_none(self) -> None:
-        with mock.patch.object(views, "WEIGHTS_PATH", self.weights):
-            self.assertIsNone(views._get_taste_model())
+        with mock.patch.object(common, "WEIGHTS_PATH", self.weights):
+            self.assertIsNone(common.get_taste_model())
 
     def test_retrain_replaces_the_cached_source_models(self) -> None:
         """Taste contract: V5 (R5) — a new file's per-source dict arrives with the next mtime."""
         import os
 
         _save_fitted_classifier(self.weights)
-        with mock.patch.object(views, "WEIGHTS_PATH", self.weights):
-            first = views._get_taste_model()
+        with mock.patch.object(common, "WEIGHTS_PATH", self.weights):
+            first = common.get_taste_model()
             self.assertEqual(first.per_source, {})
             X = np.vstack([_vector(1), _vector(2)])
             tg_model = LogisticRegression().fit(X, [1, 0])
             taste.save_taste_model(taste.TasteModel(shared=first.shared, per_source={"tg": tg_model}), self.weights)
             stat = self.weights.stat()
             os.utime(self.weights, (stat.st_atime, stat.st_mtime + 10))
-            second = views._get_taste_model()
+            second = common.get_taste_model()
         self.assertEqual(set(second.per_source), {"tg"})

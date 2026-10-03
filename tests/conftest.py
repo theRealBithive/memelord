@@ -73,20 +73,17 @@ def caplog(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
 
 @pytest.fixture(autouse=True)
 def _reset_views_module_caches():
-    """Null the module-level caches in ratings.views before each test.
+    """Null the taste-model cache in ratings.views.common before each test.
 
-    _taste_model_cache, _similar_index_cache and their mtime / built_at companions
-    survive across tests in the same process; without a reset, the first test
-    to populate them leaks state into every subsequent test (e.g. a stale kNN
-    matrix from one TestCase's fixture images being seen by another). Cheap to
-    null — the cache rebuilds lazily on first use.
+    _taste_model_cache and its mtime companion survive across tests in the same
+    process; without a reset, the first test to populate them leaks state into
+    every subsequent test. Cheap to null — the cache rebuilds lazily on first
+    use.
     """
     yield
     try:
-        from ratings import views
+        from ratings.views import common
     except Exception:
         return
-    views._taste_model_cache = None
-    views._taste_model_mtime = None
-    views._similar_index_cache = None
-    views._similar_index_built_at = 0.0
+    common._taste_model_cache = None
+    common._taste_model_mtime = None

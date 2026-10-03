@@ -33,8 +33,8 @@ from django.urls import reverse
 from sklearn.linear_model import LogisticRegression
 
 from core import brain, siglip, taste
-from ratings import views
 from ratings.models import Image
+from ratings.views import common
 
 PLUS = np.full(768, 1.0, dtype=np.float32)
 
@@ -74,7 +74,7 @@ class NsfwFlipRepredictionTests(TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.weights = Path(self._tmp.name) / "w.pkl"
         _save_disagreeing_models(self.weights)
-        self._weights_patch = mock.patch.object(views, "WEIGHTS_PATH", self.weights)
+        self._weights_patch = mock.patch.object(common, "WEIGHTS_PATH", self.weights)
         self._weights_patch.start()
 
     def tearDown(self) -> None:

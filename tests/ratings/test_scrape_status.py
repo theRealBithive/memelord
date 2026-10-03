@@ -122,6 +122,35 @@ class ScrapeStatusSessionTests(TestCase):
         self.assertIn("not found", response.content.decode())
 
     @patch("django_q.tasks.fetch")
+    def test_queued_task_is_pending_and_keeps_the_session(self, mock_fetch) -> None:
+        # fetch() returns None while the task still sits in OrmQ; with a fresh
+        # start stamp that is "queued or running", not "lost".
+        mock_fetch.return_value = None
+
+        response = self.client.get(reverse("scrape_status", args=["active-task"]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.session["scrape_task_id"], "active-task")
+        body = response.content.decode()
+        self.assertIn("train-pending", body)
+        self.assertIn(reverse("scrape_status", args=["active-task"]), body)
+
+    @patch("django_q.tasks.fetch")
+    def test_crash_with_a_traceback_string_shows_the_text_capped(self, mock_fetch) -> None:
+        # A worker crash leaves django-q's traceback string as the result, not
+        # a dict; the fragment shows it (capped) instead of a blank error.
+        mock_fetch.return_value = SimpleNamespace(
+            stopped=timezone.now(), success=False, result="Traceback: " + "x" * 600
+        )
+
+        response = self.client.get(reverse("scrape_status", args=["active-task"]))
+
+        body = response.content.decode()
+        self.assertIn("train-err", body)
+        self.assertIn("Traceback: " + "x" * 489, body)
+        self.assertNotIn("x" * 500, body)
+
+    @patch("django_q.tasks.fetch")
     def test_missing_task_keeps_session_when_ids_differ(self, mock_fetch) -> None:
         mock_fetch.return_value = None
 

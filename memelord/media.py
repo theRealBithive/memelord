@@ -62,15 +62,29 @@ def _generate_thumbnail(source: Path, dest: Path) -> None:
         img.save(dest, "JPEG", quality=82, optimize=True)
 
 
+# A scraped file never changes under its path (the scraper writes each path
+# once; a purged path answers 404), so the browser may keep it for as long as
+# it likes and reuse the bytes the review card preloaded (review latency
+# contract R3). `private` keeps shared caches out: the files are behind the
+# login (OWASP A01).
+_CACHE_CONTROL = "private, max-age=31536000, immutable"
+
+
+def _cacheable(response: FileResponse) -> FileResponse:
+    response["Cache-Control"] = _CACHE_CONTROL
+    return response
+
+
 @login_required
 def serve_media(request, file_path: str) -> FileResponse:
     """Serve an image from images/ for authenticated users only."""
     full = _resolve_media_file(file_path)
     content_type, _ = mimetypes.guess_type(str(full))
-    return FileResponse(
+    response = FileResponse(
         full.open("rb"),
         content_type=content_type or "application/octet-stream",
     )
+    return _cacheable(response)
 
 
 @login_required
@@ -86,4 +100,4 @@ def serve_thumbnail(request, file_path: str) -> FileResponse:
     thumb = _thumbnail_path(normalized)
     if not thumb.exists():
         _generate_thumbnail(full, thumb)
-    return FileResponse(thumb.open("rb"), content_type="image/jpeg")
+    return _cacheable(FileResponse(thumb.open("rb"), content_type="image/jpeg"))

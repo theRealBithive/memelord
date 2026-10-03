@@ -207,3 +207,43 @@ class PerSourceErrorIsolationTests(TestCase):
 
         self.assertNotIn("mastodon/@bad@m.x", counts)
         self.assertEqual(counts["mastodon/@good@m.x"], 2)
+
+
+@override_settings(DEBUG=True)
+class AccountCursorWiringTests(TestCase):
+    """run() hands each Pixelfed/Mastodon account its stored since_id and keeps only a real new one."""
+
+    def _run_with_account(self, module, sources_key: str, account: str, iter_return):
+        sources = {**_EMPTY_SOURCES, sources_key: [account]}
+        with (
+            patch.object(scraper, "_load_sources", return_value=sources),
+            patch.object(scraper.dedup.DedupIndex, "from_db", return_value=MagicMock()),
+            patch.object(scraper.brain, "get_encoder", return_value=MagicMock()),
+            patch.object(scraper.brain, "get_transform", return_value=MagicMock()),
+            patch.object(scraper, "_process_downloads", return_value=0),
+            patch.object(module, "download_images", return_value=[]),
+            patch.object(module, "iter_image_items", return_value=iter_return) as mock_iter,
+        ):
+            scraper.run(
+                config_path=Path("/nonexistent/config.toml"),
+                data_dir=Path("/tmp/memelord-test-data"),
+            )
+        return mock_iter
+
+    def test_pixelfed_reads_stored_cursor_and_persists_new_one(self) -> None:
+        Source.objects.create(type=Source.PIXELFED, name="@a@pf.x", cursor="5")
+
+        mock_iter = self._run_with_account(scraper.pixelfed, "pixelfed_accounts", "@a@pf.x", ([], "7"))
+
+        mock_iter.assert_called_once_with("@a@pf.x", since_id="5", access_token=None)
+        self.assertEqual(Source.objects.get(type=Source.PIXELFED, name="@a@pf.x").cursor, "7")
+
+    def test_mastodon_keeps_the_old_cursor_when_nothing_new_was_seen(self) -> None:
+        # An empty timeline page returns no cursor; the stored one must survive,
+        # otherwise the next scrape would start from the beginning.
+        Source.objects.create(type=Source.MASTODON, name="@b@m.x", cursor="42")
+
+        mock_iter = self._run_with_account(scraper.mastodon_scraper, "mastodon_accounts", "@b@m.x", ([], None))
+
+        mock_iter.assert_called_once_with("@b@m.x", since_id="42", access_token=None)
+        self.assertEqual(Source.objects.get(type=Source.MASTODON, name="@b@m.x").cursor, "42")

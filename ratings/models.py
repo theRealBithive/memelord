@@ -25,7 +25,9 @@ class Image(models.Model):
     """
 
     content_hash = models.CharField(primary_key=True, max_length=64)
-    file_path = models.CharField(max_length=2048)  # relative to DATA_DIR
+    # Relative to DATA_DIR. Indexed because every /media/ request looks the
+    # row up by path to refuse purged files (memelord.media).
+    file_path = models.CharField(max_length=2048, db_index=True)
     source_url = models.CharField(max_length=2048, null=True, blank=True)
     source_label = models.CharField(max_length=255)
     downloaded_at = models.DateTimeField(auto_now_add=True)
@@ -59,6 +61,28 @@ class Image(models.Model):
 
     class Meta:
         ordering = ["downloaded_at"]
+        indexes = [
+            # The review queue reads WHERE is_purged = 0 AND score IS NULL AND
+            # is_nsfw = ? ORDER BY queue_seen_at, downloaded_at, content_hash,
+            # filtered on predicted_score. Every column it touches is in this
+            # index, so the head and neighbour lookups are an index seek and
+            # the position and badge counts walk the index instead of the rows
+            # (which carry two 3 KB vectors each). Without it every rating
+            # scanned the whole table several times (review latency contract
+            # R1).
+            models.Index(
+                fields=[
+                    "is_purged",
+                    "score",
+                    "is_nsfw",
+                    "queue_seen_at",
+                    "downloaded_at",
+                    "content_hash",
+                    "predicted_score",
+                ],
+                name="image_review_queue_idx",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.content_hash[:8]} ({self.source_label})"
