@@ -64,12 +64,13 @@ Memelord is a mobile-first Django webapp for curating images with a personal tas
 ### Module map
 
 **`ratings/`** — Django app (the new core)
-- `models.py` — `Image` model: `content_hash` (PK), `file_path` (relative to `DATA_DIR`), `score` (0–6, NULL = unrated; 0 = trash), `is_nsfw`, `is_purged`, `rated_at`, `predicted_score`, `embedding`, `embedding_model` (encoder stamp), `phash`. Plus `Source` (scrape config with pagination `cursor`), `Tag`, `NotificationChannel`, `ReviewThresholds`, `LogEntry`.
+- `models.py` — `Image` model: `content_hash` (PK), `file_path` (relative to `DATA_DIR`), `score` (0–6, NULL = unrated; 0 = trash), `is_nsfw`, `is_purged`, `rated_at`, `predicted_score`, `embedding`, `embedding_model` (encoder stamp), `phash`, `queue_seen_at`. Plus `Source` (scrape config with pagination `cursor`), `Tag`, `NotificationChannel`, `ReviewThresholds` (singleton: SFW/NSFW hide thresholds + `queue_order`), `LogEntry`.
 - `views.py` — review/score views (`review_corpus`, `score_corpus`, `purge_corpus`), `below_cutoff`, `gallery`, lightbox endpoints (`lightbox`, `lightbox_score`, `lightbox_nsfw`, `lightbox_purge`), `stats`, `trigger_scrape`, `trigger_train`, `job_indicator`, `fresh_start_view`, channel + source CRUD
 - `toast.py` — `with_toast(response, message, kind)`: puts a toast into the `HX-Trigger` header as JSON; `toast.js` renders it as text (never HTML)
 - `reset.py` — `fresh_start()`: wipe every image row + file, both classifiers and the source cursors; keeps sources, channels, tags, thresholds, users (`CONFIRM_WORD = "RESET"`)
 - `context_processors.py` — `app_version`, `notification_config`, `server_toasts` (Django messages → toast JSON), `active_jobs` (training/scrape state for the nav indicator on every page)
 - `scraper.py` — orchestrates all `retina/` scrapers, deduplicates by SHA256/pHash/embedding, inserts into DB, auto-classifies
+- `queue_rules.py` — single source of truth for the review/below-cutoff filters and for the review-queue order: `QueueOrder` (order_by fields, their reverse, and the prev/next window filters, all derived from one `(field, descending)` pair), `QUEUE_ORDERS` (`oldest`/`newest` by `downloaded_at`, `shuffle` by `content_hash`), `normalize_queue_order()` (whitelist), `get_queue_order()`
 - `utils.py` — `purge_image()`: hard-delete file from disk + mark `is_purged=True`
 - `embeddings.py` — `has_current_embedding()`, `stale_images()`, `reencode_stale_embeddings()`: embedding-generation handling (see below)
 - `admin.py` — ImageAdmin with inline thumbnails
@@ -98,6 +99,8 @@ A score is a pure DB write — no file ever moves. `score IS NULL` means unrated
 | Review (SFW/NSFW) | `review_corpus` | `score IS NULL`, visibility dial | trash (0) or score 1–6 → advance to next; purge → hard-delete |
 | Below Cutoff | `below_cutoff` | `score ≤ 2` | re-score upward or purge from the gallery lightbox |
 | Gallery | `gallery` | `score ≥ min_score` | re-score / tag / purge / share |
+
+**Review queue order** (Config → Review queue → Order, stored in `ReviewThresholds.queue_order`): `oldest` (default, download order), `newest`, or `shuffle`. Unseen images (`queue_seen_at IS NULL`) always come first; the option only sorts inside that block. An image is stamped seen when the user moves on from it via prev/next without rating it (the links carry `?left=<hash>`, handled by `_mark_left_image_seen`), not when its card renders, so the card's prev/next and rate-and-advance always agree. `shuffle` orders by `content_hash`, which is unrelated to source and download time, so the sequence is as good as random but stable across requests, and prev/next, the position counter and rate-and-advance keep working (a real `order_by("?")` would re-roll on every request). The queryset order, the reversed order for predecessor lookups and the prev/next window filters all come from one `QueueOrder` object, so they cannot drift apart.
 
 Keys `0`–`6` rate and advance in review (`0` = trash); `s` opens the share picker, `n` toggles NSFW, arrows navigate. The same keys work inside the gallery lightbox, where a score keeps the image in view (no advance) and arrows follow the grid order. (The fav star was removed with the 1–6 model; trash returned as score 0.)
 

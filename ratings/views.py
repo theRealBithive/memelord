@@ -25,10 +25,14 @@ from ratings.models import (
     Tag,
 )
 from ratings.queue_rules import (
+    QueueOrder,
     below_cutoff_q,
     bucket_to_cutoff,
+    get_queue_order,
     get_review_thresholds,
+    normalize_queue_order,
     pred_score_visible,
+    review_settings_row,
     visibility_q,
 )
 from ratings.toast import with_toast
@@ -310,38 +314,7 @@ def _purge_image(image: Image) -> None:
     _purge_image_util(image)
 
 
-def _queue_position_filters(image: Image) -> tuple[Q, Q]:
-    """
-    Build (prev_filter, next_filter) Q-pairs that split a review queue around
-    `image`, matching the queue's (queue_seen_at ASC NULLS FIRST, downloaded_at
-    ASC) ordering.
-
-    Walking the compound key explicitly is what lets callers do windowed
-    prev/next lookups instead of materialising the entire queue's hashes —
-    the queue grows with every scrape, and the old `list(qs.values_list(...))`
-    pass was an O(N) DB scan plus transport on every navigation click.
-    """
-    qsa, da = image.queue_seen_at, image.downloaded_at
-    if qsa is None:
-        # image sits inside the leading NULL block.
-        prev_filter = Q(queue_seen_at__isnull=True, downloaded_at__lt=da)
-        next_filter = Q(queue_seen_at__isnull=True, downloaded_at__gt=da) | Q(
-            queue_seen_at__isnull=False
-        )
-    else:
-        # image sits strictly after the NULL block.
-        prev_filter = (
-            Q(queue_seen_at__isnull=True)
-            | Q(queue_seen_at__lt=qsa)
-            | Q(queue_seen_at=qsa, downloaded_at__lt=da)
-        )
-        next_filter = Q(queue_seen_at__gt=qsa) | Q(
-            queue_seen_at=qsa, downloaded_at__gt=da
-        )
-    return prev_filter, next_filter
-
-
-def _queue_neighbor_hash(qs, image: Image) -> str | None:
+def _queue_neighbor_hash(qs, image: Image, order: QueueOrder) -> str | None:
     """
     Next content_hash after `image` in queue order, falling back to the prior
     one if image is the tail, or None for an empty queue.
@@ -349,20 +322,21 @@ def _queue_neighbor_hash(qs, image: Image) -> str | None:
     Used by score/purge/toggle for rate-and-advance navigation; callers should
     only invoke this once they've confirmed `image` belongs to `qs` (a one-row
     PK `.exists()` check), otherwise an out-of-queue caller will navigate
-    relative to its stale queue position instead of staying put.
+    relative to its stale queue position instead of staying put. `order` must
+    be the one `qs` was built with, otherwise the window filters split the
+    queue differently from how it is sorted.
     """
-    prev_filter, next_filter = _queue_position_filters(image)
+    prev_filter, next_filter = order.position_filters(image)
     next_hash = (
         qs.filter(next_filter).values_list("content_hash", flat=True).first()
     )
     if next_hash is not None:
         return next_hash
-    # SQLite defaults DESC to NULLS LAST, which is the exact reverse of the
-    # queue's NULLS-FIRST ASC ordering — so `.first()` here is the immediate
-    # predecessor regardless of whether the predecessor has a NULL qsa.
+    # The reversed fields walk the queue backwards, so `.first()` here is the
+    # immediate predecessor regardless of whether it sits in the unseen block.
     return (
         qs.filter(prev_filter)
-        .order_by("-queue_seen_at", "-downloaded_at")
+        .order_by(*order.reversed_order_fields())
         .values_list("content_hash", flat=True)
         .first()
     )
@@ -375,6 +349,7 @@ def rate_nsfw_corpus(request, content_hash: str | None = None):
     but filtered to is_nsfw=True images.
     """
     show_nsfw = request.session.get("show_nsfw", False)
+    _mark_left_image_seen(request)
     ctx = _review_nsfw_ctx(content_hash, show_nsfw, request)
     if request.htmx:
         return render(request, "ratings/_review_htmx.html", ctx)
@@ -759,12 +734,14 @@ def train_status(request, task_id: str):
 
 
 def _vision_ctx() -> dict:
-    """Threshold dial state for the /config page (DB singleton via get_or_create)."""
-    sfw, nsfw = get_review_thresholds()
+    """Review-queue form state for the /config page (DB singleton via get_or_create)."""
+    row = review_settings_row()
     return {
-        "vision_sfw": sfw,
-        "vision_nsfw": nsfw,
+        "vision_sfw": row.sfw_threshold,
+        "vision_nsfw": row.nsfw_threshold,
         "vision_buckets": range(1, 7),
+        "queue_order": normalize_queue_order(row.queue_order),
+        "queue_order_choices": ReviewThresholds.ORDER_CHOICES,
     }
 
 
@@ -772,11 +749,14 @@ def _vision_ctx() -> dict:
 @require_POST
 def set_vision_thresholds(request):
     """
-    Persist the SFW/NSFW review-queue hide thresholds from the config page.
+    Persist the review-queue settings (SFW/NSFW hide thresholds and queue
+    order) from the config page.
 
-    Both values are clamped to [1, 6] so a malformed POST can't disable the
-    review queue with an out-of-range value. update_or_create writes the
-    singleton in one statement.
+    Both thresholds are clamped to [1, 6] so a malformed POST can't disable
+    the review queue with an out-of-range value, and the order is matched
+    against the whitelist so an unknown name can never reach order_by (OWASP
+    A03; a missing or unknown value is stored as the default, contract V9).
+    update_or_create writes the singleton in one statement.
     """
 
     def _clamp(name: str) -> int:
@@ -787,8 +767,14 @@ def set_vision_thresholds(request):
 
     sfw = _clamp("sfw_threshold")
     nsfw = _clamp("nsfw_threshold")
+    queue_order = normalize_queue_order(request.POST.get("queue_order"))
     ReviewThresholds.objects.update_or_create(
-        pk=1, defaults={"sfw_threshold": sfw, "nsfw_threshold": nsfw}
+        pk=1,
+        defaults={
+            "sfw_threshold": sfw,
+            "nsfw_threshold": nsfw,
+            "queue_order": queue_order,
+        },
     )
     show_nsfw = request.session.get("show_nsfw", False)
     return render(
@@ -1013,6 +999,7 @@ def _browse_ctx(
     mode: str,
     show_nsfw: bool,
     request,
+    order: QueueOrder,
     extra: dict | None = None,
 ) -> dict:
     """
@@ -1020,10 +1007,11 @@ def _browse_ctx(
     image is part of the queue.
 
     Prev/next/position/total are resolved with windowed lookups against the
-    queue's natural (queue_seen_at, downloaded_at) ordering (see
-    `_queue_position_filters`) instead of pulling every queued content_hash
-    into Python on each request. Two `.first()`s and two `.count()`s scale
-    with the queue much better than the old materialise-and-index pass.
+    queue's (queue_seen_at, secondary key) ordering (see
+    `QueueOrder.position_filters`) instead of pulling every queued content_hash
+    into Python on each request. `order` must be the one `qs` was sorted with.
+    Two `.first()`s and two `.count()`s scale with the queue much better than
+    the old materialise-and-index pass.
 
     Navigation stays correct under concurrent edits: if a sibling is rated or
     purged between requests, the windowed query simply finds whichever real
@@ -1078,11 +1066,11 @@ def _browse_ctx(
         ctx = {"image": None, "mode": mode, **base}
         return ctx
 
-    prev_filter, next_filter = _queue_position_filters(image)
+    prev_filter, next_filter = order.position_filters(image)
     prev_qs = qs.filter(prev_filter)
     next_qs = qs.filter(next_filter)
     prev_hash = (
-        prev_qs.order_by("-queue_seen_at", "-downloaded_at")
+        prev_qs.order_by(*order.reversed_order_fields())
         .values_list("content_hash", flat=True)
         .first()
     )
@@ -1107,36 +1095,44 @@ def _browse_ctx(
 # ── Corpus review ─────────────────────────────────────────────────────────────
 
 
-def _review_qs(show_nsfw: bool = False):
+def _review_qs(show_nsfw: bool = False, order: QueueOrder | None = None):
     """
     Build the ordered queue for the primary review flow.
 
     Unscored images (score IS NULL) feed the queue. Unseen images
-    (queue_seen_at IS NULL) sort first in SQLite ASC; then oldest-downloaded.
-    The [vision] threshold further hides low-confidence images so the user
-    only reviews things the model thinks they'll like.
+    (queue_seen_at IS NULL) sort first in SQLite ASC; inside that block the
+    configured order (oldest / newest download, or shuffled) decides. The
+    [vision] threshold further hides low-confidence images so the user only
+    reviews things the model thinks they'll like.
+
+    `order` defaults to the DB setting; callers that also build navigation
+    pass the one they already fetched so queue and window filters agree.
     """
+    if order is None:
+        order = get_queue_order()
     sfw_bucket, nsfw_bucket = get_review_thresholds()
     return (
         Image.objects.filter(score__isnull=True, is_purged=False)
         .filter(visibility_q(sfw_bucket, nsfw_bucket, show_nsfw))
-        .order_by("queue_seen_at", "downloaded_at")
+        .order_by(*order.order_fields())
     )
 
 
-def _review_nsfw_qs(show_nsfw: bool = False):
+def _review_nsfw_qs(show_nsfw: bool = False, order: QueueOrder | None = None):
     """
     Same queue shape as _review_qs but filtered to NSFW images only.
 
     show_nsfw is accepted but ignored — this queue is always NSFW-only by
     definition. The parameter exists so qs_fn callers can treat both queues
-    with the same (show_nsfw: bool) → QuerySet signature.
+    with the same (show_nsfw, order) → QuerySet signature.
     """
+    if order is None:
+        order = get_queue_order()
     _, nsfw_bucket = get_review_thresholds()
     return (
         Image.objects.filter(is_nsfw=True, score__isnull=True, is_purged=False)
         .filter(pred_score_visible(bucket_to_cutoff(nsfw_bucket)))
-        .order_by("queue_seen_at", "downloaded_at")
+        .order_by(*order.order_fields())
     )
 
 
@@ -1144,12 +1140,14 @@ def _review_ctx(
     content_hash: str | None, show_nsfw: bool = False, request=None
 ) -> dict:
     """Build browse context for the primary corpus review queue."""
+    order = get_queue_order()
     return _browse_ctx(
-        _review_qs(show_nsfw),
+        _review_qs(show_nsfw, order),
         content_hash,
         "corpus",
         show_nsfw,
         request,
+        order,
         extra={
             "scores": range(1, 7),
             "score_url": "score_corpus",
@@ -1166,12 +1164,14 @@ def _review_nsfw_ctx(
     content_hash: str | None, show_nsfw: bool = False, request=None
 ) -> dict:
     """Build browse context for the NSFW corpus review queue."""
+    order = get_queue_order()
     return _browse_ctx(
-        _review_nsfw_qs(),
+        _review_nsfw_qs(show_nsfw, order),
         content_hash,
         "nsfw_corpus",
         show_nsfw,
         request,
+        order,
         extra={
             "scores": range(1, 7),
             "score_url": "score_nsfw_corpus",
@@ -1184,11 +1184,29 @@ def _review_nsfw_ctx(
     )
 
 
-def _mark_queue_seen(image: Image | None) -> None:
-    """Stamp queue_seen_at once; unseen images sort first in the review queue."""
-    if image is not None and image.queue_seen_at is None:
-        image.queue_seen_at = timezone.now()
-        image.save(update_fields=["queue_seen_at"])
+def _mark_left_image_seen(request) -> None:
+    """
+    Stamp the image the user just moved on from, named by `?left=<hash>` on a
+    prev/next navigation, so it drops behind every unseen image (contract V3).
+
+    Stamping on leave rather than on render keeps the card and the DB in step:
+    prev/next and the position were computed for the state the row had at
+    render time, and rate-and-advance reads that same state afterwards. With
+    the earlier stamp-at-render the row moved to the back while its card still
+    showed the unseen position, so scoring the first image of a session jumped
+    to the far end of the unseen block instead of to its successor. A reload
+    of the card is not "moving on", so it no longer skips the image either.
+
+    `left` is client input used only as a parametrised primary-key match
+    (OWASP A03); the only effect is an idempotent seen-stamp on an unrated row,
+    so a forged value can do no more than re-order the queue.
+    """
+    left = request.GET.get("left")
+    if not left:
+        return
+    Image.objects.filter(
+        content_hash=left, score__isnull=True, queue_seen_at__isnull=True
+    ).update(queue_seen_at=timezone.now())
 
 
 @login_required
@@ -1196,13 +1214,13 @@ def review_corpus(request, content_hash: str | None = None):
     """
     Main corpus review page — full render on first visit, HTMX partial on navigation.
 
-    queue_seen_at is stamped here (not in the queryset) so the unseen-first
-    ordering persists across page loads: once you've seen an image it drops to
-    the back of the queue only after you move away from it.
+    The image being left (prev/next carry `?left=`) is stamped before the new
+    card is built, so the unseen-first ordering persists across page loads and
+    the new card already reflects the skipped image's move to the back.
     """
     show_nsfw = request.session.get("show_nsfw", False)
+    _mark_left_image_seen(request)
     ctx = _review_ctx(content_hash, show_nsfw, request)
-    _mark_queue_seen(ctx.get("image"))
     if request.htmx:
         return render(request, "ratings/_review_htmx.html", ctx)
     return render(request, "ratings/review.html", ctx)
@@ -1232,9 +1250,10 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
-    qs = qs_fn(show_nsfw)
+    order = get_queue_order()
+    qs = qs_fn(show_nsfw, order)
     if image.score is None:
-        next_hash = _queue_neighbor_hash(qs, image)
+        next_hash = _queue_neighbor_hash(qs, image, order)
     else:
         next_hash = content_hash
     score_val = _score_from_post(request)
@@ -1243,7 +1262,6 @@ def _score_impl(request, content_hash: str, qs_fn, ctx_fn):
         image.rated_at = timezone.now()
         image.save(update_fields=["score", "rated_at"])
     ctx = ctx_fn(next_hash, show_nsfw, request)
-    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 
@@ -1258,14 +1276,14 @@ def _purge_impl(request, content_hash: str, qs_fn, ctx_fn):
     """
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
-    qs = qs_fn(show_nsfw)
+    order = get_queue_order()
+    qs = qs_fn(show_nsfw, order)
     if qs.filter(content_hash=content_hash).exists():
-        next_hash = _queue_neighbor_hash(qs, image)
+        next_hash = _queue_neighbor_hash(qs, image, order)
     else:
         next_hash = qs.values_list("content_hash", flat=True).first()
     _purge_image(image)
     ctx = ctx_fn(next_hash, show_nsfw, request)
-    _mark_queue_seen(ctx.get("image"))
     response = render(request, "ratings/_review_htmx.html", ctx)
     return with_toast(response, "Image purged")
 
@@ -1313,11 +1331,12 @@ def toggle_nsfw(request, content_hash: str):
     show_nsfw = request.session.get("show_nsfw", False)
     image = get_object_or_404(Image, content_hash=content_hash)
     mode = request.POST.get("mode", "corpus")
+    order = get_queue_order()
 
     if mode == "nsfw_corpus":
-        qs = _review_nsfw_qs()
+        qs = _review_nsfw_qs(show_nsfw, order)
         in_queue = qs.filter(content_hash=content_hash).exists()
-        neighbor = _queue_neighbor_hash(qs, image) if in_queue else None
+        neighbor = _queue_neighbor_hash(qs, image, order) if in_queue else None
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
         # In-queue + marked safe → it left the NSFW queue, so advance.
@@ -1325,9 +1344,9 @@ def toggle_nsfw(request, content_hash: str):
         target = neighbor if (in_queue and not image.is_nsfw) else content_hash
         ctx = _review_nsfw_ctx(target, show_nsfw, request)
     else:
-        qs = _review_qs(show_nsfw)
+        qs = _review_qs(show_nsfw, order)
         in_queue = qs.filter(content_hash=content_hash).exists()
-        neighbor = _queue_neighbor_hash(qs, image) if in_queue else None
+        neighbor = _queue_neighbor_hash(qs, image, order) if in_queue else None
         image.is_nsfw = not image.is_nsfw
         image.save(update_fields=["is_nsfw"])
         # In-queue + marked NSFW while NSFW is hidden → it left the queue, advance.
@@ -1337,7 +1356,6 @@ def toggle_nsfw(request, content_hash: str):
         else:
             target = content_hash
         ctx = _review_ctx(target, show_nsfw, request)
-    _mark_queue_seen(ctx.get("image"))
     return render(request, "ratings/_review_htmx.html", ctx)
 
 

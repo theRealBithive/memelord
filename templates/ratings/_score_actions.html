@@ -3,6 +3,8 @@ Score row + action row, shared by the review card and the gallery lightbox (UI c
 Context: image, scores, score_url, purge_url, nsfw_url, hx_target, hx_swap, mode.
 Review passes prev_hash/next_hash/image_url; the lightbox passes lightbox=True and
 steps through the grid on the client, so its prev/next carry no request.
+Review prev/next add ?left=<current hash>: the server stamps that image as seen
+(skipped) before it renders the neighbour. See _mark_left_image_seen in views.py.
 {% endcomment %}
 {# Row 1: only the scale. Trash is score 0 — kept on disk as the strongest negative example. #}
 <div class="score-row">
@@ -37,7 +39,7 @@ steps through the grid on the client, so its prev/next carry no request.
   {% elif prev_hash %}
   <button class="action-btn"
           data-action="prev"
-          hx-get="{% url image_url prev_hash %}"
+          hx-get="{% url image_url prev_hash %}?left={{ image.content_hash }}"
           hx-target="{{ hx_target }}"
           hx-swap="{{ hx_swap }}"
           hx-push-url="true"
@@ -75,7 +77,7 @@ steps through the grid on the client, so its prev/next carry no request.
   {% elif next_hash %}
   <button class="action-btn"
           data-action="next"
-          hx-get="{% url image_url next_hash %}"
+          hx-get="{% url image_url next_hash %}?left={{ image.content_hash }}"
           hx-target="{{ hx_target }}"
           hx-swap="{{ hx_swap }}"
           hx-push-url="true"

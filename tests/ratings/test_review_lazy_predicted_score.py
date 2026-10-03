@@ -53,11 +53,12 @@ class ReproStall(TestCase):
         # img1: already above cutoff. img2: predicted_score NULL but has an
         # embedding, so rendering it lazily computes a *below-cutoff* score.
         # img3: a clean above-cutoff image waiting behind it.
-        # Rate-and-advance picks the newest-downloaded unseen image next, so
-        # img2 must be the newest for it to be the card shown after img1.
+        # Rate-and-advance shows the successor in queue order (oldest first
+        # by default), so img2 must be the second-oldest to be the card shown
+        # after img1.
         img1 = self._img(age_hours=3, predicted=0.9)
-        img2 = self._img(age_hours=1, predicted=None, embedding=b"\x00" * 4)
-        img3 = self._img(age_hours=2, predicted=0.9)
+        img2 = self._img(age_hours=2, predicted=None, embedding=b"\x00" * 4)
+        img3 = self._img(age_hours=1, predicted=0.9)
 
         # Stub the classifier so rendering img2 computes 0.1 (below 0.333) and
         # _taste_prediction persists it.

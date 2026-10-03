@@ -143,17 +143,36 @@ class ScrapeSchedule(models.Model):
 
 class ReviewThresholds(models.Model):
     """
-    Singleton (pk=1) for the 1-6 hide thresholds on the SFW/NSFW review queues.
+    Singleton (pk=1) for the review-queue settings: the 1-6 hide thresholds on
+    the SFW/NSFW review queues and the order in which the queue is served.
 
     Stored in the DB rather than read live from config.toml so the user can
     adjust the dial in the web UI without filesystem access. config.toml's
-    [vision] section seeds this row on first access via get_or_create — that
-    keeps backwards compatibility with deployments that set the threshold
+    [vision] section seeds the thresholds on first access via get_or_create —
+    that keeps backwards compatibility with deployments that set the threshold
     declaratively before this model existed.
+
+    queue_order lives on this row instead of a second singleton because it is
+    edited from the same form and read by the same queue builders; a second
+    singleton would cost a second get_or_create on every review request for
+    nothing. The default keeps the pre-existing behaviour (oldest download
+    first) for every database that predates the field (contract V2).
     """
+
+    ORDER_OLDEST = "oldest"
+    ORDER_NEWEST = "newest"
+    ORDER_SHUFFLE = "shuffle"
+    ORDER_CHOICES = [
+        (ORDER_OLDEST, "Oldest first"),
+        (ORDER_NEWEST, "Newest first"),
+        (ORDER_SHUFFLE, "Shuffled"),
+    ]
 
     sfw_threshold = models.PositiveSmallIntegerField(default=1)
     nsfw_threshold = models.PositiveSmallIntegerField(default=1)
+    queue_order = models.CharField(
+        max_length=10, choices=ORDER_CHOICES, default=ORDER_OLDEST
+    )
 
     def save(self, *args, **kwargs):
         """Force pk=1 to maintain the singleton invariant."""
