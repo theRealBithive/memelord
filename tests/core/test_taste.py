@@ -21,9 +21,11 @@ V6 In jedem Modell wiegen die gemochte und die nicht gemochte Seite insgesamt
    gleich viel, egal wie viele Bilder jede Seite hat. Innerhalb einer Seite gelten die
    Score-Gewichte weiter (0 und 5–6 dreifach, 1–4 einfach).
 V7 Eine Gewichtsdatei von einem anderen Encoder oder im alten Format ohne Stempel
-   wird nicht angewendet. Eine gestempelte Datei ohne Quellenmodelle (vor diesem Umbau
-   gespeichert) gilt weiter; alle Quellen nutzen dann das gemeinsame Modell bis zum
-   nächsten Training.
+   wird nicht angewendet. Eine Datei mit beiden Encoder-Stempeln, aber ohne
+   Quellenmodelle gilt weiter; alle Quellen nutzen dann das gemeinsame Modell bis
+   zum nächsten Training. (Wording sharpened with V14: the original said "eine
+   gestempelte Datei", and a file from before the SigLIP2 block carries one stamp
+   of two; its 768-d hyperplane cannot judge a 1536-d feature.)
 V8 Ein Training schreibt genau eine Geschmacks-Gewichtsdatei. Fresh Start löscht
    sie wie bisher.
 V9 Das Training meldet pro Quelle in einer eigenen Logzeile, ob sie ein eigenes
@@ -33,6 +35,24 @@ V10 Die Statistikseite zeigt pro Quelle die Zahl gemochter und nicht gemochter
    Bilder und ob die Quelle ein eigenes Modell hat.
 V11 Nach dem Training wird jedes unbewertete Bild mit dem Modell seiner Quelle
    neu vorhergesagt.
+V12 Das Geschmacksmerkmal eines Bildes besteht aus seinem DINOv3-Vektor und seinem
+   SigLIP2-Vektor, beide auf Einheitslänge gebracht, in dieser Reihenfolge
+   aneinandergehängt (1536 Werte). Kein Block wiegt durch seine Skala mehr als der
+   andere.
+V13 Ein Bild hat nur dann ein Geschmacksmerkmal, wenn beide Vektoren vorhanden und
+   aus der aktuellen Generation sind. Fehlt einer, wird das Bild weder trainiert noch
+   vorhergesagt und bleibt „unbewertet, trotzdem zeigen“.
+   (tests/ratings/test_features.py, test_trainer.py, test_embedding_generation.py)
+V14 Die Gewichtsdatei trägt beide Encoder-Stempel. Weicht einer ab, wird sie nicht
+   angewendet.
+V15 Das Training besorgt fehlende SigLIP2-Vektoren nur für bewertete Bilder
+   selbst. Unbewertete bekommen sie allein von der Index-Kette. Ein Scrape kodiert nie
+   SigLIP2 inline. (tests/core/test_trainer.py, tests/ratings/test_search.py)
+V16 Die Klassifikation meldet, wie viele unbewertete Bilder wegen eines fehlenden
+   Suchvektors noch keine Vorhersage bekommen haben.
+   (tests/ratings/test_embedding_generation.py)
+V17 Der NSFW-Kopf bleibt beim DINOv3-Vektor allein und ist unverändert.
+   (tests/core/test_trainer.py)
 """
 
 import pickle
@@ -48,7 +68,7 @@ from hypothesis import strategies as st
 from loguru import logger
 from sklearn.linear_model import LogisticRegression
 
-from core import brain, taste
+from core import brain, siglip, taste
 
 DIM = 8
 GOOD_SCORES = (3, 4, 5, 6)
@@ -314,13 +334,20 @@ def test_bare_estimator_file_is_not_applied(tmp_path: Path) -> None:
     assert messages == [f"{path}: classifier predates encoder stamping; ignored until the next train run"]
 
 
+def _write_stamped(path: Path, encoder: str, search_encoder: str, per_source: dict | None) -> None:
+    payload = {"encoder": encoder, "search_encoder": search_encoder, "classifier": _fitted()}
+    if per_source is not None:
+        payload["per_source"] = per_source
+    with path.open("wb") as f:
+        pickle.dump(payload, f)
+
+
 @given(stamp=st.text(max_size=20).filter(lambda s: s != brain.ENCODER_ID))
 def test_file_from_another_encoder_is_not_applied(stamp: str) -> None:
-    """Contract: V7 (anderer Encoder)"""
+    """Contract: V7 (anderer Encoder), V14"""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "w.pkl"
-        with path.open("wb") as f:
-            pickle.dump({"encoder": stamp, "classifier": _fitted(), "per_source": {"tg": _fitted()}}, f)
+        _write_stamped(path, stamp, siglip.SEARCH_ENCODER_ID, {"tg": _fitted()})
         messages, sink_id = _capture_warnings()
         try:
             assert taste.load_taste_model(path) is None
@@ -332,15 +359,113 @@ def test_file_from_another_encoder_is_not_applied(stamp: str) -> None:
     ]
 
 
-def test_stamped_file_without_source_models_still_applies_as_shared_only(tmp_path: Path) -> None:
-    """Contract: V7 (Datei vor dem Umbau): the shared model judges every source."""
+@given(stamp=st.text(max_size=20).filter(lambda s: s != siglip.SEARCH_ENCODER_ID))
+def test_file_from_another_search_encoder_is_not_applied(stamp: str) -> None:
+    """Contract: V14 (the second block has its own stamp)"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "w.pkl"
+        _write_stamped(path, brain.ENCODER_ID, stamp, {})
+        messages, sink_id = _capture_warnings()
+        try:
+            assert taste.load_taste_model(path) is None
+        finally:
+            logger.remove(sink_id)
+    assert messages == [
+        f"{path}: classifier was trained on search encoder {stamp} but the search encoder is "
+        f"{siglip.SEARCH_ENCODER_ID}; ignored until the next train run"
+    ]
+
+
+@given(encoder=st.text(max_size=20), search_encoder=st.text(max_size=20))
+def test_a_file_applies_iff_both_stamps_are_current(encoder: str, search_encoder: str) -> None:
+    """Contract: V14"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "w.pkl"
+        _write_stamped(path, encoder, search_encoder, {})
+        sink_id = logger.add(lambda message: None, level="WARNING")
+        try:
+            model = taste.load_taste_model(path)
+        finally:
+            logger.remove(sink_id)
+    both_current = encoder == brain.ENCODER_ID and search_encoder == siglip.SEARCH_ENCODER_ID
+    assert (model is not None) is both_current
+
+
+def test_file_from_before_the_second_feature_block_is_not_applied(tmp_path: Path) -> None:
+    """Contract: V14 — brain.save_classifier writes one stamp of two; such a file is foreign."""
     path = tmp_path / "w.pkl"
     brain.save_classifier(_fitted(), path)
+    messages, sink_id = _capture_warnings()
+    try:
+        assert taste.load_taste_model(path) is None
+    finally:
+        logger.remove(sink_id)
+    assert messages == [
+        f"{path}: classifier was trained on search encoder None but the search encoder is "
+        f"{siglip.SEARCH_ENCODER_ID}; ignored until the next train run"
+    ]
+
+
+def test_stamped_file_without_source_models_still_applies_as_shared_only(tmp_path: Path) -> None:
+    """Contract: V7 (beide Stempel, keine Quellenmodelle): the shared model judges every source."""
+    path = tmp_path / "w.pkl"
+    _write_stamped(path, brain.ENCODER_ID, siglip.SEARCH_ENCODER_ID, per_source=None)
     model = taste.load_taste_model(path)
     assert model is not None
     assert model.per_source == {}
     assert model.classifier_for("tg") is model.shared
     assert model.classifier_for("") is model.shared
+
+
+# --- V12: the feature -----------------------------------------------------------------
+
+
+def _random_vector(seed: int, dim: int) -> np.ndarray:
+    return np.random.default_rng(seed).standard_normal(dim).astype(np.float32)
+
+
+@given(
+    seed=st.integers(0, 2**31 - 1),
+    taste_scale=st.floats(0.01, 100.0),
+    search_scale=st.floats(0.01, 100.0),
+)
+def test_feature_is_unit_taste_block_then_unit_search_block(seed, taste_scale, search_scale) -> None:
+    """Contract: V12"""
+    taste_vector = _random_vector(seed, brain.EMBEDDING_DIM) * taste_scale
+    search_vector = _random_vector(seed + 1, siglip.SEARCH_DIM) * search_scale
+    feature = taste.combine_features(taste_vector, search_vector)
+
+    assert feature.shape == (taste.FEATURE_DIM,) == (1536,)
+    taste_block = feature[: brain.EMBEDDING_DIM]
+    search_block = feature[brain.EMBEDDING_DIM :]
+    assert np.linalg.norm(taste_block) == pytest.approx(1.0, abs=1e-5)
+    assert np.linalg.norm(search_block) == pytest.approx(1.0, abs=1e-5)
+    # Order: the first block points where the taste vector points, the second where the search vector points.
+    np.testing.assert_allclose(taste_block, taste_vector / np.linalg.norm(taste_vector), atol=1e-5)
+    np.testing.assert_allclose(search_block, search_vector / np.linalg.norm(search_vector), atol=1e-5)
+    # Scale never matters: the raw norm of either block is gone.
+    np.testing.assert_allclose(
+        taste.combine_features(taste_vector * 7, search_vector / 7), feature, atol=1e-5
+    )
+    # Swapping the blocks is a different feature (so the order is observable).
+    swapped = taste.combine_features(search_vector, taste_vector)
+    assert not np.allclose(swapped, feature, atol=1e-3)
+
+
+@pytest.mark.parametrize("zero_side", ["taste", "search"])
+def test_a_zero_vector_has_no_feature(zero_side: str) -> None:
+    """Contract: V12 (R8) — a zero block cannot be brought to unit length."""
+    taste_vector = np.zeros(brain.EMBEDDING_DIM) if zero_side == "taste" else _random_vector(1, brain.EMBEDDING_DIM)
+    search_vector = np.zeros(siglip.SEARCH_DIM) if zero_side == "search" else _random_vector(2, siglip.SEARCH_DIM)
+    with pytest.raises(ValueError, match=f"{zero_side} vector is all zeros"):
+        taste.combine_features(taste_vector, search_vector)
+
+
+@pytest.mark.parametrize(("taste_dim", "search_dim"), [(767, 768), (768, 512), (1536, 768)])
+def test_a_block_of_the_wrong_size_is_refused(taste_dim: int, search_dim: int) -> None:
+    """Contract: V12 — the feature is exactly 768 + 768 values, never a silently reshaped blob."""
+    with pytest.raises(ValueError, match="must have"):
+        taste.combine_features(_random_vector(1, taste_dim), _random_vector(2, search_dim))
 
 
 def test_round_trip_keeps_every_model_and_the_shared_one_stays_readable_by_brain(tmp_path: Path) -> None:
@@ -351,6 +476,9 @@ def test_round_trip_keeps_every_model_and_the_shared_one_stays_readable_by_brain
     taste.save_taste_model(taste.TasteModel(shared=shared, per_source={"tg": tg}), path)
 
     assert [p.name for p in path.parent.iterdir()] == ["w.pkl"]
+    with path.open("rb") as f:
+        stamps = {key: value for key, value in pickle.load(f).items() if key.endswith("encoder")}
+    assert stamps == {"encoder": brain.ENCODER_ID, "search_encoder": siglip.SEARCH_ENCODER_ID}
     loaded = taste.load_taste_model(path)
     assert loaded is not None
     assert set(loaded.per_source) == {"tg"}

@@ -26,7 +26,13 @@ import numpy as np
 from loguru import logger
 from sklearn.linear_model import LogisticRegression
 
-from core import brain
+from core import brain, siglip
+
+# The taste feature is the DINOv3 vector followed by the SigLIP2 search vector
+# (contract V12). DINOv3 carries what is in the picture and how it is built,
+# SigLIP2 carries the style and the aesthetic reading the CLIP family is known
+# for; the aesthetic predictors in the literature sit on CLIP-like vectors.
+FEATURE_DIM = brain.EMBEDDING_DIM + siglip.SEARCH_DIM
 
 # A source gets its own classifier only once it has this many liked (score >= 3)
 # and this many disliked (score <= 2, trash included) images with a current
@@ -35,6 +41,34 @@ from core import brain
 # wobbly at first.
 MIN_GOOD_PER_SOURCE = 10
 MIN_BAD_PER_SOURCE = 10
+
+
+def _unit(vector: np.ndarray, expected_dim: int, name: str) -> np.ndarray:
+    """One block of the feature at unit length; a zero vector has no direction and is refused."""
+    flat = np.asarray(vector, dtype=np.float32).reshape(-1)
+    if flat.shape[0] != expected_dim:
+        raise ValueError(f"{name} vector must have {expected_dim} values, got {flat.shape[0]}")
+    norm = float(np.linalg.norm(flat))
+    if norm == 0.0:
+        raise ValueError(f"{name} vector is all zeros and cannot be normalised")
+    return flat / norm
+
+
+def combine_features(taste_vector: np.ndarray, search_vector: np.ndarray) -> np.ndarray:
+    """
+    The taste feature of one image: unit DINOv3 block, then unit SigLIP2 block
+    (contract V12).
+
+    Why normalise each block: a DINOv3 CLS vector has a norm around 15 while
+    SigLIP2 vectors are stored at unit length. Fed raw into one logistic
+    regression with an L2 penalty, the big block would get the small
+    coefficients and the whole say, and the SigLIP2 block would be regularised
+    into silence. At unit length both blocks compete on equal terms and the
+    fit decides which one matters for a given source.
+    """
+    taste_block = _unit(taste_vector, brain.EMBEDDING_DIM, "taste")
+    search_block = _unit(search_vector, siglip.SEARCH_DIM, "search")
+    return np.concatenate([taste_block, search_block])
 
 
 def balance_class_weights(y: np.ndarray, sample_weight: np.ndarray) -> np.ndarray:
@@ -150,13 +184,14 @@ def save_taste_model(model: TasteModel, path: Path) -> None:
     The shared classifier stays under the key "classifier" that
     brain.save_classifier uses, so brain.load_classifier applied to this file
     still yields the shared model and a file written before per-source models
-    existed still loads here (V7). The encoder stamp is the same guard as in
-    brain: a classifier is a hyperplane in one embedding space and is
-    meaningless in another (brain's contract V5).
+    existed still loads here (V7). The two encoder stamps are the same guard
+    as in brain, once per feature block: a classifier is a hyperplane in one
+    feature space and is meaningless in another (brain's contract V5, V14).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "encoder": brain.ENCODER_ID,
+        "search_encoder": siglip.SEARCH_ENCODER_ID,
         "classifier": model.shared,
         "per_source": dict(model.per_source),
     }
@@ -168,8 +203,11 @@ def load_taste_model(path: Path) -> TasteModel | None:
     """
     Read a taste model, or None (with a warning) when the file must not be
     applied: a bare estimator from before encoder stamping, or a stamp from
-    another encoder (V7). None makes every caller behave as if no classifier
-    existed, the state the UI already handles.
+    another encoder for either feature block (V7, V14). A file from before the
+    SigLIP2 block has no search stamp and is foreign by the same rule: its
+    hyperplane lives in 768 dimensions and the features now have 1536. None
+    makes every caller behave as if no classifier existed, the state the UI
+    already handles.
 
     This repeats brain.load_classifier's stamp rule on purpose instead of
     calling it: that function returns only the estimator and drops the dict
@@ -191,6 +229,14 @@ def load_taste_model(path: Path) -> TasteModel | None:
             "{}: classifier was trained on {} but the encoder is {}; "
             "ignored until the next train run",
             path, trained_on, brain.ENCODER_ID,
+        )
+        return None
+    search_trained_on = payload.get("search_encoder")
+    if search_trained_on != siglip.SEARCH_ENCODER_ID:
+        logger.warning(
+            "{}: classifier was trained on search encoder {} but the search encoder is {}; "
+            "ignored until the next train run",
+            path, search_trained_on, siglip.SEARCH_ENCODER_ID,
         )
         return None
     return TasteModel(

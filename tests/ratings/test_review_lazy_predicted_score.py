@@ -17,7 +17,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from core import brain, taste
+from core import brain, siglip, taste
 from ratings.models import Image, ReviewThresholds
 
 
@@ -43,6 +43,8 @@ class ReproStall(TestCase):
             predicted_score=predicted,
             embedding=embedding,
             embedding_model=brain.ENCODER_ID if embedding is not None else "",
+            search_embedding=embedding,
+            search_embedding_model=siglip.SEARCH_ENCODER_ID if embedding is not None else "",
         )
         Image.objects.filter(content_hash=h).update(
             downloaded_at=timezone.now() - timedelta(hours=age_hours)
@@ -64,7 +66,7 @@ class ReproStall(TestCase):
         # _taste_prediction persists it.
         stub_model = taste.TasteModel(shared=object())
         with mock.patch("ratings.views._get_taste_model", return_value=stub_model), \
-             mock.patch("core.brain.bytes_to_embedding", return_value=None), \
+             mock.patch("ratings.features.taste_features", return_value=None), \
              mock.patch("core.brain.predict_proba", return_value=0.1):
             # Land on the page, then rate img1 → advances to img2 (renders +
             # persists img2.predicted_score = 0.1).

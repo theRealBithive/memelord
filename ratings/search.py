@@ -57,9 +57,16 @@ def encode_stale_search_embeddings(
     batch_size: int = 32,
     limit: int | None = None,
     progress_label: str = "index",
+    only_rated: bool = False,
 ) -> dict[str, int]:
     """
     Give stale rows a search vector, rated images first (contract V3).
+
+    `only_rated` is the trainer's switch (taste contract V15): the search
+    vector is half of the taste feature, so a Train run fetches it for the
+    rated rows it is about to fit, inline, the way it already backfills their
+    DINOv3 vector. Unrated rows stay with the index chain; encoding them here
+    would put the 25k-image backlog into the train job.
 
     This is a deliberate copy of ratings.embeddings.reencode_stale_embeddings
     rather than a parameterised version of it: the DINOv3 loop is covered by
@@ -76,10 +83,11 @@ def encode_stale_search_embeddings(
     Rows whose file is missing are skipped and counted: marking them purged
     is repair_orphans' job.
     """
-    queryset = (
-        stale_search_images()
-        .order_by(F("rated_at").desc(nulls_last=True), "downloaded_at")
-        .only("content_hash", "file_path")
+    queryset = stale_search_images()
+    if only_rated:
+        queryset = queryset.filter(score__isnull=False)
+    queryset = queryset.order_by(F("rated_at").desc(nulls_last=True), "downloaded_at").only(
+        "content_hash", "file_path"
     )
     if limit:
         queryset = queryset[:limit]

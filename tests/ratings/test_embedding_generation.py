@@ -54,10 +54,11 @@ from django.test import TestCase
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.django import TestCase as HypothesisTestCase
+from loguru import logger
 from PIL import Image as PILImage
 from sklearn.linear_model import LogisticRegression
 
-from core import brain, dedup, taste, trainer
+from core import brain, dedup, siglip, taste, trainer
 from ratings import scraper, views
 from ratings.embeddings import (
     has_current_embedding,
@@ -88,8 +89,14 @@ def _row(
     score: int | None = None,
     seed: int = 0,
     file_path: str | None = None,
+    search: bool = True,
 ) -> Image:
-    """Insert an Image row; `generation` is the stamp a stored vector carries."""
+    """Insert an Image row; `generation` is the stamp a stored vector carries.
+
+    `search` gives the row a current SigLIP2 vector (the second half of the
+    taste feature), so the DINOv3-generation tests here are not gated by the
+    search half; `search=False` is for the tests about that gate (taste V13).
+    """
     h = uuid.uuid4().hex
     return Image.objects.create(
         content_hash=h,
@@ -98,6 +105,8 @@ def _row(
         phash=phash,
         embedding=_blob(seed) if embedding else None,
         embedding_model=generation if embedding else "",
+        search_embedding=_blob(seed + 1000) if search else None,
+        search_embedding_model=siglip.SEARCH_ENCODER_ID if search else "",
         is_purged=purged,
         score=score,
     )
@@ -156,8 +165,12 @@ def _assert_conservation(testcase: TestCase, data_dir: Path) -> None:
 
 
 def _save_fitted_classifier(path: Path) -> None:
-    X = np.vstack([_vector(1), _vector(2)])
-    brain.save_classifier(LogisticRegression().fit(X, [1, 0]), path)
+    """A taste model with a shared classifier only, on the 1536-d feature (taste V12)."""
+    X = np.vstack([
+        taste.combine_features(_vector(1), _vector(2)),
+        taste.combine_features(_vector(3), _vector(4)),
+    ])
+    taste.save_taste_model(taste.TasteModel(shared=LogisticRegression().fit(X, [1, 0])), path)
 
 
 class StaleDefinitionTests(TestCase):
@@ -317,6 +330,16 @@ class TastePredictionGenerationTests(TestCase):
         current.refresh_from_db()
         self.assertAlmostEqual(current.predicted_score, 0.7)
 
+    def test_without_a_taste_model_nothing_is_predicted_or_persisted(self) -> None:
+        """Contract: V5 — a foreign or missing weights file means no prediction, and the row is left alone."""
+        current = _row(seed=1)
+        with mock.patch.object(views, "_get_taste_model", return_value=None), \
+             mock.patch.object(brain, "predict_proba") as predict:
+            self.assertIsNone(views._taste_prediction(current))
+        predict.assert_not_called()
+        current.refresh_from_db()
+        self.assertIsNone(current.predicted_score)
+
     def test_stored_prediction_is_kept_regardless_of_generation(self) -> None:
         """Operator decision 2026-10-02: old predictions stay until the next train run."""
         legacy = _row(generation=LEGACY, seed=1)
@@ -359,19 +382,20 @@ class ClassifyImagesGenerationTests(TestCase):
 
     def test_every_unrated_image_is_predicted_by_its_own_sources_model(self) -> None:
         """Taste contract: V5, V11 — tg rows meet the tg model, every other label the shared one."""
-        # Two models that disagree on every vector: the shared one calls +1-ish
-        # vectors good, the tg one calls them bad.
+        # Two models that disagree on every feature: the shared one calls the
+        # +1-ish feature good, the tg one calls it bad.
         plus = np.full(768, 1.0, dtype=np.float32)
-        shared = LogisticRegression().fit(np.vstack([plus, -plus]), [1, 0])
-        tg_model = LogisticRegression().fit(np.vstack([plus, -plus]), [0, 1])
+        feature = taste.combine_features(plus, plus)
+        shared = LogisticRegression().fit(np.vstack([feature, -feature]), [1, 0])
+        tg_model = LogisticRegression().fit(np.vstack([feature, -feature]), [0, 1])
         taste.save_taste_model(taste.TasteModel(shared=shared, per_source={"tg": tg_model}), self.weights)
         probe = brain.embedding_to_bytes(plus * 3)
         tg_row = _row(seed=1)
         other_row = _row(seed=2)
         unknown_row = _row(seed=3)
-        Image.objects.filter(pk=tg_row.pk).update(source_label="tg", embedding=probe)
-        Image.objects.filter(pk=other_row.pk).update(source_label="b", embedding=probe)
-        Image.objects.filter(pk=unknown_row.pk).update(source_label="", embedding=probe)
+        Image.objects.filter(pk=tg_row.pk).update(source_label="tg", embedding=probe, search_embedding=probe)
+        Image.objects.filter(pk=other_row.pk).update(source_label="b", embedding=probe, search_embedding=probe)
+        Image.objects.filter(pk=unknown_row.pk).update(source_label="", embedding=probe, search_embedding=probe)
         vision = scraper.VisionConfig(weights_path=self.weights)
 
         scraper.classify_images(self.data_dir, vision, encoder=object(), transform=object())
@@ -382,6 +406,30 @@ class ClassifyImagesGenerationTests(TestCase):
         self.assertGreater(other_row.predicted_score, 0.5)
         self.assertGreater(unknown_row.predicted_score, 0.5)
         self.assertAlmostEqual(other_row.predicted_score, unknown_row.predicted_score)
+
+    def test_a_row_without_its_search_vector_waits_and_is_counted(self) -> None:
+        """Taste contract: V13, V15, V16 — no SigLIP2 half: no prediction, no inline SigLIP2 encode, one log line."""
+        waiting = _row(seed=1, search=False)
+        ready = _row(seed=2)
+        _write_png(self.data_dir, waiting.file_path)
+        _write_png(self.data_dir, ready.file_path)
+        vision = scraper.VisionConfig(weights_path=self.weights)
+        lines: list[str] = []
+        sink_id = logger.add(lambda message: lines.append(message.record["message"]), level="INFO")
+
+        with mock.patch.object(brain, "encode", side_effect=_fake_encode) as encode:
+            try:
+                scraper.classify_images(self.data_dir, vision, encoder=object(), transform=object())
+            finally:
+                logger.remove(sink_id)
+
+        encode.assert_not_called()
+        waiting.refresh_from_db()
+        ready.refresh_from_db()
+        self.assertIsNone(waiting.predicted_score)
+        self.assertIsNone(waiting.search_embedding)
+        self.assertIsNotNone(ready.predicted_score)
+        self.assertIn("classify_images: 1 unrated images wait for the search index", lines)
 
 
 class ReencodeTests(TestCase):

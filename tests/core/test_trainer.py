@@ -15,8 +15,17 @@ from PIL import Image
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "memelord.settings")
 django.setup()
 
-from core import brain, taste, trainer
+from core import brain, siglip, taste, trainer
 from ratings.models import Image as ImageModel
+
+
+def _search_fields(seed: int) -> dict:
+    """A current SigLIP2 vector for a rated fixture row, so run() needs no search encoder (V13)."""
+    vector = np.random.default_rng(1000 + seed).standard_normal(768).astype(np.float32)
+    return {
+        "search_embedding": brain.embedding_to_bytes(vector),
+        "search_embedding_model": siglip.SEARCH_ENCODER_ID,
+    }
 
 
 class TrainerTests(TestCase):
@@ -59,7 +68,7 @@ class TrainerTests(TestCase):
         path = f"images/{h}.jpg"
         self._write_image(path)
         ImageModel.objects.create(
-            content_hash=h, file_path=path, source_label="t", score=score
+            content_hash=h, file_path=path, source_label="t", score=score, **_search_fields(score)
         )
         return h
 
@@ -109,12 +118,14 @@ class TrainerTests(TestCase):
             file_path="images/pos.png",
             source_label="t",
             score=5,
+            **_search_fields(1),
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
             file_path="images/neg.png",
             source_label="t",
             score=1,
+            **_search_fields(2),
         )
         mock_get_encoder.return_value = None
         embeddings = np.array([[0.1] * 768, [0.2] * 768], dtype=np.float32)
@@ -142,6 +153,7 @@ class TrainerTests(TestCase):
                 np.full(768, 0.1, dtype=np.float32)
             ),
             embedding_model=brain.ENCODER_ID,
+            **_search_fields(1),
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
@@ -152,6 +164,7 @@ class TrainerTests(TestCase):
                 np.full(768, 0.2, dtype=np.float32)
             ),
             embedding_model=brain.ENCODER_ID,
+            **_search_fields(2),
         )
 
         weights_path = self.data_dir / "weights.pkl"
@@ -179,12 +192,14 @@ class TrainerTests(TestCase):
                 np.full(768, 0.1, dtype=np.float32)
             ),
             embedding_model=brain.ENCODER_ID,
+            **_search_fields(1),
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
             file_path="images/neg.png",
             source_label="t",
             score=1,
+            **_search_fields(2),
         )
         mock_get_encoder.return_value = None
         mock_encode.return_value = (
@@ -219,6 +234,7 @@ class TrainerTests(TestCase):
                 np.full(768, 0.1, dtype=np.float32)
             ),
             embedding_model=brain.ENCODER_ID,
+            **_search_fields(1),
         )
         # A 512-d blob bypasses embedding_to_bytes' dimension guard but raises
         # ValueError in bytes_to_embedding — simulates an encoder-dimension swap.
@@ -229,6 +245,7 @@ class TrainerTests(TestCase):
             score=1,
             embedding=np.full(512, 0.2, dtype=np.float32).tobytes(),
             embedding_model=brain.ENCODER_ID,
+            **_search_fields(2),
         )
         mock_get_encoder.return_value = None
         mock_encode.return_value = (
@@ -261,12 +278,14 @@ class TrainerTests(TestCase):
             file_path="images/pos.png",
             source_label="t",
             score=5,
+            **_search_fields(1),
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
             file_path="images/neg.png",
             source_label="t",
             score=1,
+            **_search_fields(2),
         )
         ImageModel.objects.create(
             content_hash=uuid.uuid4().hex,
@@ -298,9 +317,13 @@ class TrainerTests(TestCase):
         )
         self.assertTrue(taste_path.exists())
         self.assertTrue(nsfw_path.exists())
+        # Taste contract V12, V17: the taste model judges the 1536-d feature,
+        # the NSFW head stays on the 768-d DINOv3 vector alone.
+        self.assertEqual(taste.load_taste_model(taste_path).shared.n_features_in_, taste.FEATURE_DIM)
+        self.assertEqual(brain.load_classifier(nsfw_path).n_features_in_, brain.EMBEDDING_DIM)
 
-    def _make_cached(self, label: str, score: int, seed: int) -> Path:
-        """A rated row with a current vector, so run() never needs the encoder."""
+    def _make_cached(self, label: str, score: int | None, seed: int, *, search: bool = True) -> Path:
+        """A row with a current DINOv3 vector (and, by default, a search vector), so run() needs no encoder."""
         h = uuid.uuid4().hex
         rel = f"images/{h}.png"
         path = self._write_image(rel)
@@ -308,8 +331,103 @@ class TrainerTests(TestCase):
         ImageModel.objects.create(
             content_hash=h, file_path=rel, source_label=label, score=score,
             embedding=brain.embedding_to_bytes(vector), embedding_model=brain.ENCODER_ID,
+            **(_search_fields(seed) if search else {}),
         )
         return path
+
+    @patch.object(siglip, "get_image_transform")
+    @patch.object(siglip, "get_image_encoder")
+    @patch.object(brain, "encode")
+    def test_run_fetches_missing_search_vectors_for_rated_rows_only(
+        self, mock_encode, mock_siglip_encoder, mock_siglip_transform
+    ) -> None:
+        """Taste contract: V15 — the rated row gets its SigLIP2 vector inline, the unrated one waits for the chain."""
+        rated_without = self._make_cached("t", 5, 1, search=False)
+        self._make_cached("t", 1, 2)
+        unrated_without = self._make_cached("t", None, 3, search=False)
+        siglip_encoder = object()
+        mock_siglip_encoder.return_value = siglip_encoder
+
+        def encode_each(encoder, image_paths, **kwargs):
+            vectors = np.stack([np.full(768, 0.5, dtype=np.float32) for _ in image_paths])
+            return vectors, list(image_paths)
+
+        mock_encode.side_effect = encode_each
+        weights_path = self.data_dir / "weights.pkl"
+
+        trainer.run(data_dir=self.data_dir, weights_path=weights_path)
+
+        mock_encode.assert_called_once()
+        self.assertIs(mock_encode.call_args.args[0], siglip_encoder)
+        self.assertEqual(mock_encode.call_args.args[1], [rated_without])
+        rated_row = ImageModel.objects.get(file_path=str(rated_without.relative_to(self.data_dir)))
+        unrated_row = ImageModel.objects.get(file_path=str(unrated_without.relative_to(self.data_dir)))
+        self.assertEqual(rated_row.search_embedding_model, siglip.SEARCH_ENCODER_ID)
+        self.assertIsNone(unrated_row.search_embedding)
+        self.assertTrue(weights_path.exists())
+
+    @patch.object(brain, "encode")
+    def test_a_bad_cached_search_blob_is_skipped_with_a_warning(self, mock_encode) -> None:
+        """Taste contract: V13 — a search blob of the wrong size is not a feature; the row drops out, the run goes on."""
+        self._make_cached("t", 6, 1)
+        self._make_cached("t", 1, 2)
+        h = uuid.uuid4().hex
+        rel = f"images/{h}.png"
+        self._write_image(rel)
+        ImageModel.objects.create(
+            content_hash=h, file_path=rel, source_label="t", score=5,
+            embedding=brain.embedding_to_bytes(np.full(768, 0.3, dtype=np.float32)),
+            embedding_model=brain.ENCODER_ID,
+            search_embedding=np.full(512, 0.2, dtype=np.float32).tobytes(),
+            search_embedding_model=siglip.SEARCH_ENCODER_ID,
+        )
+        weights_path = self.data_dir / "weights.pkl"
+
+        messages = self._run_capturing_log(weights_path)
+
+        mock_encode.assert_not_called()
+        bad_path = str(self.data_dir / rel)
+        self.assertTrue(
+            any(m.startswith(f"train: ignoring bad cached search embedding for {bad_path} (") for m in messages),
+            messages,
+        )
+        self.assertIn("train: 1 rated image(s) skipped: no search vector yet", messages)
+        self.assertIn("Training taste classifier on 2 samples", messages)
+
+    @patch.object(siglip, "get_image_transform")
+    @patch.object(siglip, "get_image_encoder")
+    @patch.object(brain, "encode")
+    def test_run_refuses_when_the_only_good_row_has_no_search_vector(
+        self, mock_encode, mock_siglip_encoder, mock_siglip_transform
+    ) -> None:
+        """Taste contract: V13 — a side that lost all its rows to the search gate stops the run, like an empty side."""
+        self._make_cached("t", 5, 1, search=False)
+        self._make_cached("t", 1, 2)
+        mock_encode.return_value = (np.zeros((0, 768), dtype=np.float32), [])
+        weights_path = self.data_dir / "weights.pkl"
+
+        with self.assertRaisesRegex(RuntimeError, "Need at least one good and one bad image"):
+            trainer.run(data_dir=self.data_dir, weights_path=weights_path)
+        self.assertFalse(weights_path.exists())
+
+    @patch.object(siglip, "get_image_transform")
+    @patch.object(siglip, "get_image_encoder")
+    @patch.object(brain, "encode")
+    def test_a_rated_row_the_search_encoder_cannot_read_is_skipped_and_counted(
+        self, mock_encode, mock_siglip_encoder, mock_siglip_transform
+    ) -> None:
+        """Taste contract: V13 — no search vector, no training row; the log says how many."""
+        self._make_cached("t", 6, 1)
+        self._make_cached("t", 5, 2, search=False)
+        self._make_cached("t", 1, 3)
+        mock_encode.return_value = (np.zeros((0, 768), dtype=np.float32), [])
+        weights_path = self.data_dir / "weights.pkl"
+
+        messages = self._run_capturing_log(weights_path)
+
+        self.assertIn("train: 1 rated image(s) skipped: no search vector yet", messages)
+        self.assertIn("Training taste classifier on 2 samples", messages)
+        self.assertTrue(weights_path.exists())
 
     def _run_capturing_log(self, weights_path: Path) -> list[str]:
         messages: list[str] = []
@@ -368,7 +486,9 @@ class TrainerTests(TestCase):
         # cannot read it: brain.encode returns nothing for it.
         h = uuid.uuid4().hex
         self._write_image(f"images/{h}.png")
-        ImageModel.objects.create(content_hash=h, file_path=f"images/{h}.png", source_label="tg", score=1)
+        ImageModel.objects.create(
+            content_hash=h, file_path=f"images/{h}.png", source_label="tg", score=1, **_search_fields(99)
+        )
         mock_get_encoder.return_value = None
         mock_encode.return_value = (np.zeros((0, 768), dtype=np.float32), [])
         weights_path = self.data_dir / "weights.pkl"

@@ -15,8 +15,7 @@ from django.views.decorators.http import require_POST
 
 import ratings.notifiers as notifiers
 from core.brain import EncoderUnavailableError
-from ratings import reset, search, similar
-from ratings.embeddings import has_current_embedding
+from ratings import features, reset, search, similar
 from ratings.models import (
     Image,
     LogEntry,
@@ -85,8 +84,9 @@ def _taste_prediction(image) -> int | None:
     if image.predicted_score is not None:
         return round(float(image.predicted_score) * 100)
     # A vector from an older encoder must never meet the current classifier
-    # (V2); the row stays unpredicted until it is re-encoded.
-    if not has_current_embedding(image):
+    # (V2), and a row without its SigLIP2 half has no feature yet (taste
+    # contract V13); either way the row stays unpredicted until it is encoded.
+    if not features.has_taste_features(image):
         return None
     taste_model = _get_taste_model()
     if taste_model is None:
@@ -94,8 +94,7 @@ def _taste_prediction(image) -> int | None:
     from core import brain
 
     classifier = taste_model.classifier_for(image.source_label)
-    emb = brain.bytes_to_embedding(bytes(image.embedding))
-    prob = float(brain.predict_proba(classifier, emb))
+    prob = float(brain.predict_proba(classifier, features.taste_features(image)))
     image.predicted_score = prob
     image.save(update_fields=["predicted_score"])
     return round(prob * 100)

@@ -9,6 +9,7 @@ from django.db import IntegrityError
 from loguru import logger
 
 from core import brain, dedup, nsfw, taste
+from ratings import features
 from ratings.embeddings import has_current_embedding, stale_images
 from ratings.models import Image, Source
 from retina import fourchan, imgur, pixelfed, tumblr
@@ -301,6 +302,7 @@ def classify_images(
         nsfw_clf = brain.load_classifier(vision.nsfw_weights_path)
 
     nsfw_tagged = 0
+    waiting_for_search_vector = 0
     for img in images:
         path = data_dir / img.file_path
         update_fields: list[str] = []
@@ -329,16 +331,28 @@ def classify_images(
                 nsfw_tagged += 1
 
         if taste_model is not None:
-            # Every image is judged by its own source's model, or by the shared
-            # one when the source has none (taste contract V5).
-            classifier = taste_model.classifier_for(img.source_label)
-            prob = float(brain.predict_proba(classifier, emb))
-            img.predicted_score = prob
-            update_fields.append("predicted_score")
+            # The DINOv3 half is current by now (read or just encoded above);
+            # the SigLIP2 half comes from the index chain, never from here
+            # (taste contract V13, V15). Without it the row keeps NULL, which
+            # the review queue reads as "show anyway".
+            if not features.has_taste_features(img):
+                waiting_for_search_vector += 1
+            else:
+                # Every image is judged by its own source's model, or by the
+                # shared one when the source has none (taste contract V5).
+                classifier = taste_model.classifier_for(img.source_label)
+                prob = float(brain.predict_proba(classifier, features.taste_features(img)))
+                img.predicted_score = prob
+                update_fields.append("predicted_score")
 
         if update_fields:
             img.save(update_fields=list(dict.fromkeys(update_fields)))
 
+    if waiting_for_search_vector:
+        logger.info(
+            "classify_images: {} unrated images wait for the search index",
+            waiting_for_search_vector,
+        )
     logger.info(
         "Classified: {} NSFW-tagged, {} total processed.",
         nsfw_tagged,

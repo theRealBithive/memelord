@@ -310,6 +310,25 @@ class EncodeStaleTests(TestCase):
         self.assertTrue(search.has_search_embedding(inserted_second))
         self.assertFalse(search.has_search_embedding(inserted_first))
 
+    def test_only_rated_leaves_unrated_rows_to_the_chain(self) -> None:
+        """Taste contract: V15 — the trainer's switch encodes rated rows and nothing else."""
+        rated = _row(stamp=None, score=4)
+        unrated = _row(stamp=None, score=None)
+        for img in (rated, unrated):
+            _write_png(self.data_dir, img.file_path)
+
+        result = self._encode(only_rated=True)
+
+        self.assertEqual(result["encoded"], 1)
+        rated.refresh_from_db()
+        unrated.refresh_from_db()
+        self.assertTrue(search.has_search_embedding(rated))
+        self.assertFalse(search.has_search_embedding(unrated))
+        # The default (the chain) still takes everything.
+        self.assertEqual(self._encode()["encoded"], 1)
+        unrated.refresh_from_db()
+        self.assertTrue(search.has_search_embedding(unrated))
+
     def test_the_encoder_pass_receives_the_arguments_it_was_given(self) -> None:
         """Contract: V3, V9 (the slice is encoded with the encoder, transform and batch size it was handed, under its own log label)"""
         img = _row(stamp=None)

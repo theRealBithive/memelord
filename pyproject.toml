@@ -86,6 +86,7 @@ only_mutate = [
     "core/dedup.py",
     "core/taste.py",
     "ratings/embeddings.py",
+    "ratings/features.py",
     "core/siglip.py",
     "ratings/vector_bank.py",
     "ratings/search.py",

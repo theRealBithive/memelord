@@ -203,6 +203,42 @@ def _load_cached_embeddings(
     return cache
 
 
+def _load_cached_search_embeddings(
+    data_dir: Path, paths: list[Path]
+) -> dict[str, np.ndarray]:
+    """
+    Return {absolute_path_str: search vector} for the subset of `paths` whose
+    row carries a SigLIP2 vector from the current search generation.
+
+    Twin of _load_cached_embeddings for the second feature block (taste
+    contract V12, V13). It is a copy, not a parameterised version: the two
+    generations have their own stamps and the reader of either should not
+    have to hold the other in their head (the same reasoning as in
+    ratings/search.py). A bad blob is skipped with a warning; the row then
+    counts as "no search vector yet" and drops out of this run.
+    """
+    from core import siglip
+    from ratings.models import Image
+
+    rel_paths = [str(p.relative_to(data_dir)) for p in paths]
+    cache: dict[str, np.ndarray] = {}
+    rows = Image.objects.filter(
+        is_purged=False,
+        search_embedding__isnull=False,
+        search_embedding_model=siglip.SEARCH_ENCODER_ID,
+        file_path__in=rel_paths,
+    ).only("file_path", "search_embedding")
+    for img in rows:
+        path_str = str(data_dir / img.file_path)
+        try:
+            cache[path_str] = brain.bytes_to_embedding(bytes(img.search_embedding))
+        except ValueError as exc:
+            logger.warning(
+                "train: ignoring bad cached search embedding for {} ({})", path_str, exc
+            )
+    return cache
+
+
 def _backfill_phash_embedding(
     path_to_emb: dict[str, np.ndarray],
     data_dir: Path,
@@ -330,8 +366,36 @@ def run(
 
     _backfill_phash_embedding(path_to_emb, data_dir)
 
-    X_good = np.array([path_to_emb[str(p)] for p in good_paths])
-    X_bad = np.array([path_to_emb[str(p)] for p in bad_paths])
+    # Second feature block: the SigLIP2 search vector (taste contract V12).
+    # Rated rows get a missing one here, inline, like the DINOv3 backfill
+    # above; unrated rows stay with the index chain (V15). A rated row the
+    # search encoder cannot read drops out of this run and is counted (V13).
+    from ratings import search
+
+    search_backfill = search.encode_stale_search_embeddings(
+        data_dir, only_rated=True, progress_label="train"
+    )
+    if search_backfill["encoded"]:
+        logger.info(
+            "train: encoded the search vector of {} rated image(s)", search_backfill["encoded"]
+        )
+    path_to_search = _load_cached_search_embeddings(data_dir, good_paths + bad_paths)
+    without_search = [p for p in good_paths + bad_paths if str(p) not in path_to_search]
+    if without_search:
+        logger.warning(
+            "train: {} rated image(s) skipped: no search vector yet", len(without_search)
+        )
+    good_paths = [p for p in good_paths if str(p) in path_to_search]
+    bad_paths = [p for p in bad_paths if str(p) in path_to_search]
+    if not good_paths or not bad_paths:
+        raise RuntimeError("Need at least one good and one bad image to train.")
+
+    X_good = np.array(
+        [taste.combine_features(path_to_emb[str(p)], path_to_search[str(p)]) for p in good_paths]
+    )
+    X_bad = np.array(
+        [taste.combine_features(path_to_emb[str(p)], path_to_search[str(p)]) for p in bad_paths]
+    )
     X = np.concatenate([X_good, X_bad], axis=0)
     y = np.array([1] * len(good_paths) + [0] * len(bad_paths), dtype=np.intp)
 
