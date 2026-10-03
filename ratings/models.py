@@ -82,6 +82,22 @@ class Image(models.Model):
                 ],
                 name="image_review_queue_idx",
             ),
+            # The two chain counts ("N left" in the nav on every page while a
+            # chain is queued, and the Config page) ask how many live rows
+            # carry the current stamp and a blob. Partial on the blob so the
+            # 3 KB vector never has to be in the index, and the count is an
+            # index walk instead of a read of every row (review latency
+            # contract R5).
+            models.Index(
+                fields=["embedding_model", "is_purged"],
+                condition=models.Q(embedding__isnull=False),
+                name="image_taste_vector_idx",
+            ),
+            models.Index(
+                fields=["search_embedding_model", "is_purged"],
+                condition=models.Q(search_embedding__isnull=False),
+                name="image_search_vector_idx",
+            ),
         ]
 
     def __str__(self) -> str:

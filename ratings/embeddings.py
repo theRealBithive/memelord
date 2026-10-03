@@ -42,7 +42,7 @@ def taste_vector_counts() -> tuple[int, int]:
     """(current, total) over non-purged images, for the config page and the nav indicator (taste V21)."""
     live = Image.objects.filter(is_purged=False)
     total = live.count()
-    current = live.filter(embedding_model=brain.ENCODER_ID).exclude(embedding=None).count()
+    current = live.filter(embedding_model=brain.ENCODER_ID, embedding__isnull=False).count()
     return current, total
 
 

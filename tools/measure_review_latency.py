@@ -108,6 +108,8 @@ def main():
         page.wait_for_function("(() => { const i = document.querySelector('#review-card .image-wrap img'); return i && i.complete; })()")
         print("  first image natural width:", page.evaluate("document.querySelector('#review-card .image-wrap img').naturalWidth"))
         page.evaluate(INSTRUMENT)
+        version = page.evaluate("(document.querySelector('.nav-more-version') || {textContent: 'unknown'}).textContent.trim()")
+        print("  server version:", version)
         nav_job = page.evaluate("document.querySelector('#nav-job') ? document.querySelector('#nav-job').textContent.trim() : ''")
         badges = page.evaluate("[...document.querySelectorAll('.badge')].map(b => b.id + '=' + b.textContent.trim()).join(' ')")
         print("  nav job:", repr(nav_job), "| badges:", badges)

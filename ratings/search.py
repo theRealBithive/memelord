@@ -40,11 +40,9 @@ def index_counts() -> tuple[int, int]:
     """(indexed, total) over non-purged images, for the config page and the gallery hint (V7, V15)."""
     live = Image.objects.filter(is_purged=False)
     total = live.count()
-    indexed = (
-        live.filter(search_embedding_model=siglip.SEARCH_ENCODER_ID)
-        .exclude(search_embedding=None)
-        .count()
-    )
+    indexed = live.filter(
+        search_embedding_model=siglip.SEARCH_ENCODER_ID, search_embedding__isnull=False
+    ).count()
     return indexed, total
 
 

@@ -9,6 +9,26 @@ Denominators are the generated mutants per file
 (`grep -cE '^\s*def x.*__mutmut_[0-9]+\(' mutants/<file>`; the pattern must allow the
 `ǁ` separators mutmut puts into class-method names, or those are not counted).
 
+## Run on 2026-10-03, chain counts on partial indexes (`ratings/embeddings.py` `taste_vector_counts`, `ratings/search.py` `index_counts`)
+
+Only the two functions the change touched were run (`mutmut run` with the patterns
+`ratings.embeddings.x_taste_vector_counts*` and `ratings.search.x_index_counts*`): the
+counts now filter with `<blob>__isnull=False` instead of `.exclude(<blob>=None)` so
+SQLite can use the new partial indexes (review latency contract R5). Test selection:
+`tests/ratings/test_embedding_generation.py`, `test_taste_reencode.py`, `test_search.py`,
+`test_search_index_job.py`, `test_review_latency.py`. Against a backup copy of the dev
+DB, `only_mutate` narrowed to the two modules and restored afterwards.
+
+Denominators: `taste_vector_counts` 10, `index_counts` 10 → **20**.
+
+| scope | mutants | killed | timeout | survived | note |
+|---|---|---|---|---|---|
+| `taste_vector_counts` 1–10 | 10 | 10 | 0 | 0 | stamp, `is_purged`, `isnull` flag and the tuple order are pinned by `TasteVectorCountsTests` and the generation properties |
+| `index_counts` 1–10 | 10 | 10 | 0 | 0 | same, by `test_index_counts_cover_non_purged_rows_only` and `test_index_counts_follow_generation_exactly` |
+
+Score: **20 killed, 0 equivalent, 0 unjustified**. The rest of both modules was not
+re-measured (unchanged since the runs below).
+
 ## Run on 2026-10-03, NSFW as its own taste category (`core/taste.py`)
 
 Denominator: taste **190** (the earlier 194 minus the three `random_state` mutants

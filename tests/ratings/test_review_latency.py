@@ -18,6 +18,9 @@ R3 Media and thumbnail responses tell the browser to keep the bytes (private,
    a year, immutable), so a preloaded picture is painted from the cache. A
    purged path still answers 404.
 R4 The media view's purged-path check is an index lookup, not a table scan.
+R5 The two chain counts shown in the nav while a chain is queued (taste
+   vectors current, search vectors indexed) are answered from their own
+   partial indexes, never by reading the vector blobs of every row.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.django import TestCase as HypothesisTestCase
 
+from ratings import embeddings, search
 from ratings.models import Image, ReviewThresholds
 from ratings.queue_rules import QUEUE_ORDERS, get_queue_order
 from ratings.views.common import nav_counts
@@ -134,6 +138,16 @@ class QueueQueriesUseTheIndexTests(TestCase):
         plan = _plan(Image.objects.filter(file_path="images/x.jpg", is_purged=True))
         self.assertIn("SEARCH ratings_image USING", plan)
         self.assertNotIn("SCAN ratings_image", plan)
+
+    def test_chain_counts_walk_their_partial_indexes(self) -> None:
+        """Contract: R5"""
+        with CaptureQueriesContext(connection) as ctx:
+            embeddings.taste_vector_counts()
+        self.assertIn("image_taste_vector_idx", _plan(ctx.captured_queries[-1]["sql"]))
+
+        with CaptureQueriesContext(connection) as ctx:
+            search.index_counts()
+        self.assertIn("image_search_vector_idx", _plan(ctx.captured_queries[-1]["sql"]))
 
 
 @override_settings(DEBUG=True)
