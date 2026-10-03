@@ -21,6 +21,7 @@ make scrape                  # scrape all sources from config.toml → data/imag
 make train                   # encode rated images with DINOv3, fit classifier, save weights
 uv run python manage.py scrape --config /path/to/config.toml
 uv run python manage.py train
+DJANGO_DEBUG=true uv run python manage.py index_search   # SigLIP2 vectors for the text search, foreground (the in-app job does it in background slices)
 ```
 
 ### Running manage.py commands
@@ -64,8 +65,8 @@ Memelord is a mobile-first Django webapp for curating images with a personal tas
 ### Module map
 
 **`ratings/`** — Django app (the new core)
-- `models.py` — `Image` model: `content_hash` (PK), `file_path` (relative to `DATA_DIR`), `score` (0–6, NULL = unrated; 0 = trash), `is_nsfw`, `is_purged`, `rated_at`, `predicted_score`, `embedding`, `embedding_model` (encoder stamp), `phash`, `queue_seen_at`. Plus `Source` (scrape config with pagination `cursor`), `Tag`, `NotificationChannel`, `ReviewThresholds` (singleton: SFW/NSFW hide thresholds + `queue_order`), `LogEntry`.
-- `views.py` — review/score views (`review_corpus`, `score_corpus`, `purge_corpus`), `below_cutoff`, `gallery`, lightbox endpoints (`lightbox`, `lightbox_score`, `lightbox_nsfw`, `lightbox_purge`), `stats`, `trigger_scrape`, `trigger_train`, `job_indicator`, `fresh_start_view`, channel + source CRUD
+- `models.py` — `Image` model: `content_hash` (PK), `file_path` (relative to `DATA_DIR`), `score` (0–6, NULL = unrated; 0 = trash), `is_nsfw`, `is_purged`, `rated_at`, `predicted_score`, `embedding`, `embedding_model` (DINOv3 encoder stamp), `search_embedding`, `search_embedding_model` (SigLIP2 stamp, text search only), `phash`, `queue_seen_at`. Plus `Source` (scrape config with pagination `cursor`), `Tag`, `NotificationChannel`, `ReviewThresholds` (singleton: SFW/NSFW hide thresholds + `queue_order`), `LogEntry`.
+- `views.py` — review/score views (`review_corpus`, `score_corpus`, `purge_corpus`), `below_cutoff`, `gallery` (plain grid, `?q=` text search, `?similar=<hash>`), lightbox endpoints (`lightbox`, `lightbox_score`, `lightbox_nsfw`, `lightbox_purge`), `stats`, `trigger_scrape`, `trigger_train`, `trigger_search_index` + `search_index_status`, `job_indicator`, `fresh_start_view`, channel + source CRUD
 - `toast.py` — `with_toast(response, message, kind)`: puts a toast into the `HX-Trigger` header as JSON; `toast.js` renders it as text (never HTML)
 - `reset.py` — `fresh_start()`: wipe every image row + file, both classifiers and the source cursors; keeps sources, channels, tags, thresholds, users (`CONFIRM_WORD = "RESET"`)
 - `context_processors.py` — `app_version`, `notification_config`, `server_toasts` (Django messages → toast JSON), `active_jobs` (training/scrape state for the nav indicator on every page)
@@ -73,14 +74,20 @@ Memelord is a mobile-first Django webapp for curating images with a personal tas
 - `queue_rules.py` — single source of truth for the review/below-cutoff filters and for the review-queue order: `QueueOrder` (order_by fields, their reverse, and the prev/next window filters, all derived from one `(field, descending)` pair), `QUEUE_ORDERS` (`oldest`/`newest` by `downloaded_at`, `shuffle` by `content_hash`), `normalize_queue_order()` (whitelist), `get_queue_order()`
 - `utils.py` — `purge_image()`: hard-delete file from disk + mark `is_purged=True`
 - `embeddings.py` — `has_current_embedding()`, `stale_images()`, `reencode_stale_embeddings()`: embedding-generation handling (see below)
+- `vector_bank.py` — `VectorBank`: one unit-normalised matrix per embedding generation held in the web process, refreshed when `(rows with current stamp, purged rows)` changes; `rank()` + `first_allowed()` are the whole similarity search
+- `search.py` — text search: stale/count helpers for the SigLIP2 generation, `encode_stale_search_embeddings()` (rated first, `only()`, per-row save), the index chain (`INDEX_TASK`, `index_job_queued()`, `enqueue_index_job_if_needed()`, `last_index_report()`), `candidate_images(scope, …)` (the one filter both the plain gallery and the ranked modes use), `rank_by_text()`
+- `similar.py` — `rank_similar()`: nearest neighbours over the DINOv3 vectors via the taste `VectorBank`
+- `tasks.py` — django-q entry points `run_scrape` (enqueues the index chain at the end), `run_train`, `run_search_index` (one slice of `INDEX_SLICE_SIZE`, re-enqueues itself while rows remain and the slice encoded something)
 - `admin.py` — ImageAdmin with inline thumbnails
 - `management/commands/scrape.py` — CLI wrapper over `ratings/scraper.py`
 - `management/commands/train.py` — CLI wrapper over `core/trainer.py`
 - `management/commands/reencode_embeddings.py` — bulk re-encode of rows whose vector is missing or from an older encoder
+- `management/commands/index_search.py` — foreground twin of the search index job (`--limit`, `--dry-run`)
 - `management/commands/fresh_start.py` — CLI twin of the Config → Danger zone button (`--yes` skips the typed `RESET` prompt)
 
 **`core/`** — ML logic
 - `brain.py` — DINOv3 ViT-B/16 encoder via Hugging Face Transformers (768-d embeddings, gated repo → `HF_TOKEN`), classifier load/save. `ENCODER_ID` names the current embedding generation.
+- `siglip.py` — SigLIP2 ViT-B/16 (`google/siglip2-base-patch16-224`, not gated) for the text search: `get_image_encoder()` (vision tower only, runs through `brain.encode`), `get_text_encoder()` (text tower only, lazily cached in the web process), `encode_text()` (64-token max_length padding, unit norm). `SEARCH_ENCODER_ID` stamps `Image.search_embedding_model`.
 - `trainer.py` — reads scored images from Django ORM (good = score ≥ 3, bad = score ≤ 2), applies the per-score weight table, fits LogisticRegression
 
 **`retina/`** — image scrapers
@@ -99,15 +106,19 @@ A score is a pure DB write — no file ever moves. `score IS NULL` means unrated
 | Review (SFW/NSFW) | `review_corpus` | `score IS NULL`, visibility dial | trash (0) or score 1–6 → advance to next; purge → hard-delete |
 | Below Cutoff | `below_cutoff` | `score ≤ 2` | re-score upward or purge from the gallery lightbox |
 | Gallery | `gallery` | `score ≥ min_score` | re-score / tag / purge / share |
+| Text search | `gallery?q=` | candidate set (`scope=rated`: the gallery filter; `scope=all`: plus every unrated image), ranked by SigLIP2 cosine, best 100 | same lightbox, so backlog hits can be rated on the spot |
+| Similar images | `gallery?similar=<hash>` | same candidate set, ranked by DINOv3 cosine to the anchor, anchor excluded | linked from the review card and the lightbox action row |
 
 **Review queue order** (Config → Review queue → Order, stored in `ReviewThresholds.queue_order`): `oldest` (default, download order), `newest`, or `shuffle`. Unseen images (`queue_seen_at IS NULL`) always come first; the option only sorts inside that block. An image is stamped seen when the user moves on from it via prev/next without rating it (the links carry `?left=<hash>`, handled by `_mark_left_image_seen`), not when its card renders, so the card's prev/next and rate-and-advance always agree. `shuffle` orders by `content_hash`, which is unrelated to source and download time, so the sequence is as good as random but stable across requests, and prev/next, the position counter and rate-and-advance keep working (a real `order_by("?")` would re-roll on every request). The queryset order, the reversed order for predecessor lookups and the prev/next window filters all come from one `QueueOrder` object, so they cannot drift apart.
+
+**Text search and similar images** (contract V1–V17 in `tests/ratings/test_search.py`): the query goes through `normalize_query` (whitespace, 200 chars) to the tokenizer only and is echoed via autoescape; `scope` is a whitelist; a ranked mode replaces the sort, hides the sort buttons and falls back to the plain gallery with a toast when it cannot run (missing weights, anchor without a current vector). Each web process holds one `VectorBank` per generation (about 77 MB per 25k images) and the text tower (about 1.1 GB) after the first search. The **search index** is a django-q chain: `run_search_index` encodes one slice of 1000 (rated first), re-enqueues itself while rows remain, and stops when nothing is left or a whole slice encoded nothing (missing/unreadable files → `repair_orphans`); `run_scrape` enqueues the chain at its end, the Config page has the button and the counts, and all status comes from the DB/OrmQ, never the session (the chain has a new task id per slice). Never encode SigLIP inline in the scrape: a 25k-image scrape would hit the 4 h cluster timeout.
 
 Keys `0`–`6` rate and advance in review (`0` = trash); `s` opens the share picker, `n` toggles NSFW, arrows navigate. The same keys work inside the gallery lightbox, where a score keeps the image in view (no advance) and arrows follow the grid order. (The fav star was removed with the 1–6 model; trash returned as score 0.)
 
 ### UI conventions (mobile first)
 - Every page extends `templates/base.html`; htmx is vendored (`static/vendor/htmx.min.js`), nothing loads from third-party servers. Scripts: `nav.js`, `sheet.js`, `toast.js` on every page; `review.js`, `gallery.js`, `tags.js`, `share-sheet.js` per page.
 - The review card and the gallery lightbox share two partials: `_score_actions.html` (score row 0–6 above an action row prev · NSFW · share · purge · next) and `_tag_editor.html`. The review context passes `score_url`/`purge_url`/`nsfw_url`/`hx_target`/`hx_swap`; the lightbox passes `lightbox=True` and steps through the grid in `gallery.js`.
-- A response that changes counts also sends the nav badges out of band (`_nav_badges.html`); job-triggering responses send `_nav_job.html` OOB. The nav indicator polls `job_indicator` every 5 s only while a job runs.
+- A response that changes counts also sends the nav badges out of band (`_nav_badges.html`); job-triggering responses send `_nav_job.html` OOB. The nav indicator polls `job_indicator` every 5 s only while a job runs (scrape/train from the session, the search index from OrmQ via `active_index`).
 - Feedback: htmx views return `with_toast(...)` (`HX-Trigger` header); full-page views use Django `messages`, which `server_toasts` turns into the same toast. `toast.js` sets text via `textContent` (OWASP A03).
 - Confirmation: exactly one sheet in `base.html`. htmx elements use `hx-confirm` (+ `data-confirm-label`), plain forms use `data-confirm`; `data-confirm-word="RESET"` + `data-confirm-field` demand a typed word, which the view checks again (OWASP A04). Scores, NSFW and tags never ask; purge, delete, clear and fresh start always do.
 - Design tokens live in `:root` of `static/app.css`: `--tap: 48px` (minimum touch target), `--score-h`, `--action-h`, `--nav-h`. Hover may recolour but never show or hide anything.
@@ -132,6 +143,8 @@ data/
 `score_corpus` in `views.py` sets `image.score` + `image.rated_at` with a single DB write — files never move. `file_path` is set once at scrape time and never touched. Purging (`purge_image` in `utils.py`) hard-deletes the file and sets `is_purged=True`; the `content_hash` stays in the dedup index so it can't be re-downloaded. Content hashes are the dedup key — `scraper.py` skips any download whose SHA256 already exists in the DB.
 
 ### Embedding generations
+Two independent generations live on every row: the DINOv3 taste vector (`embedding` / `embedding_model`, stamp `core.brain.ENCODER_ID`) and the SigLIP2 search vector (`search_embedding` / `search_embedding_model`, stamp `core.siglip.SEARCH_ENCODER_ID`). They are never compared or mixed; the search vector is read only by `ratings/search.py`. The rest of this section describes the taste generation; the search generation follows the same stamp discipline with its own stale set (`search.stale_search_images()`) and its own backfill (the index chain / `index_search`).
+
 Every stored vector is stamped with the encoder that produced it (`Image.embedding_model` = `core.brain.ENCODER_ID` at write time). All similarity code (dedup index, similar images, kNN tag suggestions, taste/NSFW prediction) filters on the current stamp; a row with a missing or foreign stamp is "stale" and is re-encoded by the next encoder pass over it (trainer backfill for rated rows, `classify_images` for unrated rows, or `manage.py reencode_embeddings`). Classifier pickles are dicts `{"encoder", "classifier"}`; `load_classifier` returns `None` for a foreign or legacy (bare estimator) file. To switch encoders: change `get_encoder`/`get_transform`, bump `ENCODER_ID`, and add a migration if the old rows need a label (0021 labelled all pre-existing vectors `dinov2_vitb14`).
 
 ### Training weight formula
@@ -144,7 +157,7 @@ Single volume `/data` holds everything (DB, weights, images, config). The image 
 - Mirror source structure: `tests/core/`, `tests/retina/`, `tests/ratings/`, `tests/memelord/`
 - Integration tests (real DINOv3 weights, real network): `@pytest.mark.integration`, skipped by default. `tests/core/test_brain_integration.py` loads the real encoder; run it after a torch/transformers bump with `uv run pytest --run-integration tests/core/test_brain_integration.py` (needs `HF_TOKEN` for an account with access to the gated repo).
 - Django view/model tests use `django.test.TestCase` (each module calls `django.setup()` at import); run with plain `pytest` (no `pytest-django` plugin). There is no separate test database: tests open the dev DB under `DATA_DIR`, delete rows inside a transaction and roll back, so **apply new migrations locally (`make migrate`) before running the suite** or every DB test fails with `no such column`.
-- Mutation testing: `[tool.mutmut]` in `pyproject.toml` is scoped to `core/brain.py`, `core/dedup.py`, `ratings/embeddings.py`; run command and env vars are in the comment above that section. Run it only when one of those three modules changes, not routinely: a full run takes about 35 minutes (555 mutants, one child because the tests share one SQLite file, each child pays the torch/transformers import). Run it against a copy of the DB (`DATA_DIR=/path/to/copy`) so the ordinary suite can run meanwhile, always `rm -rf mutants` before a run whose sources or tests changed, and delete `mutants/` afterwards. `MUTANTS.md` records the last run and the disposition of every surviving mutant.
+- Mutation testing: `[tool.mutmut]` in `pyproject.toml` is scoped to `core/brain.py`, `core/dedup.py`, `ratings/embeddings.py`, `core/siglip.py`, `ratings/vector_bank.py`, `ratings/search.py`, `ratings/similar.py`; run command and env vars are in the comment above that section. Run it only when one of those modules changes, not routinely: a full run takes about 35 minutes (555 mutants, one child because the tests share one SQLite file, each child pays the torch/transformers import). Run it against a copy of the DB (`DATA_DIR=/path/to/copy`) so the ordinary suite can run meanwhile, always `rm -rf mutants` before a run whose sources or tests changed, and delete `mutants/` afterwards. To re-check one mutant (a timeout, or a survivor after a new test) without a full run, copy the changed test module into `mutants/tests/...` and run `cd mutants && DJANGO_DEBUG=true DATA_DIR=/path/to/copy HYPOTHESIS_PROFILE=mutmut MUTANT_UNDER_TEST=<id> uv run python -m pytest tests/<module>.py` (a failing test means killed). `MUTANTS.md` records the last run and the disposition of every surviving mutant.
 
 ## Code style
 

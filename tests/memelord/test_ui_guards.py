@@ -225,6 +225,22 @@ def test_review_card_and_lightbox_share_the_score_row_and_the_tag_editor() -> No
     assert corpus.count('class="card-tags"') == 1, "the tag editor is defined once"
 
 
+def test_similar_images_is_one_plain_link_in_the_shared_action_row() -> None:
+    """Contract: V9, V17 (risk R20)
+
+    The link lives in _score_actions.html, so review card and lightbox get it
+    from one place. It must not carry data-action: gallery.js routes every
+    data-action click itself and would swallow the navigation.
+    """
+    actions = (ROOT / "templates" / "ratings" / "_score_actions.html").read_text()
+    links = [m for m in re.findall(r"<a\b[^>]*>", actions) if "?similar=" in m]
+    assert len(links) == 1, links
+    assert "data-action" not in links[0]
+    assert "scope=all" in links[0]
+    corpus = _markup_corpus()
+    assert corpus.count("?similar=") == 1, "the similar link is defined once"
+
+
 def test_hover_never_reveals_or_hides_anything() -> None:
     """Contract: V6 (hover may recolour, never show or hide)"""
     css = _css_without_comments()

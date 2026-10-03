@@ -8,14 +8,41 @@
 
     <div class="gallery-controls">
       {% if not is_below_cutoff %}
+      {# Text search (UI contract V5/V8): a plain GET form; the query is echoed through autoescape only. #}
+      <form method="get" action="{% url 'gallery' %}" class="gallery-search" role="search">
+        <input type="hidden" name="min_score" value="{{ min_score }}">
+        {% if active_tag %}<input type="hidden" name="tag" value="{{ active_tag }}">{% endif %}
+        {% if is_search or is_similar %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
+        <input type="search" name="q" value="{{ q }}" class="field gallery-search-input"
+               placeholder="search images…" maxlength="200" autocomplete="off"
+               enterkeyhint="search" aria-label="Search images">
+        {% if is_search or is_similar %}
+        <a href="{{ clear_url }}" class="gallery-search-clear" aria-label="Back to the gallery" title="Back to the gallery">×</a>
+        {% endif %}
+      </form>
+      {% if is_similar %}
+      <div class="gallery-control-group gallery-similar-anchor">
+        <span class="gallery-label">similar to</span>
+        <img src="{% url 'serve_thumbnail' similar_to.file_path %}" alt="">
+      </div>
+      {% endif %}
+      {% if is_search or is_similar %}
+      <div class="gallery-control-group">
+        <span class="gallery-label">scope</span>
+        {% for name, url in scope_urls.items %}
+        <a href="{{ url }}" class="gallery-sort-btn{% if scope == name %} gallery-sort-active{% endif %}">{{ name }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
       <div class="gallery-control-group">
         <span class="gallery-label">min score</span>
         {% for s in scores %}
-        <a href="?min_score={{ s }}&sort={{ sort }}{% if active_tag %}&tag={{ active_tag }}{% endif %}"
+        <a href="?min_score={{ s }}&sort={{ sort }}{% if active_tag %}&tag={{ active_tag }}{% endif %}{% if sticky %}&{{ sticky }}{% endif %}"
            class="gallery-score-btn gallery-score-btn--{{ s }}{% if min_score == s %} gallery-score-active{% endif %}">{{ s }}</a>
         {% endfor %}
       </div>
       {% endif %}
+      {% if not is_search and not is_similar %}
       <div class="gallery-control-group">
         <span class="gallery-label">sort</span>
         <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort=newest{% if active_tag %}&tag={{ active_tag }}{% endif %}"
@@ -25,17 +52,27 @@
         <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort=random{% if active_tag %}&tag={{ active_tag }}{% endif %}"
            class="gallery-sort-btn{% if sort == 'random' %} gallery-sort-active{% endif %}">random</a>
       </div>
+      {% endif %}
       {% if all_tags %}
       <div class="gallery-control-group gallery-tags-filter">
         <span class="gallery-label">tags</span>
         {% for tag in all_tags %}
-        <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort={{ sort }}{% if active_tag != tag %}&tag={{ tag }}{% endif %}"
+        <a href="?{% if not is_below_cutoff %}min_score={{ min_score }}&{% endif %}sort={{ sort }}{% if active_tag != tag %}&tag={{ tag }}{% endif %}{% if sticky %}&{{ sticky }}{% endif %}"
            class="tag-pill tag-pill--link{% if active_tag == tag %} tag-pill--active{% endif %}">#{{ tag }}</a>
         {% endfor %}
       </div>
       {% endif %}
-      <span class="gallery-count">{{ total }} image{{ total|pluralize }}</span>
+      <span class="gallery-count">
+        {% if is_search %}{{ total }} match{{ total|pluralize:"es" }} for “{{ q }}”{% elif is_similar %}{{ total }} similar image{{ total|pluralize }}{% else %}{{ total }} image{{ total|pluralize }}{% endif %}
+      </span>
     </div>
+
+    {% if is_search and unindexed %}
+    <p class="hint gallery-hint">
+      {{ unindexed }} image{{ unindexed|pluralize }} in this view {{ unindexed|pluralize:"is,are" }} not searchable yet
+      {% if active_index %}· indexing in progress{% else %}· <a href="{% url 'config' %}" class="hint-link">start the index</a>{% endif %}.
+    </p>
+    {% endif %}
 
     {% if images %}
     <div class="gallery-grid">
@@ -46,6 +83,10 @@
       <p class="done-title">No images</p>
       {% if is_below_cutoff %}
       <p class="done-hint">Nothing below the model threshold or with a low score.</p>
+      {% elif is_search %}
+      <p class="done-hint">No searchable image matches “{{ q }}”.</p>
+      {% elif is_similar %}
+      <p class="done-hint">No similar images in this scope.</p>
       {% else %}
       <p class="done-hint">No scored images match these filters.</p>
       {% endif %}

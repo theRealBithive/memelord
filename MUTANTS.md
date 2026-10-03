@@ -1,13 +1,80 @@
 # Mutation testing record
 
-Tool: mutmut 3.8 · scope: `core/brain.py`, `core/dedup.py`, `ratings/embeddings.py`
-(the `[tool.mutmut]` section in `pyproject.toml` has the run command and why the
-timeout constant is raised). Tests selected: `tests/core`, `tests/ratings`.
+Tool: mutmut 3.8 · scope: the modules listed in `only_mutate` of the `[tool.mutmut]`
+section in `pyproject.toml` (which also has the run command and why the timeout
+constant is raised). Tests selected: `tests/core`, `tests/ratings`. Each run below
+names the modules it covered; a run is scoped to the modules that changed.
 
-Denominators are the generated mutants per file (`grep -cE '^\s*def x_\w+__mutmut_[0-9]+' mutants/<file>`):
-brain 341 (incl. the `_PooledEncoder` methods), dedup 22, embeddings 118 → **555**.
+Denominators are the generated mutants per file
+(`grep -cE '^\s*def x.*__mutmut_[0-9]+\(' mutants/<file>`; the pattern must allow the
+`ǁ` separators mutmut puts into class-method names, or those are not counted).
 
-## Runs on 2026-10-02
+## Runs on 2026-10-03 (text search: `core/siglip.py`, `ratings/vector_bank.py`, `ratings/search.py`, `ratings/similar.py`)
+
+Denominators: siglip 73, vector_bank 115, search 248, similar 26 → **462**. Run
+against a copy of the dev DB with `only_mutate` narrowed to the four modules for
+the run and restored afterwards.
+
+| run | scope | killed | timeout | survived | note |
+|---|---|---|---|---|---|
+| 1 | all four | 360 | 17 | 85 | before the tests listed below |
+| 2 | vector_bank only | 91 | 0 | 34 | 125 mutants after the matmul change (`_unit` adds 13, `rank` shrinks from 20 to 17), with the tests listed below in place. The 34: the 26 vector_bank entries of the equivalent/accepted lists, the sort-kind trio renumbered to `rank` 11, 13, 16, and five `_unit` mutants: 12, 4 and 6 are killed by the two tests added after run 2 started (each verified alone), 2 and 8 are equivalent |
+
+Timeouts of run 1: all 17 are in `core/siglip.py` and pay the lazy transformers
+import inside the wall limit. Each was re-run alone with `MUTANT_UNDER_TEST=<id>`
+against `tests/core/test_siglip.py`: 16 fail their test (killed); the one real
+survivor, `_SiglipImageEncoder.forward` 1 (`pixel_values=None`), is in the list
+of kills below.
+
+### Killed by tests added the same day (22 + the timed-out `forward` 1)
+Each verified alone with `MUTANT_UNDER_TEST` against the updated test module
+(siglip, search) or by run 2 (vector_bank).
+
+| mutant | test |
+|---|---|
+| siglip `_SiglipImageEncoder.forward` 1 | `test_adapter_returns_pooler_output_not_the_first_patch` (the batch reaches the tower) |
+| siglip `get_image_encoder` 15 | `test_image_encoder_loads_vision_tower_in_eval_mode_on_cpu` (the adapter wraps the loaded tower) |
+| siglip `encode_text` 19 | `test_text_model_receives_only_input_ids` (the padded ids reach the model) |
+| search `stale_search_images` 3 | `test_current_stamp_without_a_vector_is_stale` |
+| search `encode_stale_search_embeddings` 13 | `test_unrated_images_follow_download_order_not_insertion_order` |
+| search `encode_stale_search_embeddings` 59, 61, 62, 63, 66, 67, 68 | `test_the_encoder_pass_receives_the_arguments_it_was_given` |
+| search `encode_stale_search_embeddings` 88, 102 | `test_missing_and_unreadable_files_are_counted_and_stay_stale` (two files of each kind) |
+| vector_bank `_refresh_if_changed_locked` 3 | `test_unchanged_version_costs_two_counts_and_reads_no_blob` (returns False) |
+| vector_bank `_load` 29; `rank` 3, 5 | float32 assertions in `test_ranking_equals_a_fresh_computation_from_the_database`, `test_empty_bank_ranks_to_nothing_without_error`, `test_blobs_from_the_database_round_trip_into_unit_rows` |
+| vector_bank `_load` 33, 36 | `test_ranking_equals_a_fresh_computation_from_the_database` now compares the similarity values; see the production change below |
+| vector_bank `_unit` 12 (run 2) | `test_a_zero_query_ranks_everything_at_zero_without_nan` |
+| vector_bank `_unit` 4, 6 (run 2) | `test_a_float64_query_is_ranked_in_float32` |
+
+Production change after run 1: `VectorBank.rank` ranked with
+`brain.cosine_similarity_matrix`, which re-normalises and copies the whole bank on
+every call, so the row normalisation in `_load` was dead weight (its Frobenius-norm
+mutants 33 and 36 survived) and every search copied 2 × 77 MB at 25k images. `rank`
+now takes the plain matmul of the unit rows with the unit query (`_unit`), which is
+what the bank was meant to do. Run 2 measures the module after that change.
+
+### Equivalent (45): identical behaviour on every reachable input
+- vector_bank `__init__` 5, 6, 7, 9, 11, 12; `reset` 1, 2, 3, 5, 7, 8; `_load` 21, 22, 24, 26, 27 — placeholder state. `rank()` always calls `_refresh_if_changed_locked()` first and a version of `None` or `""` never equals a pair of counts, so `_load` overwrites `_hashes` and `_matrix` before anything reads them; in the empty branch `_matrix` is never read because `rank` returns on an empty `_hashes` (`None` is as falsy as `[]`). Only `size()` before the first `rank()` could tell, and no production code calls `size()`.
+- vector_bank `current_version` 4 — counting non-purged instead of purged rows. The matrix is the image of the stamp set, which the purge flag does not change; a purge moves either count and a fresh start zeroes both, so both versions reload at every point where the matrix content could differ. Only the number of SQL reads in the compound case "one purge plus one insert between two calls" differs.
+- vector_bank `_load` 41, 48, 49 — the zero-norm replacement only ever divides a zero row (0/1 = 0/2), and with the condition removed a zero row would become NaN; no stored vector is all-zero (the pooled output of either encoder never is), same argument as `cosine_similarity_matrix` 33, 43 above.
+- vector_bank `_unit` 2, 8 (run 2) — `reshape(None)` and `reshape(-2)`: every caller hands in a 1-d vector (`encode_text`, `bytes_to_embedding`), and numpy infers the size for any negative value; `reshape(-1)` stays as the statement of the expected shape.
+- vector_bank `first_allowed` 4, 7, 8; search `encode_stale_search_embeddings` 73, 76, 77, 80, 83, 84 — `strict=` on zips whose operands have equal length by construction (`rank()` returns hashes and similarities of one length; `chunk`/`paths` come from the same list; `valid_paths`/`embeddings` by `brain.encode`'s contract).
+- search `encode_stale_search_embeddings` 8 — `only()` always includes the primary key, so dropping `content_hash` from its list changes nothing.
+- search `encode_stale_search_embeddings` 14 — `nulls_last=None` drops the NULLS LAST clause; SQLite sorts NULL below every value, so in DESC order it comes last anyway. SQLite is the only backend.
+- search `encode_stale_search_embeddings` 97 — `save()` without `update_fields` on a row loaded with `.only("content_hash", "file_path")`: Django limits such a save to the loaded fields plus the ones assigned since (`file_path`, `search_embedding`, `search_embedding_model`), so a score given while the pass runs survives either way. The explicit list stays because it states what the job may touch.
+- search `last_index_report` 29, 31, 34, 37, 39, 42 — defaults of `.get("remaining")` and `.get("encoded")`: every successful result comes from `run_search_index`, which always writes both keys, so the defaults are never consulted.
+- search `candidate_images` 16 — `score >= min_score` is already false for NULL in SQL, so `score__isnull=False` is redundant for the database; it stays so the reader does not need SQL's three-valued logic.
+- search `rank_by_text` 5; similar `rank_similar` 7 — `values_list(flat=True)` without a field name yields the first concrete field, which is the primary key `content_hash`; the name stays because the equivalence hangs on field order.
+
+### Accepted as outside the contract (23) — operator decision requested
+- **Log text and cadence (11).** search `encode_stale_search_embeddings` 3, 4 (default progress label), 107, 112, 114–118, 123, 124 (the progress line: its `done` arithmetic and wording). No contract item covers log output.
+- **Message wording (5).** search `last_index_report` 24, 25, 26 (fallback text when a task left no result at all), 45, 46 (case and padding of the repair hint; the hint still names `repair_orphans`, which is what V14 promises).
+- **Default argument values (4).** search `encode_stale_search_embeddings` 1 (`chunk_size` 256→257), 2 (`batch_size` 32→33); vector_bank `_load` 2, 13 (`iterator(chunk_size=2000)`): memory knobs with identical results.
+- **Sort kind (3).** vector_bank `rank` 14, 16, 19 (11, 13, 16 after the matmul change): numpy's default sort and `"STABLE"` (numpy reads the kind case-insensitively) are deterministic functions of the similarity array too, so V6 holds either way; `"stable"` only pins the order among exact ties to content_hash order, kept for reproducibility across numpy versions.
+
+
+## Runs on 2026-10-02 (`core/brain.py`, `core/dedup.py`, `ratings/embeddings.py`)
+
+Denominators: brain 341 (incl. the `_PooledEncoder` methods), dedup 22, embeddings 118 → **555**.
 
 | run | killed | timeout | survived | note |
 |---|---|---|---|---|

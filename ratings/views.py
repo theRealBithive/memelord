@@ -1,6 +1,7 @@
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib import messages
@@ -13,7 +14,8 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 import ratings.notifiers as notifiers
-from ratings import reset
+from core.brain import EncoderUnavailableError
+from ratings import reset, search, similar
 from ratings.embeddings import has_current_embedding
 from ratings.models import (
     Image,
@@ -823,6 +825,7 @@ def config_view(request):
             **_schedule_ctx(),
             **_vision_ctx(),
             **_channel_list_ctx(),
+            **_index_status_ctx(),
         },
     )
 
@@ -1412,14 +1415,61 @@ def below_cutoff(request):
     )
 
 
+def _images_in_rank_order(ranked: list[tuple[str, float]]) -> list[Image]:
+    """
+    Fetch the ranked hashes in one query and put them back into rank order.
+
+    in_bulk is one query for the whole page; a hash purged between ranking
+    and fetch is simply absent from the dict and drops out of the page.
+    """
+    by_hash = Image.objects.prefetch_related("tags").in_bulk([h for h, _ in ranked])
+    ordered: list[Image] = []
+    for content_hash, _similarity in ranked:
+        image = by_hash.get(content_hash)
+        if image is not None:
+            ordered.append(image)
+    return ordered
+
+
+def _gallery_links(min_score: int, sort: str, active_tag: str, scope: str, mode_params: dict) -> dict:
+    """
+    Query strings for the gallery template, built here so it never assembles
+    a URL from the search text by hand: `sticky` is what every score and tag
+    link appends to stay inside the current search or similarity view,
+    `scope_urls` switch the scope inside that view, `clear_url` leaves it.
+    urlencode quotes the query text, so a `&` or `<` typed into the search box
+    cannot split a link or inject markup (OWASP A03).
+    """
+    base = {"min_score": min_score, "sort": sort}
+    if active_tag:
+        base["tag"] = active_tag
+    if not mode_params:
+        return {"sticky": "", "scope_urls": {}, "clear_url": "?" + urlencode(base)}
+    scope_urls = {}
+    for name in search.SCOPES:
+        scope_urls[name] = "?" + urlencode({**base, "scope": name, **mode_params})
+    return {
+        "sticky": urlencode({"scope": scope, **mode_params}),
+        "scope_urls": scope_urls,
+        "clear_url": "?" + urlencode(base),
+    }
+
+
 @login_required
 def gallery(request):
     """
-    Scored-image gallery with filter, sort, and tag controls.
+    Scored-image gallery with filter, sort and tag controls, plus two ranked
+    modes on the same grid: a text search (`?q=`, SigLIP2, contract V5) and
+    "similar images" (`?similar=<hash>`, DINOv3, V17).
 
-    The 500-item cap prevents memory pressure on large collections — the gallery
-    renders all images into the DOM at once (no pagination) so an unbounded
-    query would cause slow page loads and excessive memory use.
+    A ranked mode replaces the sort and caps the page at RESULT_LIMIT; the
+    plain gallery keeps its 500-item cap because it renders everything into
+    the DOM at once. `scope` widens the candidate set to the unrated backlog
+    and only means something inside a ranked mode: the plain gallery is rated
+    images by definition. Both ranked modes fall back to the plain gallery
+    with a toast when they cannot run (missing weights, an anchor without a
+    current vector), never to a silent empty grid (V10, V17). The query text
+    reaches only the tokenizer and the template's autoescape (V8).
     """
     show_nsfw = request.session.get("show_nsfw", False)
 
@@ -1433,23 +1483,48 @@ def gallery(request):
         sort = "newest"
 
     active_tag = request.GET.get("tag", "").strip().lower()
+    scope = search.normalize_scope(request.GET.get("scope"))
+    query = search.normalize_query(request.GET.get("q"))
+    similar_hash = request.GET.get("similar", "").strip()
 
-    qs = Image.objects.filter(
-        score__isnull=False, score__gte=min_score, is_purged=False
-    )
-    if not show_nsfw:
-        qs = qs.filter(is_nsfw=False)
-    if active_tag:
-        qs = qs.filter(tags__name=active_tag)
+    anchor = None
+    if similar_hash:
+        anchor = get_object_or_404(Image, content_hash=similar_hash, is_purged=False)
 
-    if sort == "random":
-        qs = qs.order_by("?")
-    elif sort == "oldest":
-        qs = qs.order_by("downloaded_at")
+    candidates = search.candidate_images(scope, min_score, active_tag, show_nsfw)
+    ranked: list[tuple[str, float]] = []
+    mode_params: dict[str, str] = {}
+    unindexed = 0
+    if anchor is not None:
+        similar_ranked = similar.rank_similar(anchor, candidates, search.RESULT_LIMIT)
+        if similar_ranked is None:
+            messages.info(request, "This image has no current embedding yet. Run Train first.")
+            anchor = None
+        else:
+            ranked = similar_ranked
+            mode_params = {"similar": anchor.content_hash}
+    elif query:
+        try:
+            ranked = search.rank_by_text(query, candidates, search.RESULT_LIMIT)
+            unindexed = search.unindexed_count(candidates)
+            mode_params = {"q": query}
+        except EncoderUnavailableError as exc:
+            messages.error(request, str(exc))
+            query = ""
+
+    if mode_params:
+        images = _images_in_rank_order(ranked)
     else:
-        qs = qs.order_by("-downloaded_at")
+        scope = search.DEFAULT_SCOPE
+        qs = search.candidate_images(scope, min_score, active_tag, show_nsfw)
+        if sort == "random":
+            qs = qs.order_by("?")
+        elif sort == "oldest":
+            qs = qs.order_by("downloaded_at")
+        else:
+            qs = qs.order_by("-downloaded_at")
+        images = list(qs.prefetch_related("tags")[:500])
 
-    images = list(qs.prefetch_related("tags")[:500])
     all_tags = list(Tag.objects.values_list("name", flat=True))
 
     return render(
@@ -1466,6 +1541,13 @@ def gallery(request):
             "mode": "gallery",
             "all_tags": all_tags,
             "active_tag": active_tag,
+            "q": query if "q" in mode_params else "",
+            "scope": scope,
+            "is_search": "q" in mode_params,
+            "is_similar": "similar" in mode_params,
+            "similar_to": anchor,
+            "unindexed": unindexed,
+            **_gallery_links(min_score, sort, active_tag, scope, mode_params),
         },
     )
 
@@ -1663,6 +1745,57 @@ def channel_delete(request, pk: int):
     return with_toast(HttpResponse(""), "Channel deleted")
 
 
+def _index_status_ctx() -> dict:
+    """
+    Everything the index block on the config page needs, read from the
+    database (counts) and the queue table (queued flag), never from the
+    session (contract V15). The report about the last slice only matters when
+    nothing is queued and rows are still waiting: while the chain runs the
+    pending fragment is the status, and when it is done there is nothing to
+    report.
+    """
+    indexed, total = search.index_counts()
+    remaining = total - indexed
+    queued = search.index_job_queued()
+    report = None
+    if not queued and remaining > 0:
+        report = search.last_index_report()
+    return {
+        "indexed": indexed,
+        "total": total,
+        "remaining": remaining,
+        "index_queued": queued,
+        "index_report": report,
+    }
+
+
+def _render_index_status(request):
+    ctx = _index_status_ctx()
+    if ctx["index_queued"]:
+        return render(request, "ratings/_index_pending.html", ctx)
+    return render(request, "ratings/_index_result.html", ctx)
+
+
+@login_required
+@require_POST
+def trigger_search_index(request):
+    """
+    Start the search index chain and return its status fragment.
+
+    Unlike trigger_scrape / trigger_train there is no session bookkeeping: the
+    chain is many short tasks, and enqueue_index_job_if_needed already refuses
+    a second chain (V13), so a double tap just re-renders the pending state.
+    """
+    search.enqueue_index_job_if_needed()
+    return _render_index_status(request)
+
+
+@login_required
+def search_index_status(request):
+    """Polling target of _index_pending.html; the fragment it returns decides whether polling goes on."""
+    return _render_index_status(request)
+
+
 @login_required
 def job_indicator(request):
     """
@@ -1677,7 +1810,7 @@ def job_indicator(request):
 
 def _job_is_running(request) -> bool:
     """
-    True while a scrape or train job is queued or running anywhere.
+    True while a scrape, train or search-index job is queued or running anywhere.
 
     The session knows about jobs this browser started; OrmQ (django-q's ORM
     broker table) still holds every task that is queued or running, including
@@ -1707,7 +1840,8 @@ def fresh_start_view(request):
     """
     if _job_is_running(request):
         messages.error(
-            request, "A scrape or train job is running. Wait for it to finish before starting over."
+            request,
+            "A scrape, train or index job is running. Wait for it to finish before starting over.",
         )
         return redirect("config")
     if request.POST.get("confirm", "").strip() != reset.CONFIRM_WORD:

@@ -35,6 +35,7 @@ dev = [
     "ruff>=0.16",
     "hypothesis>=6",
     "mutmut>=3",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.semantic_release]
@@ -80,7 +81,15 @@ ignore = [
 #   DJANGO_DEBUG=true DATA_DIR=$PWD/data HYPOTHESIS_PROFILE=mutmut uv run mutmut run --max-children 1
 [tool.mutmut]
 source_paths = ["core", "ratings"]
-only_mutate = ["core/brain.py", "core/dedup.py", "ratings/embeddings.py"]
+only_mutate = [
+    "core/brain.py",
+    "core/dedup.py",
+    "ratings/embeddings.py",
+    "core/siglip.py",
+    "ratings/vector_bank.py",
+    "ratings/search.py",
+    "ratings/similar.py",
+]
 do_not_mutate = ["ratings/migrations/*", "ratings/management/*"]
 also_copy = ["memelord", "retina", "tests", "templates", "static", "manage.py"]
 pytest_add_cli_args_test_selection = ["tests/core", "tests/ratings"]

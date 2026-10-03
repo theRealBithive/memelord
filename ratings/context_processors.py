@@ -64,4 +64,27 @@ def active_jobs(request):
         return {}
     from ratings import views
 
-    return {**views._training_ctx(request), **views._scrape_ctx(request)}
+    return {
+        **views._training_ctx(request),
+        **views._scrape_ctx(request),
+        **_index_job_ctx(),
+    }
+
+
+def _index_job_ctx() -> dict:
+    """
+    State of the search index chain, read from the queue table rather than
+    the session (V15): the chain is many short tasks with new IDs, and other
+    browsers and the second gunicorn worker must see the same thing. The
+    try/except mirrors notification_config: this runs on every page, including
+    the first request before django-q's tables exist.
+    """
+    try:
+        from ratings import search
+
+        if not search.index_job_queued():
+            return {"active_index": False, "index_remaining": 0}
+        indexed, total = search.index_counts()
+        return {"active_index": True, "index_remaining": total - indexed}
+    except Exception:
+        return {"active_index": False, "index_remaining": 0}

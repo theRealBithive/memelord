@@ -1,0 +1,13 @@
+<div id="index-result" class="train-result {% if remaining == 0 %}train-ok{% elif index_report %}train-err{% endif %}">
+{% if remaining == 0 %}
+  <span class="train-icon">✓</span>
+  <span>Search index complete: {{ indexed }} image{{ indexed|pluralize }} searchable.</span>
+{% elif index_report %}
+  <span class="train-icon">✕</span>
+  <span>{{ index_report }} {{ indexed }} of {{ total }} indexed.</span>
+{% else %}
+  <span class="train-icon">·</span>
+  <span>{{ indexed }} of {{ total }} image{{ total|pluralize }} indexed, {{ remaining }} waiting.</span>
+{% endif %}
+</div>
+{% include "ratings/_nav_job.html" with nav_job_oob=True %}

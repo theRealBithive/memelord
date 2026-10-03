@@ -27,6 +27,24 @@
       {% endif %}
     </div>
 
+    <div class="section">
+      <div class="section-title">Search index</div>
+      <p class="hint">
+        Text search needs a SigLIP2 vector per image. The index job runs in the background in
+        slices of 1000 images (about 10 minutes each) and starts by itself after every scrape.
+      </p>
+      <div class="job-actions">
+        <button type="button" class="btn-pill btn-pill--accent"
+                hx-post="{% url 'trigger_search_index' %}" hx-target="#index-result" hx-swap="outerHTML"
+                {% if index_queued %}disabled{% endif %}>⌕ Index now</button>
+      </div>
+      {% if index_queued %}
+        {% include "ratings/_index_pending.html" %}
+      {% else %}
+        {% include "ratings/_index_result.html" %}
+      {% endif %}
+    </div>
+
     <div class="schedule-section">
       <div class="section-title">Auto-scrape</div>
       {% include "ratings/_schedule_status.html" %}
@@ -88,7 +106,7 @@
         {% csrf_token %}
         <input type="hidden" name="confirm" value="" data-confirm-field>
         <button type="submit" class="btn-pill btn-pill--danger"
-                {% if active_task_id or active_scrape_task_id %}disabled title="Wait for the running job to finish"{% endif %}>Start over…</button>
+                {% if active_task_id or active_scrape_task_id or index_queued %}disabled title="Wait for the running job to finish"{% endif %}>Start over…</button>
       </form>
     </div>
 

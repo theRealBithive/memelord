@@ -56,6 +56,8 @@ def run_scrape():
     """
     from loguru import logger
 
+    from ratings import search
+
     _trim_logs()
     sink_id = logger.add(_db_sink("scrape"), format="{message}")
     try:
@@ -64,6 +66,12 @@ def run_scrape():
             data_dir=Path(settings.DATA_DIR),
             vision=scraper.vision_config_from_settings(),
         )
+        # New images get their search vector from the index chain, not inline:
+        # a 25k-image scrape would otherwise run 3.5 h longer and hit the
+        # cluster timeout. The chain starts here, in the background wrapper,
+        # so the CLI scrape stays pure and the auto_scrape schedule is covered.
+        if search.enqueue_index_job_if_needed():
+            logger.info("Search index job queued for the new images.")
         return {"ok": True, "total": sum(counts.values()), "counts": counts}
     except Exception as exc:
         logger.error("Scrape failed: {}", exc)
@@ -106,5 +114,60 @@ def run_train():
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+    finally:
+        logger.remove(sink_id)
+
+
+def run_search_index():
+    """
+    Encode one slice of the search index and queue the next one (V3, V13, V14).
+
+    Why slices: the single django-q worker also runs scrapes and training. A
+    25k backlog is 3.5 hours on this CPU; as one task it would hold the worker
+    for that long and sit right at the 4 h cluster timeout. One slice of 1000
+    images is about 10 minutes, after which a waiting scrape gets its turn,
+    then the chain continues with the slice this function enqueues before it
+    returns (so OrmQ is never empty between slices and the UI never flickers
+    to "idle").
+
+    Why the stop rule: a slice that encoded nothing although rows are still
+    stale can only be looking at missing or unreadable files; re-queueing
+    would loop forever. Missing weights (EncoderUnavailableError) end the
+    chain the same way with the message that says what to do (V10).
+    """
+    from loguru import logger
+
+    from core.brain import EncoderUnavailableError
+    from ratings import search
+
+    _trim_logs()
+    sink_id = logger.add(_db_sink("index"), format="{message}")
+    try:
+        try:
+            result = search.encode_stale_search_embeddings(
+                Path(settings.DATA_DIR), limit=search.INDEX_SLICE_SIZE
+            )
+        except EncoderUnavailableError as exc:
+            logger.error("Search index stopped: {}", exc)
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            logger.error("Search index failed: {}", exc)
+            return {"ok": False, "error": str(exc)}
+
+        remaining = search.stale_search_images().count()
+        if remaining == 0:
+            logger.info("Search index complete ({} encoded in the last slice).", result["encoded"])
+        elif result["encoded"] > 0:
+            from django_q.tasks import async_task
+
+            logger.info("Search index: {} images left, next slice queued.", remaining)
+            async_task(search.INDEX_TASK)
+        else:
+            logger.warning(
+                "Search index stopped: {} image(s) cannot be encoded (file missing or "
+                "unreadable). Run `manage.py repair_orphans`, then index again.",
+                remaining,
+            )
+        return {"ok": True, "encoded": result["encoded"], "remaining": remaining}
     finally:
         logger.remove(sink_id)

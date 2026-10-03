@@ -42,6 +42,16 @@ class Image(models.Model):
     embedding_model = models.CharField(
         max_length=32, blank=True, default="", db_index=True
     )
+    # Second vector per image, from the text-aligned SigLIP2 encoder
+    # (core.siglip.SEARCH_ENCODER_ID), used only by the gallery text search.
+    # DINOv3 has no text tower, so the taste vector above cannot answer a
+    # typed query; the two spaces are never compared or mixed. Same raw
+    # float32 blob format, same stamp discipline: a missing or foreign stamp
+    # means "not searchable" and the index job re-encodes the row.
+    search_embedding = models.BinaryField(null=True, blank=True)
+    search_embedding_model = models.CharField(
+        max_length=32, blank=True, default="", db_index=True
+    )
     predicted_score = models.FloatField(null=True, blank=True, db_index=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="images")
     queue_seen_at = models.DateTimeField(null=True, blank=True)

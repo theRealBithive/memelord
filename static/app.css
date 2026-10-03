@@ -856,6 +856,50 @@ kbd {
   color: var(--muted);
 }
 
+/* Text search and similar-images controls (UI contract V5/V17). The form takes
+   a full row so the input keeps thumb width on a phone; the clear link is a
+   --tap square. */
+.gallery-search {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.gallery-search-input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--tap);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.gallery-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--fs-xl);
+  text-decoration: none;
+}
+
+.gallery-similar-anchor img {
+  width: var(--tap);
+  height: var(--tap);
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.gallery-hint {
+  padding: 0.5rem 1rem 0;
+  margin: 0;
+}
+
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));

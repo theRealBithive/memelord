@@ -59,6 +59,10 @@ Review prev/next add ?left=<current hash>: the server stamps that image as seen
           title="{% if image.is_nsfw %}Marked NSFW — tap to clear{% else %}Mark this image as NSFW{% endif %}">
     <span class="action-icon">🔞</span><span class="action-label">NSFW</span>
   </button>
+  {# Similar images (UI contract V17): a plain link, no data-action, so gallery.js leaves the click alone. #}
+  <a class="action-btn" href="{% url 'gallery' %}?similar={{ image.content_hash }}&amp;scope=all" title="Similar images">
+    <span class="action-icon">≈</span><span class="action-label">similar</span>
+  </a>
   {% include "ratings/_share_button.html" %}
   <button class="action-btn action-btn--danger"
           data-action="purge"

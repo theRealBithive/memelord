@@ -1,0 +1,8 @@
+<div id="index-result" class="train-result train-pending"
+     hx-get="{% url 'search_index_status' %}"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML">
+  <span class="train-icon train-spin">⟳</span>
+  <span>Indexing… {{ indexed }} of {{ total }} done, {{ remaining }} left</span>
+</div>
+{% include "ratings/_nav_job.html" with nav_job_oob=True %}

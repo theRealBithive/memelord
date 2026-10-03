@@ -56,8 +56,9 @@ Images are served at `/media/` behind Django login — no unauthenticated access
 ### One-off commands
 
 ```bash
-docker compose run --rm memelord scrape   # scrape now
-docker compose run --rm memelord train    # train now
+docker compose run --rm memelord scrape        # scrape now
+docker compose run --rm memelord train         # train now
+docker compose run --rm memelord index_search  # build the text-search index in the foreground
 ```
 
 ---
@@ -156,6 +157,16 @@ Everything you scored `0`–`2`, as a grid. Changed your mind? Re-score upward f
 
 Everything at or above the minimum score you pick, sortable newest / oldest / random and filterable by `#tag`. The lightbox supports swipe navigation and lets you re-score, re-tag, purge or share.
 
+### Text search
+
+Type what you are looking for into the search box above the gallery grid ("cat on a skateboard", "Katze auf Skateboard": the model is multilingual). Images are ranked by how well they match the text, the best 100 are shown, and the min-score, tag and NSFW filters still apply. Switch the **scope** from `rated` to `all` to search the unrated backlog too; a hit opens in the same lightbox, so you can rate it on the spot.
+
+Behind it is a second embedding model, SigLIP2 (`google/siglip2-base-patch16-224`, no token needed): it maps images and text into one vector space, so nothing has to be classified or labelled first. Every image needs its SigLIP2 vector once. The **Search index** block on the Config page shows how many images have one and starts the index job; the job also starts by itself after every scrape. It runs in the background worker in slices of 1000 images (about 10 minutes each on a CPU, roughly 2 images per second), rated images first, so the gallery is searchable after the first slice while a large backlog fills in behind it. A 25,000-image library takes about 3.5 hours once. The first run downloads the 1.5 GB weights into the shared `hf-cache` volume. Expect about 1.3 GB of RAM per web worker after the first search (the text model plus the vector matrices) and about 1 GB for the worker.
+
+### Similar images
+
+Every image in the review card and in the gallery lightbox has a **similar** action. It opens the gallery with the images closest to it by DINOv3 cosine similarity, across the whole library by default (switch the scope to `rated` to stay in the gallery). This needs no extra model: it reuses the taste embeddings that the classifier, dedup and kNN tag suggestions already share.
+
 ---
 
 ## Tags
@@ -207,13 +218,14 @@ make test
 make lint       # ruff
 ```
 
-The Makefile exports `DJANGO_DEBUG=true`, so the insecure default secret key is accepted for local runs. After changing `pyproject.toml` run `uv lock` — the Docker build installs with `uv sync --locked` and fails on a stale lock. To upgrade everything, run `uv lock --upgrade`, re-run the tests, and run the opt-in model test: `uv run pytest --run-integration tests/core/test_brain_integration.py` (needs `HF_TOKEN` with access to the gated repo).
+The Makefile exports `DJANGO_DEBUG=true`, so the insecure default secret key is accepted for local runs. After changing `pyproject.toml` run `uv lock` — the Docker build installs with `uv sync --locked` and fails on a stale lock. To upgrade everything, run `uv lock --upgrade`, re-run the tests, and run the opt-in model tests: `uv run pytest --run-integration tests/core/test_brain_integration.py` (needs `HF_TOKEN` with access to the gated repo) and `uv run pytest --run-integration tests/core/test_siglip_integration.py` (downloads the 1.5 GB SigLIP2 weights, no token).
 
 ### Stack
 
 - Python 3.14, Django 6.1 + django-htmx (mobile-first, HTMX-driven UI)
 - django-q2 (background jobs, SQLite broker — no Redis)
-- PyTorch 2.14 + DINOv3 ViT-B/16 via Hugging Face Transformers (768-d image embeddings for the taste classifier, dedup and kNN tag suggestions)
+- PyTorch 2.14 + DINOv3 ViT-B/16 via Hugging Face Transformers (768-d image embeddings for the taste classifier, dedup, kNN tag suggestions and similar images)
+- SigLIP2 ViT-B/16 (text-aligned 768-d embeddings for the gallery text search; indexed by a background job)
 - scikit-learn LogisticRegression (the taste oracle + a separate NSFW classifier)
 - Playwright optional: fallback for Imgur topic pages that refuse the plain HTTP scraper
 
