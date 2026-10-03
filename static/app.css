@@ -2226,6 +2226,27 @@ body.sheet-open {
   background: var(--purple);
 }
 
+/* Stats, "Rated by source": the good/bad split needs more room than a count,
+   and the model pill says which classifier judges that source. */
+.bar-n--split {
+  width: 56px;
+}
+
+.bar-own {
+  font-size: var(--fs-sm);
+  color: var(--green);
+  border: 1px solid var(--green);
+  border-radius: var(--radius-sm);
+  padding: 0 0.4rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bar-own--shared {
+  color: var(--muted);
+  border-color: var(--border);
+}
+
 .action-row {
   display: flex;
   gap: 0.75rem;

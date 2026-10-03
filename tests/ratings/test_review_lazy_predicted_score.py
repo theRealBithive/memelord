@@ -17,7 +17,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from core import brain
+from core import brain, taste
 from ratings.models import Image, ReviewThresholds
 
 
@@ -62,7 +62,8 @@ class ReproStall(TestCase):
 
         # Stub the classifier so rendering img2 computes 0.1 (below 0.333) and
         # _taste_prediction persists it.
-        with mock.patch("ratings.views._get_taste_clf", return_value=object()), \
+        stub_model = taste.TasteModel(shared=object())
+        with mock.patch("ratings.views._get_taste_model", return_value=stub_model), \
              mock.patch("core.brain.bytes_to_embedding", return_value=None), \
              mock.patch("core.brain.predict_proba", return_value=0.1):
             # Land on the page, then rate img1 → advances to img2 (renders +

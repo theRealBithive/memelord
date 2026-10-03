@@ -84,6 +84,7 @@ source_paths = ["core", "ratings"]
 only_mutate = [
     "core/brain.py",
     "core/dedup.py",
+    "core/taste.py",
     "ratings/embeddings.py",
     "core/siglip.py",
     "ratings/vector_bank.py",

@@ -45,28 +45,29 @@ _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 WEIGHTS_PATH = Path(settings.WEIGHTS_PATH)
 DATA_DIR = Path(settings.DATA_DIR)
 
-_taste_clf_cache = None
-_taste_clf_mtime: float | None = None
+_taste_model_cache = None
+_taste_model_mtime: float | None = None
 
-def _get_taste_clf():
+def _get_taste_model():
     """
-    Load (and cache) the taste classifier, reloading if weights change on disk.
+    Load (and cache) the taste model, reloading if weights change on disk.
 
-    The cached value may legitimately be None: load_classifier returns None for
-    a file trained on another encoder (V5). Keying the reload on the file's
+    The cached value may legitimately be None: load_taste_model returns None
+    for a file trained on another encoder (V5). Keying the reload on the file's
     mtime alone, rather than on "cache is None", keeps that None from being
-    unpickled again on every render.
+    unpickled again on every render. A retrain writes a new file, so its new
+    per-source dict arrives with the next mtime change.
     """
-    global _taste_clf_cache, _taste_clf_mtime
+    global _taste_model_cache, _taste_model_mtime
     if not WEIGHTS_PATH.exists():
         return None
     mtime = WEIGHTS_PATH.stat().st_mtime
-    if mtime != _taste_clf_mtime:
-        from core import brain
+    if mtime != _taste_model_mtime:
+        from core import taste
 
-        _taste_clf_cache = brain.load_classifier(WEIGHTS_PATH)
-        _taste_clf_mtime = mtime
-    return _taste_clf_cache
+        _taste_model_cache = taste.load_taste_model(WEIGHTS_PATH)
+        _taste_model_mtime = mtime
+    return _taste_model_cache
 
 
 def _taste_prediction(image) -> int | None:
@@ -87,13 +88,14 @@ def _taste_prediction(image) -> int | None:
     # (V2); the row stays unpredicted until it is re-encoded.
     if not has_current_embedding(image):
         return None
-    clf = _get_taste_clf()
-    if clf is None:
+    taste_model = _get_taste_model()
+    if taste_model is None:
         return None
     from core import brain
 
+    classifier = taste_model.classifier_for(image.source_label)
     emb = brain.bytes_to_embedding(bytes(image.embedding))
-    prob = float(brain.predict_proba(clf, emb))
+    prob = float(brain.predict_proba(classifier, emb))
     image.predicted_score = prob
     image.save(update_fields=["predicted_score"])
     return round(prob * 100)
@@ -450,11 +452,24 @@ def stats(request):
     )
     score_dist_max = max((row["n"] for row in score_dist), default=1)
 
+    # Per source: how many liked / disliked rows feed the trainer and whether the
+    # source has reached its own classifier (taste contract V10). The split uses
+    # the trainer's constants so the page never disagrees with the log lines.
+    from core.trainer import HIGH_SCORE, LOW_SCORE
+
     source_breakdown = list(
         scored_qs.values("source_label")
-        .annotate(n=Count("content_hash"))
+        .annotate(
+            n=Count("content_hash"),
+            good=Count("content_hash", filter=Q(score__gte=HIGH_SCORE)),
+            bad=Count("content_hash", filter=Q(score__lte=LOW_SCORE)),
+        )
         .order_by("-n")
     )
+    taste_model = _get_taste_model()
+    sources_with_own_model = set(taste_model.per_source) if taste_model else set()
+    for row in source_breakdown:
+        row["own_model"] = row["source_label"] in sources_with_own_model
 
     seven_days_ago = timezone.now() - timedelta(days=7)
     scraped_7d = Image.objects.filter(

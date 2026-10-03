@@ -8,7 +8,7 @@ from pathlib import Path
 from django.db import IntegrityError
 from loguru import logger
 
-from core import brain, dedup, nsfw
+from core import brain, dedup, nsfw, taste
 from ratings.embeddings import has_current_embedding, stale_images
 from ratings.models import Image, Source
 from retina import fourchan, imgur, pixelfed, tumblr
@@ -293,9 +293,9 @@ def classify_images(
         )
         path_to_emb = dict(zip(valid_paths, embeddings, strict=True))
 
-    taste_clf = None
+    taste_model = None
     if need_vision:
-        taste_clf = brain.load_classifier(vision.weights_path)
+        taste_model = taste.load_taste_model(vision.weights_path)
 
     if nsfw_clf is None and need_nsfw:
         nsfw_clf = brain.load_classifier(vision.nsfw_weights_path)
@@ -328,8 +328,11 @@ def classify_images(
                 update_fields.append("is_nsfw")
                 nsfw_tagged += 1
 
-        if taste_clf is not None:
-            prob = float(brain.predict_proba(taste_clf, emb))
+        if taste_model is not None:
+            # Every image is judged by its own source's model, or by the shared
+            # one when the source has none (taste contract V5).
+            classifier = taste_model.classifier_for(img.source_label)
+            prob = float(brain.predict_proba(classifier, emb))
             img.predicted_score = prob
             update_fields.append("predicted_score")
 

@@ -9,12 +9,13 @@ from unittest.mock import patch
 import django
 import numpy as np
 from django.test import TestCase, override_settings
+from loguru import logger
 from PIL import Image
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "memelord.settings")
 django.setup()
 
-from core import brain, trainer
+from core import brain, taste, trainer
 from ratings.models import Image as ImageModel
 
 
@@ -297,6 +298,85 @@ class TrainerTests(TestCase):
         )
         self.assertTrue(taste_path.exists())
         self.assertTrue(nsfw_path.exists())
+
+    def _make_cached(self, label: str, score: int, seed: int) -> Path:
+        """A rated row with a current vector, so run() never needs the encoder."""
+        h = uuid.uuid4().hex
+        rel = f"images/{h}.png"
+        path = self._write_image(rel)
+        vector = np.random.default_rng(seed).standard_normal(768).astype(np.float32)
+        ImageModel.objects.create(
+            content_hash=h, file_path=rel, source_label=label, score=score,
+            embedding=brain.embedding_to_bytes(vector), embedding_model=brain.ENCODER_ID,
+        )
+        return path
+
+    def _run_capturing_log(self, weights_path: Path) -> list[str]:
+        messages: list[str] = []
+        sink_id = logger.add(lambda message: messages.append(message.record["message"]), level="INFO")
+        try:
+            trainer.run(data_dir=self.data_dir, weights_path=weights_path)
+        finally:
+            logger.remove(sink_id)
+        return messages
+
+    @patch.object(brain, "get_encoder")
+    @patch.object(brain, "encode")
+    def test_run_fits_a_model_per_source_past_the_threshold_and_says_so(
+        self, mock_encode, mock_get_encoder
+    ) -> None:
+        """Taste contract: V2, V8, V9 — tg (10/10) gets its own model, wsg (3/2) falls back."""
+        seed = 0
+        for score in (3, 4, 5, 6, 3, 4, 5, 6, 3, 6):
+            seed += 1
+            self._make_cached("tg", score, seed)
+        for score in (0, 1, 2, 0, 1, 2, 0, 1, 2, 0):
+            seed += 1
+            self._make_cached("tg", score, seed)
+        for score in (4, 5, 6):
+            seed += 1
+            self._make_cached("wsg", score, seed)
+        for score in (1, 0):
+            seed += 1
+            self._make_cached("wsg", score, seed)
+        weights_path = self.data_dir / "weights.pkl"
+
+        messages = self._run_capturing_log(weights_path)
+
+        mock_encode.assert_not_called()
+        self.assertIn("taste: own model for 'tg' (10 good, 10 bad)", messages)
+        self.assertIn("taste: 'wsg' uses the shared model (3 good, 2 bad, needs 10/10)", messages)
+        model = taste.load_taste_model(weights_path)
+        self.assertEqual(set(model.per_source), {"tg"})
+        self.assertEqual(sorted(p.name for p in self.data_dir.glob("*.pkl")), ["weights.pkl"])
+
+    @patch.object(brain, "get_transform")
+    @patch.object(brain, "get_encoder")
+    @patch.object(brain, "encode")
+    def test_a_row_the_encoder_cannot_read_leaves_its_sources_count(
+        self, mock_encode, mock_get_encoder, mock_get_transform
+    ) -> None:
+        """Taste contract: V2 (R1) — counts are of rows that train, after the unreadable row dropped."""
+        seed = 0
+        for score in (3, 4, 5, 6, 3, 4, 5, 6, 3, 6):
+            seed += 1
+            self._make_cached("tg", score, seed)
+        for score in (0, 1, 2, 0, 1, 2, 0, 1, 2):
+            seed += 1
+            self._make_cached("tg", score, seed)
+        # The tenth disliked row has a file but no vector, and the encoder
+        # cannot read it: brain.encode returns nothing for it.
+        h = uuid.uuid4().hex
+        self._write_image(f"images/{h}.png")
+        ImageModel.objects.create(content_hash=h, file_path=f"images/{h}.png", source_label="tg", score=1)
+        mock_get_encoder.return_value = None
+        mock_encode.return_value = (np.zeros((0, 768), dtype=np.float32), [])
+        weights_path = self.data_dir / "weights.pkl"
+
+        messages = self._run_capturing_log(weights_path)
+
+        self.assertIn("taste: 'tg' uses the shared model (10 good, 9 bad, needs 10/10)", messages)
+        self.assertEqual(taste.load_taste_model(weights_path).per_source, {})
 
     def test_backfill_skips_vectors_whose_file_has_no_row(self) -> None:
         """Contract: V3 — only rows get stamped; a stray encoded file is ignored, the rest still lands."""

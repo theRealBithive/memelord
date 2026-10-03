@@ -6,7 +6,7 @@ import numpy as np
 from loguru import logger
 from sklearn.linear_model import LogisticRegression
 
-from core import brain, nsfw
+from core import brain, nsfw, taste
 
 # Scores >= HIGH_SCORE are positive (good) training samples; scores <= LOW_SCORE
 # are negative. The gap is intentional: a strict split between "liked" and
@@ -101,6 +101,56 @@ def _get_negative_weights(data_dir: Path) -> dict[str, float]:
         path_str = str(data_dir / img.file_path)
         result[path_str] = _NEGATIVE_WEIGHTS.get(img.score, 1.0)
     return result
+
+
+def _get_source_labels(data_dir: Path) -> dict[str, str]:
+    """
+    Return {absolute_path_str: source_label} for every rated image.
+
+    Same path-keyed shape as the two weight maps so run() can look all three up
+    with the same key after it has filtered the path lists; the source label is
+    the training category of the per-source classifiers (taste contract V1).
+    """
+    from ratings.models import Image
+
+    result = {}
+    for img in Image.objects.filter(is_purged=False, score__isnull=False):
+        path_str = str(data_dir / img.file_path)
+        result[path_str] = img.source_label
+    return result
+
+
+def _fit_per_source_classifiers(
+    labels: list[str],
+    X: np.ndarray,
+    y: np.ndarray,
+    sample_weight: np.ndarray,
+) -> dict[str, LogisticRegression]:
+    """
+    Fit one classifier for every source that has enough liked and disliked rows
+    (taste contract V2, V3) and say in the log what every source got (V9).
+
+    The log lines are the operator's only view of which source judges itself
+    and which one still leans on the shared model, so they name the counts and,
+    for a source that fell back, the threshold it has to reach.
+    """
+    classifiers: dict[str, LogisticRegression] = {}
+    for label, group in taste.group_by_source(labels, X, y, sample_weight).items():
+        if taste.has_enough_examples(group):
+            classifiers[label] = taste.fit_classifier(
+                group.X, group.y, group.sample_weight
+            )
+            logger.info(
+                "taste: own model for '{}' ({} good, {} bad)",
+                label, group.good_count, group.bad_count,
+            )
+        else:
+            logger.info(
+                "taste: '{}' uses the shared model ({} good, {} bad, needs {}/{})",
+                label, group.good_count, group.bad_count,
+                taste.MIN_GOOD_PER_SOURCE, taste.MIN_BAD_PER_SOURCE,
+            )
+    return classifiers
 
 
 def _load_cached_embeddings(
@@ -298,10 +348,20 @@ def run(
     sample_weight = np.concatenate([good_weights, bad_weights])
 
     logger.info("Training taste classifier on {} samples", len(y))
-    taste_clf = LogisticRegression(max_iter=1000, random_state=42)
-    taste_clf.fit(X, y, sample_weight=sample_weight)
-    brain.save_classifier(taste_clf, weights_path)
-    logger.success("Saved taste classifier to {}", weights_path.resolve())
+    shared_clf = taste.fit_classifier(X, y, sample_weight)
+    # The labels are built from the *filtered* path lists, in the same order as
+    # X and y, so a rated row that lost its file or vector drops out of its
+    # source's counts together with its row.
+    source_labels = _get_source_labels(data_dir)
+    labels = [source_labels[str(p)] for p in good_paths + bad_paths]
+    per_source = _fit_per_source_classifiers(labels, X, y, sample_weight)
+    taste.save_taste_model(
+        taste.TasteModel(shared=shared_clf, per_source=per_source), weights_path
+    )
+    logger.success(
+        "Saved taste classifier ({} source model(s)) to {}",
+        len(per_source), weights_path.resolve(),
+    )
 
     if train_nsfw and nsfw_weights_path:
         X_nsfw = np.array([path_to_emb[str(p)] for p in nsfw_paths])

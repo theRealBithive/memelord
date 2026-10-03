@@ -117,7 +117,8 @@
 
     {% if source_breakdown %}
     <div class="section">
-      <div class="section-title">Gallery by source</div>
+      <div class="section-title">Rated by source</div>
+      <p class="hint">good / bad counts feed the trainer; a source with at least 10 of each gets its own taste model.</p>
       {% with max_n=source_breakdown.0.n %}
       {% for row in source_breakdown %}
       <div class="bar-row">
@@ -125,7 +126,8 @@
         <div class="bar-track">
           <div class="bar-fill" style="width:{% widthratio row.n max_n 100 %}%"></div>
         </div>
-        <span class="bar-n">{{ row.n }}</span>
+        <span class="bar-n bar-n--split" title="good / bad">{{ row.good }}/{{ row.bad }}</span>
+        {% if row.own_model %}<span class="bar-own">own model</span>{% else %}<span class="bar-own bar-own--shared">shared</span>{% endif %}
       </div>
       {% endfor %}
       {% endwith %}

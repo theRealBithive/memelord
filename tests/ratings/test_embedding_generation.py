@@ -57,7 +57,7 @@ from hypothesis.extra.django import TestCase as HypothesisTestCase
 from PIL import Image as PILImage
 from sklearn.linear_model import LogisticRegression
 
-from core import brain, dedup, trainer
+from core import brain, dedup, taste, trainer
 from ratings import scraper, views
 from ratings.embeddings import (
     has_current_embedding,
@@ -299,7 +299,8 @@ class TastePredictionGenerationTests(TestCase):
     def test_fallback_never_applies_classifier_to_legacy_vector(self) -> None:
         """Contract: V2"""
         legacy = _row(generation=LEGACY, seed=1)
-        with mock.patch.object(views, "_get_taste_clf", return_value=object()), \
+        stub_model = taste.TasteModel(shared=object())
+        with mock.patch.object(views, "_get_taste_model", return_value=stub_model), \
              mock.patch.object(brain, "predict_proba", return_value=0.7) as predict:
             self.assertIsNone(views._taste_prediction(legacy))
         predict.assert_not_called()
@@ -309,7 +310,8 @@ class TastePredictionGenerationTests(TestCase):
     def test_fallback_predicts_and_persists_for_current_vector(self) -> None:
         """Contract: V2 (positive branch)"""
         current = _row(seed=1)
-        with mock.patch.object(views, "_get_taste_clf", return_value=object()), \
+        stub_model = taste.TasteModel(shared=object())
+        with mock.patch.object(views, "_get_taste_model", return_value=stub_model), \
              mock.patch.object(brain, "predict_proba", return_value=0.7):
             self.assertEqual(views._taste_prediction(current), 70)
         current.refresh_from_db()
@@ -354,6 +356,32 @@ class ClassifyImagesGenerationTests(TestCase):
         self.assertIsNotNone(legacy.predicted_score)
         self.assertIsNotNone(current.predicted_score)
         _assert_conservation(self, self.data_dir)
+
+    def test_every_unrated_image_is_predicted_by_its_own_sources_model(self) -> None:
+        """Taste contract: V5, V11 — tg rows meet the tg model, every other label the shared one."""
+        # Two models that disagree on every vector: the shared one calls +1-ish
+        # vectors good, the tg one calls them bad.
+        plus = np.full(768, 1.0, dtype=np.float32)
+        shared = LogisticRegression().fit(np.vstack([plus, -plus]), [1, 0])
+        tg_model = LogisticRegression().fit(np.vstack([plus, -plus]), [0, 1])
+        taste.save_taste_model(taste.TasteModel(shared=shared, per_source={"tg": tg_model}), self.weights)
+        probe = brain.embedding_to_bytes(plus * 3)
+        tg_row = _row(seed=1)
+        other_row = _row(seed=2)
+        unknown_row = _row(seed=3)
+        Image.objects.filter(pk=tg_row.pk).update(source_label="tg", embedding=probe)
+        Image.objects.filter(pk=other_row.pk).update(source_label="b", embedding=probe)
+        Image.objects.filter(pk=unknown_row.pk).update(source_label="", embedding=probe)
+        vision = scraper.VisionConfig(weights_path=self.weights)
+
+        scraper.classify_images(self.data_dir, vision, encoder=object(), transform=object())
+
+        for row in (tg_row, other_row, unknown_row):
+            row.refresh_from_db()
+        self.assertLess(tg_row.predicted_score, 0.5)
+        self.assertGreater(other_row.predicted_score, 0.5)
+        self.assertGreater(unknown_row.predicted_score, 0.5)
+        self.assertAlmostEqual(other_row.predicted_score, unknown_row.predicted_score)
 
 
 class ReencodeTests(TestCase):
@@ -742,17 +770,17 @@ class ReencodeCommandTests(TestCase):
 
 
 class TasteClassifierCacheTests(TestCase):
-    """The view-level classifier cache must honour V5 without re-reading a foreign file per render."""
+    """The view-level model cache must honour V5 without re-reading a foreign file per render."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.weights = Path(self._tmp.name) / "w.pkl"
-        views._taste_clf_cache = None
-        views._taste_clf_mtime = None
+        views._taste_model_cache = None
+        views._taste_model_mtime = None
 
     def tearDown(self) -> None:
-        views._taste_clf_cache = None
-        views._taste_clf_mtime = None
+        views._taste_model_cache = None
+        views._taste_model_mtime = None
         self._tmp.cleanup()
 
     def test_foreign_file_yields_none_and_is_read_once(self) -> None:
@@ -762,17 +790,33 @@ class TasteClassifierCacheTests(TestCase):
         with self.weights.open("wb") as f:
             pickle.dump({"encoder": LEGACY, "classifier": LogisticRegression()}, f)
         with mock.patch.object(views, "WEIGHTS_PATH", self.weights), \
-             mock.patch.object(brain, "load_classifier", wraps=brain.load_classifier) as load:
-            self.assertIsNone(views._get_taste_clf())
-            self.assertIsNone(views._get_taste_clf())
+             mock.patch.object(taste, "load_taste_model", wraps=taste.load_taste_model) as load:
+            self.assertIsNone(views._get_taste_model())
+            self.assertIsNone(views._get_taste_model())
         load.assert_called_once()
 
     def test_current_file_is_applied(self) -> None:
         """Contract: V5 (positive branch)"""
         _save_fitted_classifier(self.weights)
         with mock.patch.object(views, "WEIGHTS_PATH", self.weights):
-            self.assertIsInstance(views._get_taste_clf(), LogisticRegression)
+            self.assertIsInstance(views._get_taste_model(), taste.TasteModel)
 
     def test_missing_file_yields_none(self) -> None:
         with mock.patch.object(views, "WEIGHTS_PATH", self.weights):
-            self.assertIsNone(views._get_taste_clf())
+            self.assertIsNone(views._get_taste_model())
+
+    def test_retrain_replaces_the_cached_source_models(self) -> None:
+        """Taste contract: V5 (R5) — a new file's per-source dict arrives with the next mtime."""
+        import os
+
+        _save_fitted_classifier(self.weights)
+        with mock.patch.object(views, "WEIGHTS_PATH", self.weights):
+            first = views._get_taste_model()
+            self.assertEqual(first.per_source, {})
+            X = np.vstack([_vector(1), _vector(2)])
+            tg_model = LogisticRegression().fit(X, [1, 0])
+            taste.save_taste_model(taste.TasteModel(shared=first.shared, per_source={"tg": tg_model}), self.weights)
+            stat = self.weights.stat()
+            os.utime(self.weights, (stat.st_atime, stat.st_mtime + 10))
+            second = views._get_taste_model()
+        self.assertEqual(set(second.per_source), {"tg"})

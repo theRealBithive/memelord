@@ -42,7 +42,10 @@ class ImageAdmin(admin.ModelAdmin):
         "is_purged",
     )
     search_fields = ("content_hash", "file_path", "source_url")
-    readonly_fields = ("content_hash", "downloaded_at", "thumbnail_large")
+    # source_label is the training category of the per-source taste models and
+    # is fixed at download time (taste contract V1), so the admin shows it but
+    # never lets it be edited.
+    readonly_fields = ("content_hash", "source_label", "downloaded_at", "thumbnail_large")
     filter_horizontal = ("tags",)
 
     @admin.display(description="")
