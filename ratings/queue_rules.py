@@ -5,11 +5,13 @@ or above the cutoff go to /review/; unrated images below it go to /below-cutoff/
 so nothing is silently dropped. User-rated scores <= 2 also stay in below-cutoff.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from django.db.models import Q
+from django.db.models import F, FloatField, Q, Value
+from django.db.models.functions import Abs, Coalesce
 
-from ratings.models import ReviewThresholds
+from ratings.models import Image, ReviewThresholds
 
 
 def bucket_to_cutoff(bucket: int) -> float:
@@ -49,37 +51,94 @@ def get_review_thresholds() -> tuple[int, int]:
     return row.sfw_threshold, row.nsfw_threshold
 
 
+# The sort value of an image without a prediction in the "uncertain first"
+# order. A real uncertainty is at most 0.5 (a prediction of exactly 0 or 1),
+# so 1.0 puts every unpredicted image after every predicted one (contract
+# V11): they get their value from the index chain later and slot in then.
+UNPREDICTED_UNCERTAINTY = 1.0
+UNCERTAINTY_FIELD = "uncertainty"
+
+
+def uncertainty_of(predicted_score: float | None) -> float:
+    """
+    Distance of a prediction from the coin flip, the Python twin of
+    UNCERTAINTY_SQL (contract V11).
+
+    Both must compute the same double for the same row, because the window
+    filters compare the current image's Python value against the SQL
+    annotation of the other rows. `abs(x - 0.5)` is one IEEE subtraction and
+    one sign flip on both sides, so the values are bit-identical.
+    """
+    if predicted_score is None:
+        return UNPREDICTED_UNCERTAINTY
+    return abs(predicted_score - 0.5)
+
+
+UNCERTAINTY_SQL = Coalesce(
+    Abs(F("predicted_score") - Value(0.5)),
+    Value(UNPREDICTED_UNCERTAINTY),
+    output_field=FloatField(),
+)
+
+
 @dataclass(frozen=True)
 class QueueOrder:
     """
-    One way of serving a review queue: unseen images first, then by `field`.
+    One way of serving a review queue: unseen images first, then by `field`,
+    ties broken by content_hash.
 
     The order_by fields, their reverse (used to find an image's predecessor)
     and the prev/next window filters have to agree exactly, or prev/next
     navigation drifts away from the sequence the user actually sees. Keeping
-    all three on one object derived from the same two values is what rules
-    that drift out.
+    all three on one object derived from the same values is what rules that
+    drift out.
 
     queue_seen_at stays the primary key in every mode (contract V3): the
     option only decides how the unseen block and each seen block are sorted
     inside. SQLite sorts NULL first in ASC and last in DESC, which is what
     makes the reversed fields the exact mirror of the forward ones.
+
+    content_hash is the last key in every mode (contract V12): two downloads
+    in the same second, or a whole block of images without a prediction, tie
+    on `field`, and a window filter built on `field` alone would then neither
+    find the neighbours nor count the position. The hash is unique, so the
+    compound key never ties.
+
+    `field` is a model column, or the name of an annotation when `expression`
+    is set; the queue builders add `annotations()` to the queryset, and
+    `value_of()` computes the same value for the current image in Python
+    (`python_value`), because that image is fetched on its own and carries no
+    annotation.
     """
 
     field: str
     descending: bool
+    expression: object | None = None
+    python_value: Callable[[Image], object] | None = None
 
-    def order_fields(self) -> tuple[str, str]:
+    def annotations(self) -> dict:
+        """What the queue queryset must annotate for `field` to exist in SQL."""
+        if self.expression is None:
+            return {}
+        return {self.field: self.expression}
+
+    def value_of(self, image) -> object:
+        """The image's sort value, from the row or from `python_value` for a derived field."""
+        if self.python_value is not None:
+            return self.python_value(image)
+        return getattr(image, self.field)
+
+    def order_fields(self) -> tuple[str, str, str]:
         """order_by arguments for the queue as the user walks it."""
         if self.descending:
-            return ("queue_seen_at", f"-{self.field}")
-        return ("queue_seen_at", self.field)
+            return ("queue_seen_at", f"-{self.field}", "content_hash")
+        return ("queue_seen_at", self.field, "content_hash")
 
-    def reversed_order_fields(self) -> tuple[str, str]:
+    def reversed_order_fields(self) -> tuple[str, str, str]:
         """order_by arguments that walk the queue backwards (predecessor lookups)."""
         if self.descending:
-            return ("-queue_seen_at", self.field)
-        return ("-queue_seen_at", f"-{self.field}")
+            return ("-queue_seen_at", self.field, "-content_hash")
+        return ("-queue_seen_at", f"-{self.field}", "-content_hash")
 
     def position_filters(self, image) -> tuple[Q, Q]:
         """
@@ -91,13 +150,16 @@ class QueueOrder:
         the queue grows with every scrape, and a `list(qs.values_list(...))`
         pass would be an O(N) DB scan plus transport on every navigation click.
         """
-        value = getattr(image, self.field)
+        value = self.value_of(image)
         if self.descending:
-            before_me = Q(**{f"{self.field}__gt": value})
-            after_me = Q(**{f"{self.field}__lt": value})
+            field_before = Q(**{f"{self.field}__gt": value})
+            field_after = Q(**{f"{self.field}__lt": value})
         else:
-            before_me = Q(**{f"{self.field}__lt": value})
-            after_me = Q(**{f"{self.field}__gt": value})
+            field_before = Q(**{f"{self.field}__lt": value})
+            field_after = Q(**{f"{self.field}__gt": value})
+        same_value = Q(**{self.field: value})
+        before_me = field_before | (same_value & Q(content_hash__lt=image.content_hash))
+        after_me = field_after | (same_value & Q(content_hash__gt=image.content_hash))
 
         seen_at = image.queue_seen_at
         unseen = Q(queue_seen_at__isnull=True)
@@ -120,10 +182,22 @@ class QueueOrder:
 # across requests, sessions and restarts (contract V8). A real `order_by("?")`
 # would re-roll on every request and break prev/next, the position counter and
 # rate-and-advance.
+# "uncertain" sorts by the distance of the prediction from 0.5: the images the
+# taste model is least sure about come first, the ones it is sure about last,
+# unpredicted ones after all of them (contract V11). This is uncertainty
+# sampling, the plain form of active learning: a rating near the model's
+# boundary moves the boundary, a rating on an image it was already sure about
+# teaches it almost nothing.
 QUEUE_ORDERS: dict[str, QueueOrder] = {
     ReviewThresholds.ORDER_OLDEST: QueueOrder("downloaded_at", descending=False),
     ReviewThresholds.ORDER_NEWEST: QueueOrder("downloaded_at", descending=True),
     ReviewThresholds.ORDER_SHUFFLE: QueueOrder("content_hash", descending=False),
+    ReviewThresholds.ORDER_UNCERTAIN: QueueOrder(
+        UNCERTAINTY_FIELD,
+        descending=False,
+        expression=UNCERTAINTY_SQL,
+        python_value=lambda image: uncertainty_of(image.predicted_score),
+    ),
 }
 
 

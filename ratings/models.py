@@ -172,10 +172,12 @@ class ReviewThresholds(models.Model):
     ORDER_OLDEST = "oldest"
     ORDER_NEWEST = "newest"
     ORDER_SHUFFLE = "shuffle"
+    ORDER_UNCERTAIN = "uncertain"
     ORDER_CHOICES = [
         (ORDER_OLDEST, "Oldest first"),
         (ORDER_NEWEST, "Newest first"),
         (ORDER_SHUFFLE, "Shuffled"),
+        (ORDER_UNCERTAIN, "Uncertain first"),
     ]
 
     sfw_threshold = models.PositiveSmallIntegerField(default=1)

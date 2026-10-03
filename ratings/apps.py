@@ -60,6 +60,15 @@ def _set_sqlite_pragmas(sender, connection, **kwargs):
 
 
 def _bootstrap_schedule(sender, **kwargs):
+    """
+    Reconcile the django-q scrape schedule after every `migrate`.
+
+    The Docker entrypoint runs `migrate` on every container start, so this
+    fires on every start. It must therefore never restart the interval: a
+    weekly timer that was reset on each deploy could never run down (schedule
+    contract V3). It only makes sure the row exists, is unique and carries the
+    configured interval.
+    """
     from ratings.schedule_sync import sync_scrape_q_schedule
 
-    sync_scrape_q_schedule()
+    sync_scrape_q_schedule(restart_interval=False)

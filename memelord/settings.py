@@ -151,6 +151,11 @@ Q_CLUSTER = {
     "retry": 28800,
     "max_attempts": 1,
     "orm": "default",
+    # A scrape that fell due while the worker was down is made up once, not
+    # once per missed interval (schedule contract V4). With django-q's default
+    # catch-up, a 6 h schedule and a night offline meant three scrapes back to
+    # back; one incremental scrape covers everything the missed ones would have.
+    "catch_up": False,
 }
 
 MEDIA_ROOT = DATA_DIR

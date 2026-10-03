@@ -1,9 +1,10 @@
 """
 Review queue order (Config → Review queue → Order).
 
-Contract: V1 Es gibt genau eine Einstellung für die Review-Reihenfolge mit drei
-             Werten: älteste zuerst, neueste zuerst, gemischt. Sie gilt für die
-             SFW- und die NSFW-Review-Queue gleichermaßen.
+Contract: V1 Es gibt genau eine Einstellung für die Review-Reihenfolge mit vier
+             Werten: älteste zuerst, neueste zuerst, gemischt, unsicherste
+             zuerst. Sie gilt für die SFW- und die NSFW-Review-Queue
+             gleichermaßen. (Reworded on 2026-10-03 from three values.)
 Contract: V2 Frische Installationen und bestehende Datenbanken verhalten sich
              wie bisher (älteste zuerst), bis der Operator die Einstellung
              ändert.
@@ -28,15 +29,30 @@ Contract: V9 Die Einstellung wird auf der Config-Seite gesetzt und in der
 Contract: V10 Die Einstellung ändert nur die Reihenfolge, nie die Menge: welche
              Bilder in der Queue sind, bestimmen weiterhin Scores, Schwellen und
              der NSFW-Schalter.
+Contract: V11 „Unsicherste zuerst" ordnet nach dem Abstand der Vorhersage von
+             50 %: je näher an 50 %, desto früher; je sicherer das Modell (nahe
+             0 % oder 100 %), desto später. Bilder ohne Vorhersage kommen nach
+             allen Bildern mit Vorhersage. Ungesehene bleiben vor Gesehenen
+             (V3), die Menge bleibt dieselbe (V10). Die Folge ändert sich nur,
+             wenn sich Vorhersagen ändern (Scrape, Training, NSFW-Wechsel).
+Contract: V12 Gleiche Sortierwerte brechen die Folge nicht: Gleichstände werden
+             in jeder Reihenfolge nach dem Bildinhalt (Hash) aufgelöst. Die
+             Folge ist dadurch eindeutig und stabil, und Prev/Next, Position
+             und Bewerten-und-Weiter gelten auch innerhalb solcher Blöcke
+             (V5–V7).
+(V11 and V12 confirmed by the operator on 2026-10-03.)
 
 Generator: `queue_specs` builds 1–7 images with distinct content hashes,
-distinct download times, a distinct first-seen time for a random subset, an
-NSFW flag, an optional score and an optional predicted score. Hash order,
-download order and seen order are drawn independently of each other, so the
-examples reach the states in which the three orders actually differ, plus
-all-unseen, all-seen, single-image and partly-scored queues. The tests that
-need a full queue pin the thresholds to 1 and open NSFW; the membership test
-draws thresholds and the NSFW switch too.
+download times drawn from six minutes so ties are common (V12), a distinct
+first-seen time for a random subset, an NSFW flag, an optional score and an
+optional predicted score drawn from None, the exact values 0.25 / 0.5 / 0.75
+(equal uncertainties for different predictions, V12) and any float in [0, 1].
+Hash order, download order, seen order and prediction order are drawn
+independently of each other, so the examples reach the states in which the
+four orders actually differ, plus all-unseen, all-seen, single-image,
+partly-scored, all-unpredicted and tied queues. The tests that need a full
+queue pin the thresholds to 1 and open NSFW; the membership test draws
+thresholds and the NSFW switch too.
 """
 
 from __future__ import annotations
@@ -76,7 +92,8 @@ from ratings.views import (
 OLDEST = ReviewThresholds.ORDER_OLDEST
 NEWEST = ReviewThresholds.ORDER_NEWEST
 SHUFFLE = ReviewThresholds.ORDER_SHUFFLE
-ALL_ORDERS = [OLDEST, NEWEST, SHUFFLE]
+UNCERTAIN = ReviewThresholds.ORDER_UNCERTAIN
+ALL_ORDERS = [OLDEST, NEWEST, SHUFFLE, UNCERTAIN]
 
 BASE_TIME = timezone.make_aware(datetime(2026, 1, 1, 12, 0, 0))
 
@@ -97,9 +114,7 @@ class ImageSpec:
 def queue_specs(draw) -> list[ImageSpec]:
     n = draw(st.integers(min_value=1, max_value=7))
     hashes = draw(st.lists(HEX64, min_size=n, max_size=n, unique=True))
-    download_minutes = draw(
-        st.lists(st.integers(0, 100_000), min_size=n, max_size=n, unique=True)
-    )
+    download_minutes = draw(st.lists(st.integers(0, 5), min_size=n, max_size=n))
     seen_minutes = draw(
         st.lists(st.integers(0, 100_000), min_size=n, max_size=n, unique=True)
     )
@@ -110,7 +125,9 @@ def queue_specs(draw) -> list[ImageSpec]:
     )
     predictions = draw(
         st.lists(
-            st.one_of(st.none(), st.floats(0.0, 1.0)), min_size=n, max_size=n
+            st.one_of(st.none(), st.sampled_from([0.25, 0.5, 0.75]), st.floats(0.0, 1.0)),
+            min_size=n,
+            max_size=n,
         )
     )
     specs = []
@@ -166,10 +183,29 @@ def _sequence(qs) -> list[str]:
 
 
 def _download_order(specs: list[ImageSpec], newest_first: bool) -> list[str]:
-    """Oracle for V1/V3/V4 in the two download orders, written from the contract."""
+    """Oracle for V1/V3/V4/V12 in the two download orders, written from the contract."""
     unseen = [s for s in specs if s.seen_minutes is None]
     seen = [s for s in specs if s.seen_minutes is not None]
-    unseen_sorted = sorted(unseen, key=lambda s: s.download_minutes, reverse=newest_first)
+    if newest_first:
+        unseen_sorted = sorted(unseen, key=lambda s: (-s.download_minutes, s.content_hash))
+    else:
+        unseen_sorted = sorted(unseen, key=lambda s: (s.download_minutes, s.content_hash))
+    seen_sorted = sorted(seen, key=lambda s: s.seen_minutes)
+    return [s.content_hash for s in unseen_sorted + seen_sorted]
+
+
+def _uncertainty(predicted: float | None) -> float:
+    """Oracle for V11: distance from the coin flip; an image without a prediction sorts after every predicted one."""
+    if predicted is None:
+        return 1.0
+    return abs(predicted - 0.5)
+
+
+def _uncertain_order(specs: list[ImageSpec]) -> list[str]:
+    """Oracle for V11/V12: least certain first, hash on ties, seen block as in every order."""
+    unseen = [s for s in specs if s.seen_minutes is None]
+    seen = [s for s in specs if s.seen_minutes is not None]
+    unseen_sorted = sorted(unseen, key=lambda s: (_uncertainty(s.predicted), s.content_hash))
     seen_sorted = sorted(seen, key=lambda s: s.seen_minutes)
     return [s.content_hash for s in unseen_sorted + seen_sorted]
 
@@ -180,14 +216,14 @@ class QueueOrderProperties(HypothesisTestCase):
     @settings(max_examples=40, deadline=None)
     @given(specs=queue_specs())
     def test_navigation_follows_one_fixed_sequence_in_every_order(self, specs):
-        """Contract: V1, V3, V4, V5, V6.
+        """Contract: V1, V3, V4, V5, V6, V11, V12.
 
         For every order the queue is one sequence; prev/next of every image
         are its neighbours in that sequence, the position is its rank, and
         rank-before + 1 + rank-after is the queue size for every image (the
         unguarded conservation law). Unseen images precede seen ones, seen
-        ones keep their first-seen order, and the download orders match the
-        contract's oracle.
+        ones keep their first-seen order, and the download orders and the
+        uncertain order match the contract's oracles, ties included.
         """
         _wipe()
         _create(specs)
@@ -220,6 +256,13 @@ class QueueOrderProperties(HypothesisTestCase):
             if order_name == NEWEST:
                 expected = [h for h in _download_order(specs, True) if h in unscored]
                 self.assertEqual(sequence, expected)
+            if order_name == UNCERTAIN:
+                expected = [h for h in _uncertain_order(specs) if h in unscored]
+                self.assertEqual(sequence, expected)
+                predicted = [h for h in sequence if by_hash[h].seen_minutes is None and by_hash[h].predicted is not None]
+                unpredicted = [h for h in sequence if by_hash[h].seen_minutes is None and by_hash[h].predicted is None]
+                if predicted and unpredicted:
+                    self.assertLess(sequence.index(predicted[-1]), sequence.index(unpredicted[0]))
 
             total = len(sequence)
             for i, content_hash in enumerate(sequence):
@@ -330,12 +373,13 @@ def _login(client: Client) -> None:
     client.login(username=username, password="secret")
 
 
-# Three images whose hash order, oldest-first order and newest-first order
-# are three different sequences, so each order is told apart from the others.
+# Three images whose hash order, oldest-first order, newest-first order and
+# uncertain-first order are four different sequences, so each order is told
+# apart from the others: a 0.7 (0.2 from the flip), b 0.5 (0.0), c 0.9 (0.4).
 MIXED_SET = [
-    ImageSpec("a" * 64, 0, None, False, None, None),
-    ImageSpec("c" * 64, 10, None, False, None, None),
-    ImageSpec("b" * 64, 20, None, False, None, None),
+    ImageSpec("a" * 64, 0, None, False, None, 0.7),
+    ImageSpec("c" * 64, 10, None, False, None, 0.9),
+    ImageSpec("b" * 64, 20, None, False, None, 0.5),
 ]
 
 
@@ -355,17 +399,36 @@ class QueueOrderViewTests(TestCase):
         row = ReviewThresholds(sfw_threshold=3, nsfw_threshold=3)
         self.assertEqual(row.queue_order, OLDEST)
 
-    def test_the_three_orders_are_three_different_sequences(self) -> None:
-        """Contract: V1."""
+    def test_the_four_orders_are_four_different_sequences(self) -> None:
+        """Contract: V1, V11."""
         _create(MIXED_SET)
         sequences = {}
         for order_name in ALL_ORDERS:
             _set_order(order_name)
             sequences[order_name] = tuple(_sequence(_review_qs()))
-        self.assertEqual(len(set(sequences.values())), 3)
+        self.assertEqual(len(set(sequences.values())), 4)
         self.assertEqual(sequences[OLDEST], ("a" * 64, "c" * 64, "b" * 64))
         self.assertEqual(sequences[NEWEST], ("b" * 64, "c" * 64, "a" * 64))
         self.assertEqual(sequences[SHUFFLE], ("a" * 64, "b" * 64, "c" * 64))
+        self.assertEqual(sequences[UNCERTAIN], ("b" * 64, "a" * 64, "c" * 64))
+
+    def test_ties_are_broken_by_hash_in_every_order(self) -> None:
+        """Contract: V12 — same download minute, no prediction: the hash decides, and navigation still works."""
+        _create([
+            ImageSpec("b" * 64, 5, None, False, None, None),
+            ImageSpec("a" * 64, 5, None, False, None, None),
+        ])
+        for order_name in ALL_ORDERS:
+            with self.subTest(order=order_name):
+                _set_order(order_name)
+                order = get_queue_order()
+                qs = _review_qs(show_nsfw=True, order=order)
+                self.assertEqual(_sequence(qs), ["a" * 64, "b" * 64])
+                first = _browse_ctx(qs, "a" * 64, "corpus", True, None, order)
+                second = _browse_ctx(qs, "b" * 64, "corpus", True, None, order)
+                self.assertEqual((first["position"], first["total"], first["next_hash"]), (1, 2, "b" * 64))
+                self.assertEqual((second["position"], second["total"], second["prev_hash"]), (2, 2, "a" * 64))
+                self.assertEqual(_queue_neighbor_hash(qs, Image.objects.get(pk="a" * 64), order), "b" * 64)
 
     def test_config_page_offers_the_order_select(self) -> None:
         """Contract: V9."""

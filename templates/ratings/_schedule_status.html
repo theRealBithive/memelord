@@ -2,7 +2,7 @@
   <div class="schedule-info">
     {% if schedule and schedule.enabled %}
       <span class="schedule-on">● every {{ schedule.interval_hours }}h</span>
-      {% if next_run %}<span class="schedule-next">next {{ next_run|date:"H:i" }}</span>{% endif %}
+      {% if next_run %}<span class="schedule-next">next {{ next_run|date:"D j M H:i" }} UTC</span>{% endif %}
     {% else %}
       <span class="schedule-off">● off</span>
     {% endif %}

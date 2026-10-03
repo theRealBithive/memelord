@@ -882,7 +882,10 @@ def set_scrape_schedule(request):
 
     ScrapeSchedule (pk=1 singleton) stores user intent; sync_scrape_q_schedule
     then creates or updates the actual django-q Schedule record so the worker
-    picks up the new interval without a restart.
+    picks up the new interval without a restart. Pressing Enable starts the
+    interval from now (schedule contract V1): the next automatic scrape is one
+    interval away, not immediate, which is what the old delete-and-recreate
+    did by accident.
     """
     try:
         interval_hours = max(1, min(168, int(request.POST.get("interval_hours", 6))))
@@ -897,7 +900,7 @@ def set_scrape_schedule(request):
 
     from ratings.schedule_sync import sync_scrape_q_schedule
 
-    sync_scrape_q_schedule()
+    sync_scrape_q_schedule(restart_interval=True)
 
     return render(request, "ratings/_schedule_status.html", _schedule_ctx())
 
@@ -1148,9 +1151,11 @@ def _review_qs(show_nsfw: bool = False, order: QueueOrder | None = None):
 
     Unscored images (score IS NULL) feed the queue. Unseen images
     (queue_seen_at IS NULL) sort first in SQLite ASC; inside that block the
-    configured order (oldest / newest download, or shuffled) decides. The
-    [vision] threshold further hides low-confidence images so the user only
-    reviews things the model thinks they'll like.
+    configured order (oldest / newest download, shuffled, or least certain
+    prediction first) decides. The [vision] threshold further hides
+    low-confidence images so the user only reviews things the model thinks
+    they'll like. The order's annotations ride along so a derived sort key
+    (the uncertainty) exists for order_by and for the window filters.
 
     `order` defaults to the DB setting; callers that also build navigation
     pass the one they already fetched so queue and window filters agree.
@@ -1161,6 +1166,7 @@ def _review_qs(show_nsfw: bool = False, order: QueueOrder | None = None):
     return (
         Image.objects.filter(score__isnull=True, is_purged=False)
         .filter(visibility_q(sfw_bucket, nsfw_bucket, show_nsfw))
+        .annotate(**order.annotations())
         .order_by(*order.order_fields())
     )
 
@@ -1179,6 +1185,7 @@ def _review_nsfw_qs(show_nsfw: bool = False, order: QueueOrder | None = None):
     return (
         Image.objects.filter(is_nsfw=True, score__isnull=True, is_purged=False)
         .filter(pred_score_visible(bucket_to_cutoff(nsfw_bucket)))
+        .annotate(**order.annotations())
         .order_by(*order.order_fields())
     )
 

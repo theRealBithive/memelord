@@ -82,6 +82,20 @@ docker compose run --rm memelord index_search  # build the text-search index in 
 > `docker compose run --rm memelord python manage.py dumpdata ratings > backup.json`
 > (or copy `data/memelord.db`). A fresh install has nothing to lose and needs no action.
 
+## Upgrading to 2.5 — uncertain-first review order, auto-scrape timer fixed
+
+- **Review order "Uncertain first".** Config → Review queue → Order gains a
+  fourth value: the images the taste model is least sure about (prediction
+  closest to 50 %) come first, the ones it is sure about last, images without a
+  prediction after all of them. A rating near the model's boundary teaches it
+  the most. Unseen images still come first, and prev/next and the position
+  counter work as in every order.
+- **The auto-scrape timer no longer fires on every save and every restart.**
+  Pressing Enable starts the interval from now, a container start leaves a
+  running timer alone, and a run missed while the worker was down is made up
+  once instead of once per missed interval. The Config page now shows the next
+  run with weekday and date.
+
 ## Upgrading to 2.4 — NSFW is its own taste category
 
 2.4 changes which images a taste classifier is trained on:
@@ -185,7 +199,7 @@ accounts = ["@user@instance.social"]
 
 Sources can also be managed directly from the **Config** page in the UI — add, toggle, delete, and import from `config.toml` without restarting. Mark a source NSFW and its images are quarantined to a separate review queue.
 
-Auto-scrape scheduling lives on the same Config page: set an interval (1–168 hours) and the background worker picks it up immediately.
+Auto-scrape scheduling lives on the same Config page: set an interval (1–168 hours) and press Enable; the first automatic scrape runs one interval later, the worker picks up changes without a restart, and a restart leaves a running timer alone.
 
 New downloads are deduplicated in three layers — SHA-256, perceptual hash, and DINO cosine similarity — so resizes, recompressions, and watermarked clones of images you've already seen never reach the queue.
 
