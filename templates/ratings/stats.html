@@ -118,11 +118,11 @@
     {% if source_breakdown %}
     <div class="section">
       <div class="section-title">Rated by source</div>
-      <p class="hint">good / bad counts feed the trainer; a source with at least 10 of each gets its own taste model.</p>
+      <p class="hint">good / bad counts feed the trainer; a source, or the NSFW category, with at least 10 of each gets its own taste model.</p>
       {% with max_n=source_breakdown.0.n %}
       {% for row in source_breakdown %}
       <div class="bar-row">
-        <span class="bar-label" title="{{ row.source_label }}">{{ row.source_label }}</span>
+        <span class="bar-label" title="{{ row.taste_group }}">{{ row.taste_group }}</span>
         <div class="bar-track">
           <div class="bar-fill" style="width:{% widthratio row.n max_n 100 %}%"></div>
         </div>

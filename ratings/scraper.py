@@ -356,9 +356,12 @@ def classify_images(
             if not features.has_taste_features(img):
                 waiting_for_search_vector += 1
             else:
-                # Every image is judged by its own source's model, or by the
-                # shared one when the source has none (taste contract V5).
-                classifier = taste_model.classifier_for(img.source_label)
+                # Every image is judged by its own category's model, or by the
+                # shared one when the category has none (taste contract V5).
+                # The category reads is_nsfw, which the NSFW head above has
+                # already settled for this row (V25).
+                group = taste.taste_group(img.source_label, img.is_nsfw)
+                classifier = taste_model.classifier_for(group)
                 prob = float(brain.predict_proba(classifier, features.taste_features(img)))
                 img.predicted_score = prob
                 update_fields.append("predicted_score")

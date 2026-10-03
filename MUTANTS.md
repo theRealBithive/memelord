@@ -9,6 +9,25 @@ Denominators are the generated mutants per file
 (`grep -cE '^\s*def x.*__mutmut_[0-9]+\(' mutants/<file>`; the pattern must allow the
 `ǁ` separators mutmut puts into class-method names, or those are not counted).
 
+## Run on 2026-10-03, NSFW as its own taste category (`core/taste.py`)
+
+Denominator: taste **190** (the earlier 194 minus the three `random_state` mutants
+removed with the lbfgs fix and one docstring-only change). Test selection: the eight
+modules of the taste run above plus `tests/ratings/test_nsfw_toggle_prediction.py`.
+Against a copy of the dev DB, `only_mutate` narrowed to `core/taste.py` for the run and
+restored afterwards.
+
+| run | scope | mutants | killed | timeout | survived | note |
+|---|---|---|---|---|---|---|
+| 1 | taste.py | 190 | 187 | 0 | 3 | the three are `_unit` 2, 8 and `balance_class_weights` 14, argued equivalent below |
+
+Score: **187 killed, 3 equivalent, 0 unjustified**. The new `taste_group()` produces
+**no mutants**: its body is one `if` on a bare name and two returns of names, and mutmut
+3 mutates operators, literals, calls and keyword arguments only. Its two branches and the
+conservation law (every row lands in exactly one group) are pinned by the V23/V24
+properties in `tests/core/test_taste.py`, which is the only measure it has.
+`classifier_for` (4 mutants) stays fully killed.
+
 ## Runs on 2026-10-03, taste model (`core/taste.py`, `ratings/features.py`, `ratings/embeddings.py`)
 
 Denominators: taste 194, features 13, embeddings 186 → **393**. Test selection:

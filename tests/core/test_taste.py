@@ -3,9 +3,13 @@
 Contract (confirmed by the operator on 2026-10-03). V9 is checked in
 tests/core/test_trainer.py (it needs the trainer's log lines), V10 in
 tests/ratings/test_stats.py and V11 in tests/ratings/test_embedding_generation.py.
+V1 was reworded and V23–V27 added on 2026-10-03 (NSFW as a category of its own);
+each of those names the module that checks its ORM side.
 
-V1 Jede Quelle (`source_label`) ist eine eigene Bewertungskategorie. Die Kategorie
-   eines Bildes steht beim Download fest und ändert sich nie.
+V1 Die Bewertungskategorie eines Bildes ist seine Quelle (`source_label`), solange
+   es nicht als NSFW markiert ist. Die Quelle steht beim Download fest und ändert
+   sich nie; die Kategorie wechselt nur mit der NSFW-Markierung. (Reworded with
+   V23: the original said the category never changes.)
 V2 Eine Quelle bekommt genau dann ein eigenes Modell, wenn sie mindestens 10
    gemochte (Score ≥ 3) und 10 nicht gemochte (Score ≤ 2, Trash eingeschlossen)
    Bilder mit aktuellem Merkmal hat. 10/10 reicht, 9/10 nicht.
@@ -71,6 +75,31 @@ V21 Die Config-Seite zeigt, wie viele Bilder einen aktuellen Geschmacksvektor
    haben. Der Job-Indikator zeigt die laufende Kette wie die Suchindex-Kette.
 V22 Ein Training nach dem Encoder-Wechsel kodiert die bewerteten Bilder selbst neu
    und schreibt Geschmacks- und NSFW-Modell mit dem neuen Stempel.
+
+Phase 4: NSFW als eigene Kategorie (ORM side in tests/core/test_trainer.py,
+tests/ratings/test_embedding_generation.py, tests/ratings/test_nsfw_toggle_prediction.py
+and tests/ratings/test_stats.py)
+V23 Jedes als NSFW markierte Bild gehört zur Kategorie "(nsfw)", egal aus welcher
+   Quelle es stammt. Der Kategoriename kann mit keinem Label kollidieren, das ein
+   Scraper erzeugt.
+V24 Die NSFW-Kategorie bekommt nach derselben Regel wie eine Quelle ein eigenes Modell
+   (mindestens 10 gemochte und 10 nicht gemochte Bilder mit aktuellem Merkmal), gelernt
+   nur aus NSFW-Bildern. NSFW-Bewertungen fließen in kein Quellenmodell, SFW-Bewertungen
+   nicht ins NSFW-Modell. Das geteilte Modell lernt weiter aus allen (V4).
+   (tests/core/test_trainer.py)
+V25 Die Vorhersage für ein NSFW-Bild kommt vom NSFW-Modell, wenn es eins gibt, sonst vom
+   geteilten; nie vom Modell seiner Quelle. Das gilt beim Scrape (auch wenn der
+   NSFW-Kopf das Bild erst in diesem Durchlauf markiert), nach dem Training und bei der
+   Vorhersage in der Ansicht. (tests/ratings/test_embedding_generation.py)
+V26 Wechselt die NSFW-Markierung eines Bildes (Taste `n` im Review, Lightbox), wird seine
+   Vorhersage sofort mit dem Modell der neuen Kategorie erneuert. Fehlt Merkmal oder
+   Modell, wird die alte Vorhersage verworfen und das Bild gilt als "unbewertet,
+   trotzdem zeigen". (tests/ratings/test_nsfw_toggle_prediction.py)
+V27 Das Train-Log nennt die NSFW-Kategorie in einer eigenen Zeile wie eine Quelle (V9).
+   Die Statistikseite zeigt sie als eigene Zeile mit gemocht/nicht gemocht und
+   Modell-Pill, nur wenn NSFW eingeblendet ist; die Quellenzeilen zählen dann nur
+   SFW-Bilder, so wie das Training sie sieht. (tests/core/test_trainer.py,
+   tests/ratings/test_stats.py)
 """
 
 import pickle
@@ -565,3 +594,66 @@ def test_source_label_is_written_only_when_the_row_is_created() -> None:
     admin_source = (REPO_ROOT / "ratings" / "admin.py").read_text()
     readonly_lists = re.findall(r"readonly_fields\s*=\s*\((.*?)\)", admin_source, re.S)
     assert any('"source_label"' in fields for fields in readonly_lists), "the admin must not edit the category"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: NSFW as a category of its own (V1, V23, V24, V25)
+#
+# The label strategies mirror the four shapes the scrapers produce: a 4chan
+# board, an imgur topic or tumblr blog slug, and a Mastodon/Pixelfed handle.
+# They reach every alphabet a real label can use, which is what makes the
+# collision check in V23 a check and not a tautology.
+
+BOARD_LABELS = st.from_regex(r"\A[a-z0-9]{1,5}\Z")
+SLUG_LABELS = st.from_regex(r"\A[a-z0-9][a-z0-9-]{0,20}\Z")
+HANDLE_LABELS = st.from_regex(r"\A@[a-z0-9_]{1,12}@[a-z0-9]{1,10}\.[a-z]{2,4}\Z")
+SCRAPER_LABELS = st.one_of(BOARD_LABELS, SLUG_LABELS, HANDLE_LABELS)
+
+
+@given(label=SCRAPER_LABELS, is_nsfw=st.booleans())
+def test_a_flagged_image_belongs_to_the_nsfw_group_whatever_its_source(label: str, is_nsfw: bool) -> None:
+    """Contract: V1, V23 — flagged: the one NSFW group; safe: its source; and no scraper label is that group."""
+    group = taste.taste_group(label, is_nsfw)
+    if is_nsfw:
+        assert group == taste.NSFW_GROUP
+    else:
+        assert group == label
+    assert label != taste.NSFW_GROUP
+    # Unguarded: membership in the NSFW group follows the flag exactly, both ways.
+    assert (group == taste.NSFW_GROUP) == is_nsfw
+
+
+@given(rows=st.lists(st.tuples(SCRAPER_LABELS, st.booleans()), min_size=1, max_size=40))
+def test_flagged_rows_form_one_group_and_leave_their_sources(rows: list[tuple[str, bool]]) -> None:
+    """Contract: V24 — the NSFW group holds exactly the flagged rows, no source group holds any, nothing is lost."""
+    labels = [taste.taste_group(label, flagged) for label, flagged in rows]
+    # X carries the row index so a group's rows can be read back from it.
+    X = np.arange(len(rows), dtype=np.float32).reshape(-1, 1)
+    y = np.array([index % 2 for index in range(len(rows))])
+    sample_weight = np.ones(len(rows))
+
+    groups = taste.group_by_source(labels, X, y, sample_weight)
+
+    flagged_rows = {index for index, (_, flagged) in enumerate(rows) if flagged}
+    nsfw_group = groups.get(taste.NSFW_GROUP)
+    nsfw_rows = set(nsfw_group.X[:, 0].astype(int)) if nsfw_group is not None else set()
+    assert nsfw_rows == flagged_rows
+    for name, group in groups.items():
+        if name == taste.NSFW_GROUP:
+            continue
+        assert not (set(group.X[:, 0].astype(int)) & flagged_rows)
+    if nsfw_group is not None:
+        assert nsfw_group.good_count == sum(1 for index in flagged_rows if y[index] == 1)
+        assert nsfw_group.bad_count == sum(1 for index in flagged_rows if y[index] == 0)
+    # Conservation, unguarded: every row lands in exactly one group.
+    assert sum(len(group.X) for group in groups.values()) == len(rows)
+
+
+def test_a_file_from_before_the_nsfw_group_sends_flagged_images_to_the_shared_model() -> None:
+    """Contract: V7, V25 — no "(nsfw)" key: the shared model judges flagged images; sources keep theirs."""
+    shared, tg_model = object(), object()
+    model = taste.TasteModel(shared=shared, per_source={"tg": tg_model})
+    assert model.classifier_for(taste.NSFW_GROUP) is shared
+    assert model.classifier_for("tg") is tg_model
+    assert model.classifier_for(taste.taste_group("tg", True)) is shared
+    assert model.classifier_for(taste.taste_group("tg", False)) is tg_model

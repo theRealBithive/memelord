@@ -59,7 +59,7 @@ from PIL import Image as PILImage
 from sklearn.linear_model import LogisticRegression
 
 from core import brain, dedup, siglip, taste, trainer
-from ratings import scraper, views
+from ratings import features, scraper, views
 from ratings.embeddings import (
     has_current_embedding,
     reencode_stale_embeddings,
@@ -340,6 +340,20 @@ class TastePredictionGenerationTests(TestCase):
         current.refresh_from_db()
         self.assertIsNone(current.predicted_score)
 
+    def test_a_flagged_image_is_predicted_by_the_nsfw_model_in_the_view(self) -> None:
+        """Taste contract: V25 — the lazy prediction hands a flagged row to the '(nsfw)' classifier, not its source's."""
+        flagged = _row(seed=1)
+        Image.objects.filter(pk=flagged.pk).update(source_label="tg", is_nsfw=True)
+        flagged.refresh_from_db()
+        tg_model, nsfw_model = object(), object()
+        stub_model = taste.TasteModel(
+            shared=object(), per_source={"tg": tg_model, taste.NSFW_GROUP: nsfw_model}
+        )
+        with mock.patch.object(views, "_get_taste_model", return_value=stub_model), \
+             mock.patch.object(brain, "predict_proba", return_value=0.25) as predict:
+            self.assertEqual(views._taste_prediction(flagged), 25)
+        self.assertIs(predict.call_args.args[0], nsfw_model)
+
     def test_stored_prediction_is_kept_regardless_of_generation(self) -> None:
         """Operator decision 2026-10-02: old predictions stay until the next train run."""
         legacy = _row(generation=LEGACY, seed=1)
@@ -406,6 +420,64 @@ class ClassifyImagesGenerationTests(TestCase):
         self.assertGreater(other_row.predicted_score, 0.5)
         self.assertGreater(unknown_row.predicted_score, 0.5)
         self.assertAlmostEqual(other_row.predicted_score, unknown_row.predicted_score)
+
+    def _save_models_with_an_nsfw_group(self) -> tuple[LogisticRegression, LogisticRegression]:
+        """Shared says good, tg says bad, '(nsfw)' says good but weaker (C=0.01): three tellable verdicts on one feature."""
+        plus = np.full(768, 1.0, dtype=np.float32)
+        feature = taste.combine_features(plus, plus)
+        shared = LogisticRegression().fit(np.vstack([feature, -feature]), [1, 0])
+        tg_model = LogisticRegression().fit(np.vstack([feature, -feature]), [0, 1])
+        nsfw_model = LogisticRegression(C=0.01).fit(np.vstack([feature, -feature]), [1, 0])
+        taste.save_taste_model(
+            taste.TasteModel(shared=shared, per_source={"tg": tg_model, taste.NSFW_GROUP: nsfw_model}),
+            self.weights,
+        )
+        return shared, nsfw_model
+
+    def test_a_flagged_image_is_judged_by_the_nsfw_model_not_its_sources(self) -> None:
+        """Taste contract: V25 — a flagged tg row and a flagged row of a model-less source both meet '(nsfw)', never tg or shared."""
+        shared, nsfw_model = self._save_models_with_an_nsfw_group()
+        probe = brain.embedding_to_bytes(np.full(768, 3.0, dtype=np.float32))
+        flagged_tg = _row(seed=1)
+        flagged_b = _row(seed=2)
+        safe_tg = _row(seed=3)
+        Image.objects.filter(pk=flagged_tg.pk).update(source_label="tg", is_nsfw=True, embedding=probe, search_embedding=probe)
+        Image.objects.filter(pk=flagged_b.pk).update(source_label="b", is_nsfw=True, embedding=probe, search_embedding=probe)
+        Image.objects.filter(pk=safe_tg.pk).update(source_label="tg", embedding=probe, search_embedding=probe)
+        vision = scraper.VisionConfig(weights_path=self.weights)
+
+        scraper.classify_images(self.data_dir, vision, encoder=object(), transform=object())
+
+        for row in (flagged_tg, flagged_b, safe_tg):
+            row.refresh_from_db()
+        feature = features.taste_features(flagged_tg)
+        expected_nsfw = float(brain.predict_proba(nsfw_model, feature))
+        expected_shared = float(brain.predict_proba(shared, feature))
+        self.assertNotAlmostEqual(expected_nsfw, expected_shared)
+        self.assertAlmostEqual(flagged_tg.predicted_score, expected_nsfw)
+        self.assertAlmostEqual(flagged_b.predicted_score, expected_nsfw)
+        self.assertLess(safe_tg.predicted_score, 0.5, "the safe tg row keeps the tg model")
+
+    def test_an_image_the_nsfw_head_flags_in_the_same_run_is_judged_by_the_nsfw_model(self) -> None:
+        """Taste contract: V25 — the category is read after the NSFW head has spoken, not before."""
+        _, nsfw_model = self._save_models_with_an_nsfw_group()
+        plus = np.full(768, 1.0, dtype=np.float32)
+        # An NSFW head that flags the probe vector; it works on the 768-d DINOv3 vector alone (V17).
+        nsfw_head = LogisticRegression().fit(np.vstack([plus, -plus]), [1, 0])
+        probe = brain.embedding_to_bytes(plus * 3)
+        row = _row(seed=1)
+        Image.objects.filter(pk=row.pk).update(source_label="tg", is_nsfw=False, embedding=probe, search_embedding=probe)
+        vision = scraper.VisionConfig(weights_path=self.weights)
+
+        scraper.classify_images(
+            self.data_dir, vision, encoder=object(), transform=object(), nsfw_clf=nsfw_head
+        )
+
+        row.refresh_from_db()
+        self.assertTrue(row.is_nsfw)
+        expected_nsfw = float(brain.predict_proba(nsfw_model, features.taste_features(row)))
+        self.assertAlmostEqual(row.predicted_score, expected_nsfw)
+        self.assertGreater(row.predicted_score, 0.5, "the tg model would have called it bad")
 
     def test_a_row_without_its_search_vector_waits_and_is_counted(self) -> None:
         """Taste contract: V13, V15, V16 — no SigLIP2 half: no prediction, no inline SigLIP2 encode, one log line."""

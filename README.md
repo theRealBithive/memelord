@@ -82,6 +82,23 @@ docker compose run --rm memelord index_search  # build the text-search index in 
 > `docker compose run --rm memelord python manage.py dumpdata ratings > backup.json`
 > (or copy `data/memelord.db`). A fresh install has nothing to lose and needs no action.
 
+## Upgrading to 2.4 — NSFW is its own taste category
+
+2.4 changes which images a taste classifier is trained on:
+
+- **One category for all NSFW images.** An image marked NSFW belongs to the
+  `(nsfw)` category whatever its source; safe images keep their source as the
+  category. Training fits one classifier on all rated NSFW images (10 liked and
+  10 disliked, like a source) and the per-source classifiers on safe images
+  only. Predictions follow: a flagged image is judged by the NSFW model (or the
+  shared one until it exists), never by its source's. Pressing `n` renews the
+  prediction with the model of the new category on the spot.
+- **Train once after the upgrade.** The weights file from 2.3 still loads, but
+  its source models were fitted on safe and NSFW images together and it has no
+  NSFW model, so flagged images use the shared model until you press Train. The
+  train log then has a line for `(nsfw)` like for any source, and the Stats page
+  shows it as a row of its own (with NSFW shown).
+
 ## Upgrading to 2.3 — one taste model per source, 448 px vectors
 
 2.3 changes how taste is learned and what it is learned from:

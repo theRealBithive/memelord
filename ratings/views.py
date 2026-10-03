@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count, Q
+from django.db.models import Case, CharField, Count, F, Q, Value, When
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -14,6 +14,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 import ratings.notifiers as notifiers
+from core import taste
 from core.brain import EncoderUnavailableError
 from ratings import embeddings, features, reset, search, similar
 from ratings.models import (
@@ -62,8 +63,6 @@ def _get_taste_model():
         return None
     mtime = WEIGHTS_PATH.stat().st_mtime
     if mtime != _taste_model_mtime:
-        from core import taste
-
         _taste_model_cache = taste.load_taste_model(WEIGHTS_PATH)
         _taste_model_mtime = mtime
     return _taste_model_cache
@@ -93,11 +92,30 @@ def _taste_prediction(image) -> int | None:
         return None
     from core import brain
 
-    classifier = taste_model.classifier_for(image.source_label)
+    group = taste.taste_group(image.source_label, image.is_nsfw)
+    classifier = taste_model.classifier_for(group)
     prob = float(brain.predict_proba(classifier, features.taste_features(image)))
     image.predicted_score = prob
     image.save(update_fields=["predicted_score"])
     return round(prob * 100)
+
+
+def _flip_nsfw_and_repredict(image) -> None:
+    """
+    Toggle is_nsfw and renew the taste prediction for the new category (taste
+    contract V26).
+
+    The flag decides the image's rating category (source or the NSFW group),
+    so the stored predicted_score came from the wrong model the moment the
+    flag changed. Dropping it and calling _taste_prediction re-runs the one
+    predict_proba against the cached feature with the cached model, or leaves
+    NULL ("show anyway") when either is missing. Rated images get the same
+    treatment: the stored value is cheap to refresh and the gallery shows it.
+    """
+    image.is_nsfw = not image.is_nsfw
+    image.predicted_score = None
+    image.save(update_fields=["is_nsfw", "predicted_score"])
+    _taste_prediction(image)
 
 
 @login_required
@@ -451,13 +469,24 @@ def stats(request):
     )
     score_dist_max = max((row["n"] for row in score_dist), default=1)
 
-    # Per source: how many liked / disliked rows feed the trainer and whether the
-    # source has reached its own classifier (taste contract V10). The split uses
-    # the trainer's constants so the page never disagrees with the log lines.
+    # Per category: how many liked / disliked rows feed the trainer and whether
+    # the category has reached its own classifier (taste contract V10, V27). The
+    # category is the source, or the NSFW group for flagged rows, computed in
+    # SQL the same way taste.taste_group does it in Python; the split uses the
+    # trainer's constants so the page never disagrees with the log lines. With
+    # NSFW hidden the NSFW rows are already filtered out above, so the group
+    # row is absent and the source rows count safe images only, as the trainer
+    # sees them.
     from core.trainer import HIGH_SCORE, LOW_SCORE
 
+    taste_group_sql = Case(
+        When(is_nsfw=True, then=Value(taste.NSFW_GROUP)),
+        default=F("source_label"),
+        output_field=CharField(),
+    )
     source_breakdown = list(
-        scored_qs.values("source_label")
+        scored_qs.annotate(taste_group=taste_group_sql)
+        .values("taste_group")
         .annotate(
             n=Count("content_hash"),
             good=Count("content_hash", filter=Q(score__gte=HIGH_SCORE)),
@@ -468,7 +497,7 @@ def stats(request):
     taste_model = _get_taste_model()
     sources_with_own_model = set(taste_model.per_source) if taste_model else set()
     for row in source_breakdown:
-        row["own_model"] = row["source_label"] in sources_with_own_model
+        row["own_model"] = row["taste_group"] in sources_with_own_model
 
     seven_days_ago = timezone.now() - timedelta(days=7)
     scraped_7d = Image.objects.filter(
@@ -1355,8 +1384,7 @@ def toggle_nsfw(request, content_hash: str):
         qs = _review_nsfw_qs(show_nsfw, order)
         in_queue = qs.filter(content_hash=content_hash).exists()
         neighbor = _queue_neighbor_hash(qs, image, order) if in_queue else None
-        image.is_nsfw = not image.is_nsfw
-        image.save(update_fields=["is_nsfw"])
+        _flip_nsfw_and_repredict(image)
         # In-queue + marked safe → it left the NSFW queue, so advance.
         # Out-of-queue (re-review) or still NSFW → stay on the image.
         target = neighbor if (in_queue and not image.is_nsfw) else content_hash
@@ -1365,8 +1393,7 @@ def toggle_nsfw(request, content_hash: str):
         qs = _review_qs(show_nsfw, order)
         in_queue = qs.filter(content_hash=content_hash).exists()
         neighbor = _queue_neighbor_hash(qs, image, order) if in_queue else None
-        image.is_nsfw = not image.is_nsfw
-        image.save(update_fields=["is_nsfw"])
+        _flip_nsfw_and_repredict(image)
         # In-queue + marked NSFW while NSFW is hidden → it left the queue, advance.
         # Out-of-queue (re-review) or still visible → stay on the image.
         if in_queue and not show_nsfw and image.is_nsfw:
@@ -2002,9 +2029,9 @@ def lightbox_score(request, content_hash: str):
 @login_required
 @require_POST
 def lightbox_nsfw(request, content_hash: str):
+    """Flip the NSFW mark from the gallery lightbox; the prediction follows the new category (V26)."""
     image = get_object_or_404(Image, content_hash=content_hash, is_purged=False)
-    image.is_nsfw = not image.is_nsfw
-    image.save(update_fields=["is_nsfw"])
+    _flip_nsfw_and_repredict(image)
     return _lightbox_update(request, image)
 
 

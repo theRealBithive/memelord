@@ -322,14 +322,16 @@ class TrainerTests(TestCase):
         self.assertEqual(taste.load_taste_model(taste_path).shared.n_features_in_, taste.FEATURE_DIM)
         self.assertEqual(brain.load_classifier(nsfw_path).n_features_in_, brain.EMBEDDING_DIM)
 
-    def _make_cached(self, label: str, score: int | None, seed: int, *, search: bool = True) -> Path:
+    def _make_cached(
+        self, label: str, score: int | None, seed: int, *, search: bool = True, is_nsfw: bool = False
+    ) -> Path:
         """A row with a current DINOv3 vector (and, by default, a search vector), so run() needs no encoder."""
         h = uuid.uuid4().hex
         rel = f"images/{h}.png"
         path = self._write_image(rel)
         vector = np.random.default_rng(seed).standard_normal(768).astype(np.float32)
         ImageModel.objects.create(
-            content_hash=h, file_path=rel, source_label=label, score=score,
+            content_hash=h, file_path=rel, source_label=label, score=score, is_nsfw=is_nsfw,
             embedding=brain.embedding_to_bytes(vector), embedding_model=brain.ENCODER_ID,
             **(_search_fields(seed) if search else {}),
         )
@@ -467,6 +469,38 @@ class TrainerTests(TestCase):
         model = taste.load_taste_model(weights_path)
         self.assertEqual(set(model.per_source), {"tg"})
         self.assertEqual(sorted(p.name for p in self.data_dir.glob("*.pkl")), ["weights.pkl"])
+
+    @patch.object(brain, "get_encoder")
+    @patch.object(brain, "encode")
+    def test_flagged_rows_train_the_nsfw_group_and_leave_their_sources(
+        self, mock_encode, mock_get_encoder
+    ) -> None:
+        """Taste contract: V24, V27 — flagged rows of two sources make one '(nsfw)' model; tg without them is 10/9 and falls back; wsg, flagged only, gets no line."""
+        seed = 0
+        for score in (3, 4, 5, 6, 3, 4, 5, 6, 3, 6):
+            seed += 1
+            self._make_cached("tg", score, seed)
+        for score in (0, 1, 2, 0, 1, 2, 0, 1, 2):
+            seed += 1
+            self._make_cached("tg", score, seed)
+        # Ten liked and ten disliked flagged rows, alternating between the two
+        # sources. Under the old per-source key tg would have been 15/14.
+        for index, score in enumerate((3, 4, 5, 6, 3, 4, 5, 6, 3, 6)):
+            seed += 1
+            self._make_cached("tg" if index % 2 == 0 else "wsg", score, seed, is_nsfw=True)
+        for index, score in enumerate((0, 1, 2, 0, 1, 2, 0, 1, 2, 0)):
+            seed += 1
+            self._make_cached("tg" if index % 2 == 0 else "wsg", score, seed, is_nsfw=True)
+        weights_path = self.data_dir / "weights.pkl"
+
+        messages = self._run_capturing_log(weights_path)
+
+        mock_encode.assert_not_called()
+        self.assertIn("taste: own model for '(nsfw)' (10 good, 10 bad)", messages)
+        self.assertIn("taste: 'tg' uses the shared model (10 good, 9 bad, needs 10/10)", messages)
+        self.assertFalse(any("'wsg'" in message for message in messages))
+        model = taste.load_taste_model(weights_path)
+        self.assertEqual(set(model.per_source), {taste.NSFW_GROUP})
 
     @patch.object(brain, "get_transform")
     @patch.object(brain, "get_encoder")

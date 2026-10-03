@@ -103,20 +103,22 @@ def _get_negative_weights(data_dir: Path) -> dict[str, float]:
     return result
 
 
-def _get_source_labels(data_dir: Path) -> dict[str, str]:
+def _get_taste_groups(data_dir: Path) -> dict[str, str]:
     """
-    Return {absolute_path_str: source_label} for every rated image.
+    Return {absolute_path_str: taste group} for every rated image.
 
     Same path-keyed shape as the two weight maps so run() can look all three up
-    with the same key after it has filtered the path lists; the source label is
-    the training category of the per-source classifiers (taste contract V1).
+    with the same key after it has filtered the path lists. The group is the
+    training category of the per-category classifiers: the source for a safe
+    image, the NSFW group for a flagged one (taste contract V1, V23), decided
+    by `taste.taste_group` so the trainer and the predictors cannot disagree.
     """
     from ratings.models import Image
 
     result = {}
     for img in Image.objects.filter(is_purged=False, score__isnull=False):
         path_str = str(data_dir / img.file_path)
-        result[path_str] = img.source_label
+        result[path_str] = taste.taste_group(img.source_label, img.is_nsfw)
     return result
 
 
@@ -127,12 +129,14 @@ def _fit_per_source_classifiers(
     sample_weight: np.ndarray,
 ) -> dict[str, LogisticRegression]:
     """
-    Fit one classifier for every source that has enough liked and disliked rows
-    (taste contract V2, V3) and say in the log what every source got (V9).
+    Fit one classifier for every category that has enough liked and disliked
+    rows (taste contract V2, V3, V24) and say in the log what every category got
+    (V9, V27). A category is a source or the NSFW group; this function cannot
+    tell them apart and does not need to.
 
-    The log lines are the operator's only view of which source judges itself
+    The log lines are the operator's only view of which category judges itself
     and which one still leans on the shared model, so they name the counts and,
-    for a source that fell back, the threshold it has to reach.
+    for a category that fell back, the threshold it has to reach.
     """
     classifiers: dict[str, LogisticRegression] = {}
     for label, group in taste.group_by_source(labels, X, y, sample_weight).items():
@@ -415,9 +419,9 @@ def run(
     shared_clf = taste.fit_classifier(X, y, sample_weight)
     # The labels are built from the *filtered* path lists, in the same order as
     # X and y, so a rated row that lost its file or vector drops out of its
-    # source's counts together with its row.
-    source_labels = _get_source_labels(data_dir)
-    labels = [source_labels[str(p)] for p in good_paths + bad_paths]
+    # category's counts together with its row.
+    taste_groups = _get_taste_groups(data_dir)
+    labels = [taste_groups[str(p)] for p in good_paths + bad_paths]
     per_source = _fit_per_source_classifiers(labels, X, y, sample_weight)
     taste.save_taste_model(
         taste.TasteModel(shared=shared_clf, per_source=per_source), weights_path

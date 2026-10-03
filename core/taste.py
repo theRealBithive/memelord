@@ -1,17 +1,25 @@
 """
-The taste model: one shared classifier plus one classifier per download source.
+The taste model: one shared classifier plus one classifier per rating category.
 
-Why per source: the library mixes categories with different criteria (jokes
+Why per category: the library mixes categories with different criteria (jokes
 from /b/ and tumblr, painted miniatures from /tg/, wallpapers). One linear
 classifier over all of them learns the cheapest explanation, which is the
 category itself as soon as the operator likes one category more often than
 another, and the visibility dial then hides whole sources instead of bad
-images. A classifier per source can only learn taste *within* that source.
-The source is `Image.source_label`, fixed at download time, so the category
-costs nothing and never moves (contract V1). Sources with too few ratings fall
-back to the shared classifier, which is trained on everything exactly as
-before (V2, V4). This is the "generic model plus per-domain adaptation" shape
-the personalised-aesthetics literature uses, in its simplest form.
+images. A classifier per category can only learn taste *within* that category.
+Categories with too few ratings fall back to the shared classifier, which is
+trained on everything exactly as before (V2, V4). This is the "generic model
+plus per-domain adaptation" shape the personalised-aesthetics literature uses,
+in its simplest form.
+
+A category is the download source (`Image.source_label`, fixed at download
+time) for a safe image, and the one NSFW group for a flagged image, whatever
+its source (V1, V23): the operator judges NSFW by a criterion of its own in
+which the origin plays no part, so per-source NSFW rows would only split that
+criterion across sources that each lack the 10/10. `taste_group()` is the one
+place that maps a row to its category; everything below it speaks of "source"
+for historical reasons (the pickle key `per_source` must stay readable) and
+means "category" throughout.
 
 This module is pure (numpy, sklearn, pickle); the ORM side lives in
 core/trainer.py and ratings/. Keeping it pure keeps it mutation-testable
@@ -41,6 +49,27 @@ FEATURE_DIM = brain.EMBEDDING_DIM + siglip.SEARCH_DIM
 # wobbly at first.
 MIN_GOOD_PER_SOURCE = 10
 MIN_BAD_PER_SOURCE = 10
+
+# The category of every flagged image. Parentheses, because no scraper can
+# produce them in a label (boards and topics are alphanumeric, blog names use
+# letters and dashes, handles carry `@`), so the group can never collide with a
+# real source (V23). The name is what the train log and the stats page show.
+NSFW_GROUP = "(nsfw)"
+
+
+def taste_group(source_label: str, is_nsfw: bool) -> str:
+    """
+    The rating category of an image: its source, or the NSFW group when it is
+    flagged (V1, V23).
+
+    Takes the two scalars rather than the Image row so this module stays
+    ORM-free; the trainer, classify_images and the view prediction all pass
+    `(img.source_label, img.is_nsfw)`. A flagged image leaves its source's
+    category entirely, it does not belong to both (V24).
+    """
+    if is_nsfw:
+        return NSFW_GROUP
+    return source_label
 
 
 def _unit(vector: np.ndarray, expected_dim: int, name: str) -> np.ndarray:
@@ -118,7 +147,7 @@ def fit_classifier(
 
 @dataclass
 class SourceGroup:
-    """The training rows of one source, with the counts the threshold rule reads."""
+    """The training rows of one category (a source or the NSFW group), with the counts the threshold rule reads."""
 
     X: np.ndarray
     y: np.ndarray
@@ -134,12 +163,14 @@ def group_by_source(
     sample_weight: np.ndarray,
 ) -> dict[str, SourceGroup]:
     """
-    Split the training set by source label, in first-seen order.
+    Split the training set by category label, in first-seen order.
 
     `labels[i]` must describe row i of X, y and sample_weight: the caller
     builds all four from the same filtered path list, after rows without a
     vector were dropped, so the counts here are counts of rows that actually
-    train (V2 says "with a current vector").
+    train (V2 says "with a current vector"). The labels are whatever
+    `taste_group()` returned, so the NSFW group is one label like any source
+    and needs no special case here (V24).
     """
     rows_by_label: dict[str, list[int]] = {}
     for index, label in enumerate(labels):
@@ -167,19 +198,21 @@ def has_enough_examples(group: SourceGroup) -> bool:
 
 @dataclass
 class TasteModel:
-    """The shared classifier and the per-source ones, keyed by `Image.source_label`."""
+    """The shared classifier and the per-category ones, keyed by `taste_group()`."""
 
     shared: LogisticRegression
     per_source: dict[str, LogisticRegression] = field(default_factory=dict)
 
-    def classifier_for(self, source_label: str) -> LogisticRegression:
+    def classifier_for(self, group: str) -> LogisticRegression:
         """
-        The source's own classifier when it has one, otherwise the shared one
-        (V4, V5). An unknown or empty label is simply a source without its own
-        model; it must never raise, because a stray row with a label nobody
-        trained on would otherwise stop a whole classify run.
+        The category's own classifier when it has one, otherwise the shared one
+        (V4, V5, V25). An unknown or empty label is simply a category without
+        its own model; it must never raise, because a stray row with a label
+        nobody trained on would otherwise stop a whole classify run. A file
+        from before the NSFW group existed has no `(nsfw)` key, so flagged
+        images take the shared model until the next training (V7).
         """
-        return self.per_source.get(source_label, self.shared)
+        return self.per_source.get(group, self.shared)
 
 
 def save_taste_model(model: TasteModel, path: Path) -> None:
