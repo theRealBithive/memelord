@@ -13,12 +13,25 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 EMBEDDING_DIM = 768
 
+# The encoder sees every image at INPUT_SIZE x INPUT_SIZE pixels. Meta's
+# processor config says 224; DINOv3 uses RoPE and derives its position
+# encoding from the actual patch grid, and the LVD-1689M checkpoint went
+# through a high-resolution adaptation phase, so 448 is inside what the
+# weights were trained for. The point is fine structure that 224 px flattens:
+# brush work on a miniature, the texture of a wallpaper. A 28 mm figure that
+# fills 300 px of its photo is ~45 px wide at 224 and ~90 px at 448. Measured
+# on a 20-core CPU: 0.41 s/img at 224, 1.38 s/img at 448 (3.4x), which is why
+# the library is re-encoded by a sliced background chain
+# (ratings/embeddings.py) and never inline in a scrape.
+INPUT_SIZE = 448
+
 # Name of the embedding generation every stored vector is stamped with
 # (Image.embedding_model). A vector stamped with anything else was produced by
-# a different encoder and lives in a different space, so it is never compared
-# with current ones. Bumping this constant is the whole "invalidate all
-# embeddings" switch; ratings/embeddings.py is how stale rows then self-heal.
-ENCODER_ID = "dinov3_vitb16"
+# a different encoder (or the same one at another resolution) and lives in a
+# different space, so it is never compared with current ones. Bumping this
+# constant is the whole "invalidate all embeddings" switch; ratings/embeddings.py
+# is how stale rows then self-heal.
+ENCODER_ID = "dinov3_vitb16_448"
 
 # Gated repo: the operator accepts Meta's DINOv3 licence once on this page and
 # provides a read token via the HF_TOKEN environment variable. huggingface_hub
@@ -85,13 +98,19 @@ def get_transform() -> ImageTransform:
     inputs, which degrades dedup precision and classifier accuracy. So the
     processor is wrapped into the PIL -> tensor callable that encode() expects,
     one image at a time; encode() stacks the results into a batch.
+
+    The one thing overridden is the output size: the processor squashes every
+    image to a square (no centre crop) and would use 224 from its config, the
+    call asks for INPUT_SIZE instead. Squashing stays as it was, because a
+    batch needs equal shapes and the published preprocessing squashes too.
     """
     from transformers import AutoImageProcessor
 
     processor = _load_from_hub(AutoImageProcessor, HF_MODEL_ID)
+    size = {"height": INPUT_SIZE, "width": INPUT_SIZE}
 
     def to_tensor(image: Image.Image) -> torch.Tensor:
-        return processor(images=image, return_tensors="pt")["pixel_values"][0]
+        return processor(images=image, return_tensors="pt", size=size)["pixel_values"][0]
 
     return to_tensor
 
@@ -122,7 +141,7 @@ def encode(
     image_paths: list[Path],
     transform: ImageTransform | None = None,
     device: str | torch.device | None = None,
-    batch_size: int = 32,
+    batch_size: int = 16,
     progress_label: str = "encode",
 ) -> tuple[np.ndarray, list[Path]]:
     """

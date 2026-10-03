@@ -431,6 +431,57 @@ class ClassifyImagesGenerationTests(TestCase):
         self.assertIsNotNone(ready.predicted_score)
         self.assertIn("classify_images: 1 unrated images wait for the search index", lines)
 
+    def test_the_inline_backfill_is_capped_and_the_rest_is_left_to_the_chain(self) -> None:
+        """Taste contract: V20 (risk R10) — oldest stale rows first, the cap decides, the rest stays stale and unpredicted."""
+        oldest = _row(generation=LEGACY, seed=1)
+        middle = _row(generation=LEGACY, seed=2)
+        newest = _row(generation=LEGACY, seed=3)
+        base = oldest.downloaded_at
+        Image.objects.filter(pk=middle.pk).update(downloaded_at=base.replace(year=base.year + 1))
+        Image.objects.filter(pk=newest.pk).update(downloaded_at=base.replace(year=base.year + 2))
+        for img in (oldest, middle, newest):
+            _write_png(self.data_dir, img.file_path)
+        vision = scraper.VisionConfig(weights_path=self.weights)
+        lines: list[str] = []
+        sink_id = logger.add(lambda message: lines.append(message.record["message"]), level="INFO")
+
+        with mock.patch.object(brain, "encode", side_effect=_fake_encode) as encode, \
+             mock.patch.object(scraper, "CLASSIFY_BACKFILL_LIMIT", 2):
+            try:
+                scraper.classify_images(self.data_dir, vision, encoder=object(), transform=object())
+            finally:
+                logger.remove(sink_id)
+
+        encoded_paths = encode.call_args.args[1]
+        self.assertEqual(
+            encoded_paths,
+            [self.data_dir / oldest.file_path, self.data_dir / middle.file_path],
+        )
+        for img in (oldest, middle, newest):
+            img.refresh_from_db()
+        self.assertEqual(oldest.embedding_model, CURRENT)
+        self.assertEqual(middle.embedding_model, CURRENT)
+        self.assertEqual(newest.embedding_model, LEGACY)
+        self.assertIsNotNone(oldest.predicted_score)
+        self.assertIsNone(newest.predicted_score)
+        self.assertIn("classify_images: 1 stale images left to the re-encode chain", lines)
+
+    def test_a_backfill_under_the_cap_logs_nothing_about_the_chain(self) -> None:
+        """Taste contract: V20 — the chain line appears only when rows were actually left over."""
+        stale = _row(generation=LEGACY, seed=1)
+        _write_png(self.data_dir, stale.file_path)
+        vision = scraper.VisionConfig(weights_path=self.weights)
+        lines: list[str] = []
+        sink_id = logger.add(lambda message: lines.append(message.record["message"]), level="INFO")
+
+        with mock.patch.object(brain, "encode", side_effect=_fake_encode):
+            try:
+                scraper.classify_images(self.data_dir, vision, encoder=object(), transform=object())
+            finally:
+                logger.remove(sink_id)
+
+        self.assertFalse(any("re-encode chain" in line for line in lines))
+
 
 class ReencodeTests(TestCase):
     def setUp(self) -> None:
@@ -574,6 +625,54 @@ class ReencodeTests(TestCase):
         self.assertEqual(result["encoded"], 0)
 
 
+    def test_recently_rated_rows_come_first_then_unrated_by_download_time(self) -> None:
+        """Taste contract: V19 — the chain's first slice is what the next Train run needs."""
+        old_unrated = _row(generation=LEGACY, seed=1)
+        new_unrated = _row(generation=LEGACY, seed=2)
+        rated_earlier = _row(generation=LEGACY, seed=3, score=4)
+        rated_later = _row(generation=LEGACY, seed=4, score=1)
+        base = old_unrated.downloaded_at
+        Image.objects.filter(pk=new_unrated.pk).update(downloaded_at=base.replace(year=base.year + 1))
+        # Both rated rows were downloaded after every unrated one, so download
+        # time alone would put them last; the rating must pull them forward.
+        Image.objects.filter(pk=rated_earlier.pk).update(
+            downloaded_at=base.replace(year=base.year + 2), rated_at=base.replace(year=base.year + 5)
+        )
+        Image.objects.filter(pk=rated_later.pk).update(
+            downloaded_at=base.replace(year=base.year + 3), rated_at=base.replace(year=base.year + 6)
+        )
+        for img in (old_unrated, new_unrated, rated_earlier, rated_later):
+            _write_png(self.data_dir, img.file_path)
+
+        with mock.patch.object(brain, "encode", side_effect=_fake_encode) as encode:
+            reencode_stale_embeddings(self.data_dir, encoder=object(), transform=object())
+
+        self.assertEqual(
+            encode.call_args.args[1],
+            [self.data_dir / img.file_path for img in (rated_later, rated_earlier, old_unrated, new_unrated)],
+        )
+
+    def test_a_limit_takes_the_head_of_that_order(self) -> None:
+        """Taste contract: V19 — a slice is a prefix of the order, so a rated row never waits behind unrated ones."""
+        unrated = _row(generation=LEGACY, seed=1)
+        rated = _row(generation=LEGACY, seed=2, score=5)
+        base = unrated.downloaded_at
+        Image.objects.filter(pk=rated.pk).update(
+            downloaded_at=base.replace(year=base.year + 1), rated_at=base.replace(year=base.year + 2)
+        )
+        for img in (unrated, rated):
+            _write_png(self.data_dir, img.file_path)
+
+        with mock.patch.object(brain, "encode", side_effect=_fake_encode):
+            result = reencode_stale_embeddings(self.data_dir, encoder=object(), transform=object(), limit=1)
+
+        self.assertEqual(result["encoded"], 1)
+        rated.refresh_from_db()
+        unrated.refresh_from_db()
+        self.assertEqual(rated.embedding_model, CURRENT)
+        self.assertEqual(unrated.embedding_model, LEGACY)
+
+
 _REENCODE_SPEC = st.fixed_dictionaries(
     {
         "generation": st.sampled_from([CURRENT, LEGACY, ""]),
@@ -582,7 +681,6 @@ _REENCODE_SPEC = st.fixed_dictionaries(
         "purged": st.booleans(),
     }
 )
-
 
 class ReencodeProperty(HypothesisTestCase):
     def setUp(self) -> None:

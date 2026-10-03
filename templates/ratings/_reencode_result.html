@@ -1,0 +1,13 @@
+<div id="reencode-result" class="train-result {% if reencode_remaining == 0 %}train-ok{% elif reencode_report %}train-err{% endif %}">
+{% if reencode_remaining == 0 %}
+  <span class="train-icon">✓</span>
+  <span>Taste vectors complete: {{ reencoded }} image{{ reencoded|pluralize }} current.</span>
+{% elif reencode_report %}
+  <span class="train-icon">✕</span>
+  <span>{{ reencode_report }} {{ reencoded }} of {{ reencode_total }} current.</span>
+{% else %}
+  <span class="train-icon">·</span>
+  <span>{{ reencoded }} of {{ reencode_total }} image{{ reencode_total|pluralize }} current, {{ reencode_remaining }} waiting.</span>
+{% endif %}
+</div>
+{% include "ratings/_nav_job.html" with nav_job_oob=True %}

@@ -55,9 +55,10 @@ def _fitted_classifier() -> LogisticRegression:
 # --- V8 -----------------------------------------------------------------------
 
 
-def test_encoder_id_and_dimension_name_dinov3_vitb16() -> None:
-    """Contract: V8"""
-    assert brain.ENCODER_ID == "dinov3_vitb16"
+def test_encoder_id_and_dimension_name_dinov3_vitb16_at_448() -> None:
+    """Contract: V8; taste V18 (the stamp names the resolution, so every 224 px vector is stale)"""
+    assert brain.ENCODER_ID == "dinov3_vitb16_448"
+    assert brain.INPUT_SIZE == 448
     assert brain.HF_MODEL_ID == "facebook/dinov3-vitb16-pretrain-lvd1689m"
     assert brain.EMBEDDING_DIM == 768
 
@@ -69,21 +70,21 @@ def test_encoder_returns_one_cls_vector_per_image_in_eval_mode() -> None:
         auto_model.from_pretrained.return_value = fake
         encoder = brain.get_encoder("cpu")
 
-    out = encoder(torch.zeros(2, 3, 224, 224))
+    out = encoder(torch.zeros(2, 3, brain.INPUT_SIZE, brain.INPUT_SIZE))
 
     auto_model.from_pretrained.assert_called_once_with(brain.HF_MODEL_ID)
     assert fake.eval_called
     assert tuple(out.shape) == (2, brain.EMBEDDING_DIM)
 
 
-def test_transform_is_metas_processor_applied_per_image() -> None:
-    """Contract: V8
+def test_transform_is_metas_processor_applied_per_image_at_448() -> None:
+    """Contract: V8; taste V18
 
     _load_from_hub is patched rather than the transformers module attribute:
     transformers resolves AutoImageProcessor lazily, so a module-level patch is
     not what `from transformers import AutoImageProcessor` picks up.
     """
-    processor = mock.Mock(return_value={"pixel_values": torch.zeros(1, 3, 224, 224)})
+    processor = mock.Mock(return_value={"pixel_values": torch.zeros(1, 3, 448, 448)})
     with mock.patch.object(brain, "_load_from_hub", return_value=processor) as load:
         transform = brain.get_transform()
 
@@ -96,7 +97,8 @@ def test_transform_is_metas_processor_applied_per_image() -> None:
     processor.assert_called_once()
     assert processor.call_args.kwargs["images"] is image
     assert processor.call_args.kwargs["return_tensors"] == "pt"
-    assert tuple(tensor.shape) == (3, 224, 224)
+    assert processor.call_args.kwargs["size"] == {"height": 448, "width": 448}
+    assert tuple(tensor.shape) == (3, 448, 448)
 
 
 def test_storage_format_round_trips_768_float32() -> None:
@@ -256,7 +258,7 @@ def test_encoder_picks_cpu_when_no_cuda_is_available() -> None:
          mock.patch("torch.cuda.is_available", return_value=False):
         auto_model.from_pretrained.return_value = fake
         encoder = brain.get_encoder()
-    out = encoder(torch.zeros(1, 3, 224, 224))
+    out = encoder(torch.zeros(1, 3, brain.INPUT_SIZE, brain.INPUT_SIZE))
     assert out.device.type == "cpu"
     assert tuple(out.shape) == (1, brain.EMBEDDING_DIM)
 

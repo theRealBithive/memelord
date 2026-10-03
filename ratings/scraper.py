@@ -15,6 +15,13 @@ from ratings.models import Image, Source
 from retina import fourchan, imgur, pixelfed, tumblr
 from retina import mastodon as mastodon_scraper
 
+# How many stale library rows classify_images re-encodes inline per run (taste
+# contract V20). New downloads are encoded by the dedup step anyway; this cap
+# is for rows left over by an encoder change, where the whole library is stale
+# at once and the inline pass would run for hours inside the scrape. The rest
+# belongs to the re-encode chain (ratings/embeddings.py).
+CLASSIFY_BACKFILL_LIMIT = 200
+
 # Maps Source.type → (toml_section, toml_key, result_key) for list-based sources.
 _SOURCE_MAP = [
     (Source.FOURCHAN, "4chan", "boards", "boards"),
@@ -267,7 +274,9 @@ def classify_images(
     if not need_vision and not need_nsfw and nsfw_clf is None:
         return
 
-    images = list(Image.objects.filter(is_purged=False, score__isnull=True))
+    images = list(
+        Image.objects.filter(is_purged=False, score__isnull=True).order_by("downloaded_at")
+    )
     if not images:
         return
 
@@ -276,9 +285,18 @@ def classify_images(
     # Only encode images whose vector is missing or from an older encoder, or
     # that lack a phash — the common case is that everything was encoded at
     # scrape time with the current encoder and we can read from the DB (V3).
+    # Oldest first, at most CLASSIFY_BACKFILL_LIMIT per run; the rows beyond
+    # the cap are skipped below (no vector, no prediction) and belong to the
+    # re-encode chain (taste contract V20).
     backfill = [
         img for img in images if not has_current_embedding(img) or not img.phash
     ]
+    left_to_chain = max(0, len(backfill) - CLASSIFY_BACKFILL_LIMIT)
+    backfill = backfill[:CLASSIFY_BACKFILL_LIMIT]
+    if left_to_chain:
+        logger.info(
+            "classify_images: {} stale images left to the re-encode chain", left_to_chain
+        )
     path_to_emb: dict[Path, object] = {}
     if backfill:
         if encoder is None:

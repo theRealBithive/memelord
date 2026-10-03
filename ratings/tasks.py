@@ -72,6 +72,13 @@ def run_scrape():
         # so the CLI scrape stays pure and the auto_scrape schedule is covered.
         if search.enqueue_index_job_if_needed():
             logger.info("Search index job queued for the new images.")
+        # Same for the taste vectors after an encoder change: classify_images
+        # re-encodes at most a small batch inline (taste contract V20), the
+        # chain takes the rest in slices.
+        from ratings import embeddings
+
+        if embeddings.enqueue_reencode_job_if_needed():
+            logger.info("Taste re-encode job queued for the stale images.")
         return {"ok": True, "total": sum(counts.values()), "counts": counts}
     except Exception as exc:
         logger.error("Scrape failed: {}", exc)
@@ -114,6 +121,63 @@ def run_train():
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+    finally:
+        logger.remove(sink_id)
+
+
+def run_taste_reencode():
+    """
+    Re-encode one slice of stale taste vectors and queue the next one (taste
+    contract V19).
+
+    A deliberate twin of run_search_index for the DINOv3 generation: same
+    slice/re-enqueue shape, same stop rule, its own log source so the operator
+    can tell the two chains apart in the log viewer. Why slices: at 448 px the
+    whole library is about twelve hours on the CPU host; one task of that
+    length would hold the single worker and hit the 4 h cluster timeout. A
+    slice of 500 is about 15 minutes, after which a waiting scrape gets its
+    turn, then the chain continues with the slice this function enqueues
+    before it returns (so OrmQ is never empty between slices).
+
+    Why the stop rule: a slice that encoded nothing although rows are still
+    stale can only be looking at missing or unreadable files; re-queueing
+    would loop forever. Missing weights (EncoderUnavailableError) end the
+    chain the same way with the message that says what to do.
+    """
+    from loguru import logger
+
+    from core.brain import EncoderUnavailableError
+    from ratings import embeddings
+
+    _trim_logs()
+    sink_id = logger.add(_db_sink("reencode"), format="{message}")
+    try:
+        try:
+            result = embeddings.reencode_stale_embeddings(
+                Path(settings.DATA_DIR), limit=embeddings.REENCODE_SLICE_SIZE
+            )
+        except EncoderUnavailableError as exc:
+            logger.error("Re-encode stopped: {}", exc)
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            logger.error("Re-encode failed: {}", exc)
+            return {"ok": False, "error": str(exc)}
+
+        remaining = embeddings.stale_images().count()
+        if remaining == 0:
+            logger.info("Re-encode complete ({} encoded in the last slice).", result["encoded"])
+        elif result["encoded"] > 0:
+            from django_q.tasks import async_task
+
+            logger.info("Re-encode: {} images left, next slice queued.", remaining)
+            async_task(embeddings.REENCODE_TASK)
+        else:
+            logger.warning(
+                "Re-encode stopped: {} image(s) cannot be encoded (file missing or "
+                "unreadable). Run `manage.py repair_orphans`, then re-encode again.",
+                remaining,
+            )
+        return {"ok": True, "encoded": result["encoded"], "remaining": remaining}
     finally:
         logger.remove(sink_id)
 

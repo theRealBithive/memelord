@@ -68,7 +68,26 @@ def active_jobs(request):
         **views._training_ctx(request),
         **views._scrape_ctx(request),
         **_index_job_ctx(),
+        **_reencode_job_ctx(),
     }
+
+
+def _reencode_job_ctx() -> dict:
+    """
+    State of the taste re-encode chain for the nav indicator (taste contract
+    V21), a twin of _index_job_ctx for the DINOv3 generation with the same
+    queue-not-session reasoning and the same quiet failure before django-q's
+    tables exist.
+    """
+    try:
+        from ratings import embeddings
+
+        if not embeddings.reencode_job_queued():
+            return {"active_reencode": False, "reencode_remaining": 0}
+        current, total = embeddings.taste_vector_counts()
+        return {"active_reencode": True, "reencode_remaining": total - current}
+    except Exception:
+        return {"active_reencode": False, "reencode_remaining": 0}
 
 
 def _index_job_ctx() -> dict:

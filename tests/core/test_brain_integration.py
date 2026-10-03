@@ -49,10 +49,10 @@ def _checkerboard_image(path: Path) -> Path:
 
 
 def test_transform_matches_published_preprocessing(tmp_path: Path) -> None:
-    """Meta's processor resizes to 224x224 and returns a float32 CHW tensor."""
+    """Meta's processor resizes to INPUT_SIZE (448) squared and returns a float32 CHW tensor (taste V18)."""
     transform = brain.get_transform()
     tensor = transform(Image.open(_flat_image(tmp_path / "a.png")).convert("RGB"))
-    assert tuple(tensor.shape) == (3, 224, 224)
+    assert tuple(tensor.shape) == (3, brain.INPUT_SIZE, brain.INPUT_SIZE)
     assert str(tensor.dtype) == "torch.float32"
 
 

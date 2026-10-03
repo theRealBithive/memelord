@@ -39,7 +39,7 @@ from django_q.tasks import async_task
 
 from core import siglip
 from core.brain import EncoderUnavailableError
-from ratings import search, tasks
+from ratings import embeddings, search, tasks
 from ratings.context_processors import _index_job_ctx
 from ratings.models import Image, LogEntry
 from ratings.reset import CONFIRM_WORD
@@ -174,7 +174,8 @@ class EnqueueTests(TestCase):
         """Contract: V3"""
         with mock.patch("ratings.scraper.run", return_value={"4chan/wg": 3}), \
              mock.patch("ratings.scraper.vision_config_from_settings"), \
-             mock.patch.object(search, "enqueue_index_job_if_needed", return_value=True) as enqueue:
+             mock.patch.object(search, "enqueue_index_job_if_needed", return_value=True) as enqueue, \
+             mock.patch.object(embeddings, "enqueue_reencode_job_if_needed", return_value=False):
             result = tasks.run_scrape()
         self.assertTrue(result["ok"])
         enqueue.assert_called_once_with()
@@ -183,10 +184,12 @@ class EnqueueTests(TestCase):
         """Contract: V3 (a scrape that raised has nothing new to index)"""
         with mock.patch("ratings.scraper.run", side_effect=RuntimeError("boom")), \
              mock.patch("ratings.scraper.vision_config_from_settings"), \
-             mock.patch.object(search, "enqueue_index_job_if_needed") as enqueue:
+             mock.patch.object(search, "enqueue_index_job_if_needed") as enqueue, \
+             mock.patch.object(embeddings, "enqueue_reencode_job_if_needed") as reencode:
             result = tasks.run_scrape()
         self.assertFalse(result["ok"])
         enqueue.assert_not_called()
+        reencode.assert_not_called()
 
 
 class LastReportTests(TestCase):
@@ -298,7 +301,7 @@ class IndexViewsTests(TestCase):
         self.assertIn('hx-trigger="every 5s"', indicator)
 
         response = self.client.post(reverse("fresh_start"), {"confirm": CONFIRM_WORD}, follow=True)
-        self.assertIn("index job is running", response.content.decode())
+        self.assertIn("re-encode job is running", response.content.decode())
         self.assertEqual(Image.objects.count(), 1)
 
     def test_context_processor_stays_quiet_when_the_queue_table_is_unavailable(self) -> None:

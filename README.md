@@ -82,6 +82,49 @@ docker compose run --rm memelord index_search  # build the text-search index in 
 > `docker compose run --rm memelord python manage.py dumpdata ratings > backup.json`
 > (or copy `data/memelord.db`). A fresh install has nothing to lose and needs no action.
 
+## Upgrading to 2.3 — one taste model per source, 448 px vectors
+
+2.3 changes how taste is learned and what it is learned from:
+
+- **One rating category per source.** Every scrape source (board, topic, blog,
+  handle) is its own category. Training fits the shared classifier as before
+  and, for every source with at least 10 liked (score ≥ 3) and 10 disliked
+  (score ≤ 2, trash included) images, one classifier on that source's ratings
+  only. Predictions come from the source's own model when it has one, else from
+  the shared one, so "a good /b/ image" and "a good miniature" stop competing on
+  one scale. The Stats page shows liked/disliked counts per source and whether
+  it has its own model; the train log says so per source.
+- **Two vectors per image.** The taste feature is the DINOv3 vector plus the
+  SigLIP2 search vector. An image is trained on and predicted only when it has
+  both; until the search index has reached it, it shows in review without a
+  prediction. Keep the search index running (Config → Search index).
+- **DINOv3 at 448 px.** The encoder now sees every image at 448×448 instead of
+  224×224, for the fine structure the criteria depend on (brush work on a
+  miniature, the texture of a wallpaper). Every stored DINOv3 vector is from the
+  old resolution and counts as stale: dedup by vector, similar images and kNN
+  tag suggestions work only over re-encoded images until the library is
+  through. SHA-256 and pHash dedup are unaffected.
+
+After deploying:
+
+1. Press **Re-encode now** under Config → Taste vectors (the chain also starts
+   by itself after the next scrape). It runs in the background worker in slices
+   of 500, most recently rated images first, about 15 minutes per slice on a
+   CPU (roughly 1.7 s per image, so a 25,000-image library takes about twelve
+   hours); scrapes get their turn between slices. The nav indicator shows the
+   progress.
+2. Press **Train** once the rated images are through (the first slice or two).
+   Training re-encodes any rated image the chain has not reached yet, fetches
+   missing search vectors for rated images, and writes the taste and NSFW
+   models with the new stamp. Classifier files from the old resolution are
+   ignored until then; existing predictions stay in place and are replaced by
+   the classification pass after training.
+
+Expect a worker running at full CPU for the duration of the chain and about
+four times the per-image RAM of 224 px (the batch size dropped from 32 to 16).
+
+---
+
 ## Upgrading to DINOv3 — one Train run migrates the library
 
 The encoder moved from DINOv2 ViT-B/14 to DINOv3 ViT-B/16. Every stored
@@ -181,11 +224,11 @@ The **Tags** page (under the `⋯` menu) lists all tags by image count. Rename i
 
 ## Training
 
-Positive class is score ≥ 3, negative is score ≤ 2; unrated images are excluded. Scores 5–6 and trash (0) carry weight 3.0, everything else 1.0, so your strongest opinions pull hardest on the decision boundary. Trigger it from the **Stats** page or with `make train`. A separate NSFW classifier on the same embeddings feeds the NSFW queue.
+Positive class is score ≥ 3, negative is score ≤ 2; unrated images are excluded. Scores 5–6 and trash (0) carry weight 3.0, everything else 1.0, so your strongest opinions pull hardest on the decision boundary; the liked and the disliked side are then balanced to equal total weight. Training fits one shared model on all ratings and one model per source with at least 10 liked and 10 disliked images (see "Upgrading to 2.3"). Trigger it from the **Stats** page or with `make train`. A separate NSFW classifier on the DINOv3 vectors alone feeds the NSFW queue.
 
 ## Stats & logs
 
-The **Stats** page summarises queue sizes (to rate / gallery / below cutoff), score distribution, source breakdown, tagging coverage, top tags, average time from scrape to rating, the last training run (with error trace on failure), and 7-day scrape & rate velocity.
+The **Stats** page summarises queue sizes (to rate / gallery / below cutoff), score distribution, source breakdown (with liked/disliked counts and whether the source has its own taste model), tagging coverage, top tags, average time from scrape to rating, the last training run (with error trace on failure), and 7-day scrape & rate velocity.
 
 The **Logs** page surfaces background scrape and train output for in-app debugging.
 

@@ -45,6 +45,25 @@
       {% endif %}
     </div>
 
+    <div class="section">
+      <div class="section-title">Taste vectors</div>
+      <p class="hint">
+        The taste model, duplicate detection and similar images read a DINOv3 vector per image,
+        encoded at 448 px. After an encoder change every image is re-encoded in the background in
+        slices of 500 (about 15 minutes each on CPU); the chain starts by itself after every scrape.
+      </p>
+      <div class="job-actions">
+        <button type="button" class="btn-pill btn-pill--accent"
+                hx-post="{% url 'trigger_taste_reencode' %}" hx-target="#reencode-result" hx-swap="outerHTML"
+                {% if reencode_queued %}disabled{% endif %}>⟳ Re-encode now</button>
+      </div>
+      {% if reencode_queued %}
+        {% include "ratings/_reencode_pending.html" %}
+      {% else %}
+        {% include "ratings/_reencode_result.html" %}
+      {% endif %}
+    </div>
+
     <div class="schedule-section">
       <div class="section-title">Auto-scrape</div>
       {% include "ratings/_schedule_status.html" %}
@@ -106,7 +125,7 @@
         {% csrf_token %}
         <input type="hidden" name="confirm" value="" data-confirm-field>
         <button type="submit" class="btn-pill btn-pill--danger"
-                {% if active_task_id or active_scrape_task_id or index_queued %}disabled title="Wait for the running job to finish"{% endif %}>Start over…</button>
+                {% if active_task_id or active_scrape_task_id or index_queued or reencode_queued %}disabled title="Wait for the running job to finish"{% endif %}>Start over…</button>
       </form>
     </div>
 

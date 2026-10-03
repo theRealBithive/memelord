@@ -15,7 +15,7 @@ from django.views.decorators.http import require_POST
 
 import ratings.notifiers as notifiers
 from core.brain import EncoderUnavailableError
-from ratings import features, reset, search, similar
+from ratings import embeddings, features, reset, search, similar
 from ratings.models import (
     Image,
     LogEntry,
@@ -840,6 +840,7 @@ def config_view(request):
             **_vision_ctx(),
             **_channel_list_ctx(),
             **_index_status_ctx(),
+            **_reencode_status_ctx(),
         },
     )
 
@@ -1810,6 +1811,54 @@ def search_index_status(request):
     return _render_index_status(request)
 
 
+def _reencode_status_ctx() -> dict:
+    """
+    Everything the taste-vector block on the config page needs (taste contract
+    V21), read from the database and the queue table like _index_status_ctx,
+    never from the session: the chain is many short tasks with new ids.
+    """
+    current, total = embeddings.taste_vector_counts()
+    remaining = total - current
+    queued = embeddings.reencode_job_queued()
+    report = None
+    if not queued and remaining > 0:
+        report = embeddings.last_reencode_report()
+    return {
+        "reencoded": current,
+        "reencode_total": total,
+        "reencode_remaining": remaining,
+        "reencode_queued": queued,
+        "reencode_report": report,
+    }
+
+
+def _render_reencode_status(request):
+    ctx = _reencode_status_ctx()
+    if ctx["reencode_queued"]:
+        return render(request, "ratings/_reencode_pending.html", ctx)
+    return render(request, "ratings/_reencode_result.html", ctx)
+
+
+@login_required
+@require_POST
+def trigger_taste_reencode(request):
+    """
+    Start the taste re-encode chain and return its status fragment (V20, V21).
+
+    Like trigger_search_index there is no session bookkeeping, and
+    enqueue_reencode_job_if_needed refuses a second chain, so a double tap
+    just re-renders the pending state.
+    """
+    embeddings.enqueue_reencode_job_if_needed()
+    return _render_reencode_status(request)
+
+
+@login_required
+def taste_reencode_status(request):
+    """Polling target of _reencode_pending.html; the fragment it returns decides whether polling goes on."""
+    return _render_reencode_status(request)
+
+
 @login_required
 def job_indicator(request):
     """
@@ -1855,7 +1904,7 @@ def fresh_start_view(request):
     if _job_is_running(request):
         messages.error(
             request,
-            "A scrape, train or index job is running. Wait for it to finish before starting over.",
+            "A scrape, train, index or re-encode job is running. Wait for it to finish before starting over.",
         )
         return redirect("config")
     if request.POST.get("confirm", "").strip() != reset.CONFIRM_WORD:

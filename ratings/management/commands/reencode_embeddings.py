@@ -24,7 +24,7 @@ class Command(BaseCommand):
             help="Images saved to the DB per chunk (resume granularity).",
         )
         parser.add_argument(
-            "--batch-size", type=int, default=32, help="Images per encoder forward pass."
+            "--batch-size", type=int, default=16, help="Images per encoder forward pass."
         )
         parser.add_argument(
             "--dry-run", action="store_true", help="Only report how many rows are stale."
