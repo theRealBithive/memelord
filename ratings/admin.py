@@ -33,11 +33,13 @@ class ImageAdmin(admin.ModelAdmin):
         "source_label",
         "score",
         "is_nsfw",
+        "nsfw_judged",
         "rated_at",
         "downloaded_at",
     )
     list_filter = (
         "is_nsfw",
+        "nsfw_judged",
         "source_label",
         "is_purged",
     )

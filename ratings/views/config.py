@@ -23,7 +23,11 @@ from ratings.models import (
 from ratings.queue_rules import normalize_queue_order, review_settings_row
 from ratings.toast import with_toast
 from ratings.views.common import DATA_DIR, int_in_range, nav_counts
-from ratings.views.jobs import index_status_ctx, reencode_status_ctx
+from ratings.views.jobs import (
+    classify_status_ctx,
+    index_status_ctx,
+    reencode_status_ctx,
+)
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 
@@ -80,6 +84,7 @@ def config_view(request):
             **_channel_list_ctx(),
             **index_status_ctx(),
             **reencode_status_ctx(),
+            **classify_status_ctx(),
         },
     )
 

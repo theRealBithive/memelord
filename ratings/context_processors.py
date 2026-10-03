@@ -69,7 +69,22 @@ def active_jobs(request):
         **jobs.scrape_ctx(request),
         **_index_job_ctx(),
         **_reencode_job_ctx(),
+        **_classify_job_ctx(),
     }
+
+
+def _classify_job_ctx() -> dict:
+    """
+    Whether a "Classify now" run is queued, for the nav indicator (NSFW
+    contract N5); read from the queue table like the two chains, with the
+    same quiet failure before django-q's tables exist.
+    """
+    try:
+        from ratings import classify
+
+        return {"active_classify": classify.classify_job_queued()}
+    except Exception:
+        return {"active_classify": False}
 
 
 def _reencode_job_ctx() -> dict:

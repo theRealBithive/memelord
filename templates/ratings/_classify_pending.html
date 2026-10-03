@@ -1,0 +1,8 @@
+<div id="classify-result" class="train-result train-pending"
+     hx-get="{% url 'classify_status' %}"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML">
+  <span class="train-icon train-spin">⟳</span>
+  <span>Classifying… the NSFW head and the taste model walk the unrated images.</span>
+</div>
+{% include "ratings/_nav_job.html" with nav_job_oob=True %}

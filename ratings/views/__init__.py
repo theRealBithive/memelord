@@ -44,6 +44,7 @@ from ratings.views.gallery import (
     update_image_tags,
 )
 from ratings.views.jobs import (
+    classify_status,
     fresh_start_view,
     job_indicator,
     log_clear,
@@ -53,6 +54,7 @@ from ratings.views.jobs import (
     search_index_status,
     taste_reencode_status,
     train_status,
+    trigger_classify,
     trigger_scrape,
     trigger_search_index,
     trigger_taste_reencode,
@@ -75,6 +77,7 @@ __all__ = [
     "channel_delete",
     "channel_save",
     "channel_toggle",
+    "classify_status",
     "config_view",
     "fresh_start_view",
     "gallery",
@@ -111,6 +114,7 @@ __all__ = [
     "taste_reencode_status",
     "toggle_nsfw",
     "train_status",
+    "trigger_classify",
     "trigger_scrape",
     "trigger_search_index",
     "trigger_taste_reencode",

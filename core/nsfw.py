@@ -5,6 +5,17 @@ from sklearn.linear_model import LogisticRegression
 
 from core import brain
 
+# A head fitted on fewer decided examples than this says more about the few
+# pictures than about the operator's line (NSFW contract N6); the same floor
+# as a taste group's own model.
+MIN_NSFW_EXAMPLES = 10
+MIN_SAFE_EXAMPLES = 10
+
+
+def has_enough_examples(nsfw_count: int, safe_count: int) -> bool:
+    """Whether the decided examples suffice to fit the head (NSFW contract N6)."""
+    return nsfw_count >= MIN_NSFW_EXAMPLES and safe_count >= MIN_SAFE_EXAMPLES
+
 
 def train_nsfw_classifier(
     X: np.ndarray,

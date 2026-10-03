@@ -267,7 +267,7 @@ def classify_images(
     encoder=None,
     transform=None,
     nsfw_clf=None,
-) -> None:
+) -> dict:
     """
     Run taste classifier + NSFW tagger on all unscored images; backfill phash/embedding.
 
@@ -275,17 +275,23 @@ def classify_images(
     is expensive and partial progress is durable because we save per-image.
     predicted_score IS NULL is the "show anyway" signal for fresh images that
     have never been through the classifier; once set it drives the visibility dial.
+
+    The NSFW head only touches rows nobody has decided (NSFW contract N3), in
+    both directions: an undecided flag is the head's own earlier guess, so a
+    newer head may revise it, while a flag a person set or confirmed stays.
+    Returns the counts the "Classify now" report shows (N5).
     """
+    counts = {"processed": 0, "nsfw_tagged": 0, "nsfw_untagged": 0}
     need_vision = vision.weights_path and vision.weights_path.exists()
     need_nsfw = bool(vision.nsfw_weights_path and vision.nsfw_weights_path.exists())
     if not need_vision and not need_nsfw and nsfw_clf is None:
-        return
+        return counts
 
     images = list(
         Image.objects.filter(is_purged=False, score__isnull=True).order_by("downloaded_at")
     )
     if not images:
-        return
+        return counts
 
     logger.info("Auto-classifying {} images.", len(images))
 
@@ -327,6 +333,7 @@ def classify_images(
         nsfw_clf = brain.load_classifier(vision.nsfw_weights_path)
 
     nsfw_tagged = 0
+    nsfw_untagged = 0
     waiting_for_search_vector = 0
     for img in images:
         path = data_dir / img.file_path
@@ -348,12 +355,19 @@ def classify_images(
             img.phash = phash_mod.compute_phash(path)
             update_fields.append("phash")
 
-        if nsfw_clf is not None and not img.is_nsfw:
+        if nsfw_clf is not None and not img.nsfw_judged:
             predicted = nsfw.predict_nsfw(nsfw_clf, emb, vision.nsfw_threshold)
-            if predicted:
-                img.is_nsfw = True
-                update_fields.append("is_nsfw")
-                nsfw_tagged += 1
+            if predicted != img.is_nsfw:
+                # The flag picks the taste category, so the stored prediction
+                # came from the wrong model the moment it flips; the block
+                # below renews it when the feature is there (N5).
+                img.is_nsfw = predicted
+                img.predicted_score = None
+                update_fields.extend(["is_nsfw", "predicted_score"])
+                if predicted:
+                    nsfw_tagged += 1
+                else:
+                    nsfw_untagged += 1
 
         if taste_model is not None:
             # The DINOv3 half is current by now (read or just encoded above);
@@ -382,10 +396,13 @@ def classify_images(
             waiting_for_search_vector,
         )
     logger.info(
-        "Classified: {} NSFW-tagged, {} total processed.",
+        "Classified: {} NSFW-tagged, {} untagged, {} total processed.",
         nsfw_tagged,
+        nsfw_untagged,
         len(images),
     )
+    counts.update(processed=len(images), nsfw_tagged=nsfw_tagged, nsfw_untagged=nsfw_untagged)
+    return counts
 
 
 def populate_knn_tag_suggestions(

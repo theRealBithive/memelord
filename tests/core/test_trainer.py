@@ -262,51 +262,19 @@ class TrainerTests(TestCase):
         encoded_paths = mock_encode.call_args.args[1]
         self.assertEqual(encoded_paths, [bad])
 
-    @patch.object(brain, "get_transform")
-    @patch.object(brain, "get_encoder")
-    @patch.object(brain, "encode")
-    def test_run_saves_nsfw_weights_when_labels_exist(
-        self, mock_encode, mock_get_encoder, mock_get_transform
-    ) -> None:
-        """run() saves NSFW classifier when both classes exist."""
-        self._write_image("images/pos.png")
-        self._write_image("images/neg.png")
-        self._write_image("images/safe.png")
-        self._write_image("images/nsfw.png")
-        ImageModel.objects.create(
-            content_hash=uuid.uuid4().hex,
-            file_path="images/pos.png",
-            source_label="t",
-            score=5,
-            **_search_fields(1),
-        )
-        ImageModel.objects.create(
-            content_hash=uuid.uuid4().hex,
-            file_path="images/neg.png",
-            source_label="t",
-            score=1,
-            **_search_fields(2),
-        )
-        ImageModel.objects.create(
-            content_hash=uuid.uuid4().hex,
-            file_path="images/safe.png",
-            source_label="t",
-            is_nsfw=False,
-        )
-        ImageModel.objects.create(
-            content_hash=uuid.uuid4().hex,
-            file_path="images/nsfw.png",
-            source_label="t",
-            is_nsfw=True,
-        )
-        mock_get_encoder.return_value = None
-        all_paths = [
-            self.data_dir / "images/pos.png",
-            self.data_dir / "images/neg.png",
-            self.data_dir / "images/safe.png",
-            self.data_dir / "images/nsfw.png",
-        ]
-        mock_encode.return_value = (np.random.randn(4, 768).astype(np.float32), all_paths)
+    def test_run_saves_nsfw_weights_when_enough_decided_examples_exist(self) -> None:
+        """
+        run() saves the NSFW head once ten decided flagged and ten decided
+        safe rows exist (NSFW contract N1, N6); the rated pair is decided too
+        and counts on the safe side.
+        """
+        self._make_cached("t", 5, 1)
+        self._make_cached("t", 1, 2)
+        for seed in range(10, 20):
+            self._make_cached("t", None, seed, search=False, is_nsfw=True)
+        for seed in range(20, 28):
+            self._make_cached("t", None, seed, search=False)
+        ImageModel.objects.update(nsfw_judged=True)
 
         taste_path = self.data_dir / "taste.pkl"
         nsfw_path = self.data_dir / "nsfw.pkl"

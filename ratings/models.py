@@ -33,6 +33,12 @@ class Image(models.Model):
     downloaded_at = models.DateTimeField(auto_now_add=True)
     rated_at = models.DateTimeField(null=True, blank=True)
     is_nsfw = models.BooleanField(default=False)
+    # True once a person decided the flag: toggled it, or rated the image with
+    # the flag as it stood. The NSFW head trains on decided rows only and may
+    # change the flag only on undecided ones (NSFW contract N1-N3): the same
+    # split as score (the operator's) against predicted_score (the model's),
+    # so the head never learns from its own guesses.
+    nsfw_judged = models.BooleanField(default=False)
     score = models.IntegerField(null=True, blank=True)
     is_purged = models.BooleanField(default=False)
     phash = models.CharField(max_length=16, blank=True, default="", db_index=True)
@@ -99,6 +105,13 @@ class Image(models.Model):
                     "predicted_score",
                 ],
                 name="image_review_shuffle_idx",
+            ),
+            # The NSFW head's training set and the stats line count decided
+            # rows by flag (NSFW contract N1, N8); is_purged rides along so the
+            # counts are index-only on the wide table.
+            models.Index(
+                fields=["nsfw_judged", "is_nsfw", "is_purged"],
+                name="image_nsfw_judged_idx",
             ),
             # The two chain counts ("N left" in the nav on every page while a
             # chain is queued, and the Config page) ask how many live rows

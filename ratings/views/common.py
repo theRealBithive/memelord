@@ -115,8 +115,11 @@ def flip_nsfw_and_repredict(image) -> None:
     treatment: the stored value is cheap to refresh and the gallery shows it.
     """
     image.is_nsfw = not image.is_nsfw
+    # A hand toggle is a person's decision in either direction (NSFW contract
+    # N2); from here on the model leaves this flag alone (N3).
+    image.nsfw_judged = True
     image.predicted_score = None
-    image.save(update_fields=["is_nsfw", "predicted_score"])
+    image.save(update_fields=["is_nsfw", "nsfw_judged", "predicted_score"])
     taste_prediction(image)
 
 
@@ -194,10 +197,15 @@ def apply_score(image: Image, score: int) -> None:
 
     rated_at is stamped together with the score so the stats dwell time and
     the re-encode order ("most recently rated first") see the same moment.
+
+    A rating also records that a person decided the NSFW flag as it stands
+    (NSFW contract N2): whoever rates has looked at the picture, so a flag
+    left on is confirmed and a flag left off is a safe example for the head.
     """
     image.score = score
     image.rated_at = timezone.now()
-    image.save(update_fields=["score", "rated_at"])
+    image.nsfw_judged = True
+    image.save(update_fields=["score", "rated_at", "nsfw_judged"])
 
 
 @login_required

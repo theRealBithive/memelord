@@ -51,14 +51,19 @@ def collect_nsfw_paths(data_dir: Path) -> tuple[list[Path], list[Path]]:
     """
     Return (nsfw_paths, safe_paths) for NSFW classifier training.
 
-    Uses is_nsfw labels across all images regardless of score, so the NSFW
-    head is trained on the full available signal.
+    Only rows a person decided take part (NSFW contract N1). The flag of an
+    undecided row is the model's own earlier guess or the default, and a head
+    trained on those learns its own mistakes: with 25k unreviewed rows counted
+    as "safe", every unflagged NSFW picture among them taught the head that
+    its kind is safe. Decided and flagged is an NSFW example; decided and
+    unflagged (rated without flagging, or un-flagged by hand) is a safe one,
+    rated or not: the operator flags far more than they rate.
     """
     from ratings.models import Image
 
     nsfw_paths: list[Path] = []
     safe_paths: list[Path] = []
-    for img in Image.objects.filter(is_purged=False):
+    for img in Image.objects.filter(is_purged=False, nsfw_judged=True):
         path = data_dir / img.file_path
         if not path.exists() or not brain.is_image_path(path):
             continue
@@ -320,10 +325,16 @@ def run(
         raise RuntimeError("Need at least one good and one bad image to train.")
 
     nsfw_paths, safe_paths = collect_nsfw_paths(data_dir)
-    train_nsfw = bool(nsfw_paths and safe_paths)
+    train_nsfw = nsfw.has_enough_examples(len(nsfw_paths), len(safe_paths))
     if nsfw_weights_path and not train_nsfw:
+        # The previous head stays on disk and in use (NSFW contract N6).
         logger.warning(
-            "Skipping NSFW classifier: need at least one is_nsfw=True and one False image."
+            "NSFW head not trained: {} flagged, {} safe decided image(s), needs {}/{}; "
+            "keeping the previous head.",
+            len(nsfw_paths),
+            len(safe_paths),
+            nsfw.MIN_NSFW_EXAMPLES,
+            nsfw.MIN_SAFE_EXAMPLES,
         )
 
     all_paths = sorted(

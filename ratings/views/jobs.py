@@ -24,7 +24,7 @@ from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from ratings import embeddings, reset, search
+from ratings import classify, embeddings, reset, search
 from ratings.models import Image, LogEntry
 from ratings.views.common import nav_counts
 
@@ -481,6 +481,49 @@ def taste_reencode_status(request):
     return _render_reencode_status(request)
 
 
+def classify_status_ctx() -> dict:
+    """
+    Everything the NSFW-head block on the config page needs (NSFW contract
+    N5, N8): the decided counts, whether a run is queued, and the last run's
+    outcome while none is.
+    """
+    queued = classify.classify_job_queued()
+    report = None
+    if not queued:
+        report = classify.last_classify_report()
+    return {
+        "classify_queued": queued,
+        "classify_report": report,
+        **classify.nsfw_head_counts(),
+    }
+
+
+def _render_classify_status(request):
+    ctx = classify_status_ctx()
+    if ctx["classify_queued"]:
+        return render(request, "ratings/_classify_pending.html", ctx)
+    return render(request, "ratings/_classify_result.html", ctx)
+
+
+@login_required
+@require_POST
+def trigger_classify(request):
+    """
+    Queue one classify run and return its status fragment (NSFW contract N5).
+
+    No session bookkeeping, like the two chains; enqueue_classify_job refuses
+    a second run, so a double tap just re-renders the pending state.
+    """
+    classify.enqueue_classify_job()
+    return _render_classify_status(request)
+
+
+@login_required
+def classify_status(request):
+    """Polling target of _classify_pending.html; the fragment it returns decides whether polling goes on."""
+    return _render_classify_status(request)
+
+
 # ── Nav indicator and fresh start ────────────────────────────────────────────
 
 
@@ -551,7 +594,7 @@ def fresh_start_view(request):
 
 # ── Log viewer ───────────────────────────────────────────────────────────────
 
-_LOG_SOURCES = {"scrape", "train"}
+_LOG_SOURCES = {"scrape", "train", "index", "reencode", "classify"}
 
 
 def _log_source_filter(request) -> str | None:

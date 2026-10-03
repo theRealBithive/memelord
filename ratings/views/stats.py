@@ -8,6 +8,7 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from core import taste
+from ratings import classify
 from ratings.models import Image, Tag
 from ratings.views.common import get_taste_model, nav_counts, weights_last_modified
 from ratings.views.jobs import task_outcome
@@ -135,6 +136,7 @@ def stats(request):
         "ratings/stats.html",
         {
             **nav_counts(show_nsfw),
+            **classify.nsfw_head_counts(),
             "show_nsfw": show_nsfw,
             "last_trained": weights_last_modified(),
             "last_train": _last_train_info(),

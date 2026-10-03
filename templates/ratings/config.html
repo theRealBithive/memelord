@@ -64,6 +64,27 @@
       {% endif %}
     </div>
 
+    <div class="section">
+      <div class="section-title">NSFW head</div>
+      <p class="hint">
+        Trained on the images you decided: {{ nsfw_flagged_judged }} flagged and {{ nsfw_safe_judged }} safe
+        (rated without a flag, or un-flagged). A flag the model sets sends the image to the NSFW queue and
+        counts for nothing until you confirm or remove it with the n key or a rating. Classify now applies the
+        current head and taste model to every unrated image nobody has decided on; a scrape and a training do
+        the same at their end.
+      </p>
+      <div class="job-actions">
+        <button type="button" class="btn-pill btn-pill--accent"
+                hx-post="{% url 'trigger_classify' %}" hx-target="#classify-result" hx-swap="outerHTML"
+                {% if classify_queued %}disabled{% endif %}>⟳ Classify now</button>
+      </div>
+      {% if classify_queued %}
+        {% include "ratings/_classify_pending.html" %}
+      {% else %}
+        {% include "ratings/_classify_result.html" %}
+      {% endif %}
+    </div>
+
     <div class="schedule-section">
       <div class="section-title">Auto-scrape</div>
       {% include "ratings/_schedule_status.html" %}
@@ -125,7 +146,7 @@
         {% csrf_token %}
         <input type="hidden" name="confirm" value="" data-confirm-field>
         <button type="submit" class="btn-pill btn-pill--danger"
-                {% if active_task_id or active_scrape_task_id or index_queued or reencode_queued %}disabled title="Wait for the running job to finish"{% endif %}>Start over…</button>
+                {% if active_task_id or active_scrape_task_id or index_queued or reencode_queued or classify_queued %}disabled title="Wait for the running job to finish"{% endif %}>Start over…</button>
       </form>
     </div>
 

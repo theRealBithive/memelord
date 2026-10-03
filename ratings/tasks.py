@@ -182,6 +182,32 @@ def run_taste_reencode():
         logger.remove(sink_id)
 
 
+def run_classify():
+    """
+    Apply the current NSFW head and taste model to the unrated backlog on
+    demand (NSFW contract N5): the same pass a scrape and a training end
+    with, without the scrape or the training. Its own log source so the
+    operator can find its lines in the log viewer.
+    """
+    from loguru import logger
+
+    from ratings import scraper
+
+    _trim_logs()
+    sink_id = logger.add(_db_sink("classify"), format="{message}")
+    try:
+        counts = scraper.classify_images(
+            data_dir=Path(settings.DATA_DIR),
+            vision=scraper.vision_config_from_settings(),
+        )
+        return {"ok": True, **counts}
+    except Exception as exc:
+        logger.error("Classify failed: {}", exc)
+        return {"ok": False, "error": str(exc)}
+    finally:
+        logger.remove(sink_id)
+
+
 def run_search_index():
     """
     Encode one slice of the search index and queue the next one (V3, V13, V14).

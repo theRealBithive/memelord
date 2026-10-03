@@ -1,0 +1,10 @@
+<div id="classify-result" class="train-result {% if classify_report %}{% if classify_report.ok %}train-ok{% else %}train-err{% endif %}{% endif %}">
+{% if classify_report %}
+  <span class="train-icon">{% if classify_report.ok %}✓{% else %}✕{% endif %}</span>
+  <span>{{ classify_report.text }} {{ nsfw_undecided_flags }} model flag{{ nsfw_undecided_flags|pluralize }} awaiting your decision.</span>
+{% else %}
+  <span class="train-icon">·</span>
+  <span>{{ nsfw_undecided_flags }} model flag{{ nsfw_undecided_flags|pluralize }} awaiting your decision.</span>
+{% endif %}
+</div>
+{% include "ratings/_nav_job.html" with nav_job_oob=True %}

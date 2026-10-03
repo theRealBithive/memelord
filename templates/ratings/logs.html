@@ -11,6 +11,9 @@
           <a href="{% url 'logs' %}" class="btn-pill{% if active_source == 'all' %} active{% endif %}">All</a>
           <a href="{% url 'logs' %}?source=train" class="btn-pill{% if active_source == 'train' %} active{% endif %}">Train</a>
           <a href="{% url 'logs' %}?source=scrape" class="btn-pill{% if active_source == 'scrape' %} active{% endif %}">Scrape</a>
+          <a href="{% url 'logs' %}?source=index" class="btn-pill{% if active_source == 'index' %} active{% endif %}">Index</a>
+          <a href="{% url 'logs' %}?source=reencode" class="btn-pill{% if active_source == 'reencode' %} active{% endif %}">Re-encode</a>
+          <a href="{% url 'logs' %}?source=classify" class="btn-pill{% if active_source == 'classify' %} active{% endif %}">Classify</a>
         </nav>
         <form method="post" action="{% url 'log_clear' %}" data-confirm="Clear all log entries?" data-confirm-label="Clear">
           {% csrf_token %}
