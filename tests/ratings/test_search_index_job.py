@@ -205,14 +205,24 @@ class LastReportTests(TestCase):
     def test_a_crashed_worker_is_reported_too(self) -> None:
         """Contract: V15"""
         _finished_task(success=False, result="Traceback …")
-        self.assertIn("Traceback", search.last_index_report())
+        self.assertEqual(search.last_index_report(), "Last index run failed: Traceback …")
+
+    def test_a_worker_that_left_no_result_is_reported_in_plain_words(self) -> None:
+        """Contract: V15 (a killed worker leaves success=False and no result; the page still says what happened)"""
+        _finished_task(success=False, result=None)
+        self.assertEqual(
+            search.last_index_report(),
+            "Last index run failed: Task exited without a result.",
+        )
 
     def test_the_stop_rule_is_reported_with_the_count(self) -> None:
         """Contract: V14, V15"""
         _finished_task(success=True, result={"ok": True, "encoded": 0, "remaining": 4})
-        report = search.last_index_report()
-        self.assertIn("4 image(s) could not be indexed", report)
-        self.assertIn("repair_orphans", report)
+        self.assertEqual(
+            search.last_index_report(),
+            "4 image(s) could not be indexed (file missing or unreadable). "
+            "Run `manage.py repair_orphans`, then index again.",
+        )
 
     def test_an_ordinary_slice_has_nothing_to_report(self) -> None:
         """Contract: V15"""

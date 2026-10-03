@@ -103,17 +103,18 @@ class VectorBank:
 
     def _load(self) -> None:
         """
-        Rows are streamed in chunks and ordered by content_hash, so the matrix
-        is built without holding 25k model instances and its row order does not
-        depend on insertion history. Purged rows are kept: the matrix mirrors
-        the stamp, and the caller's candidate set is what excludes them.
+        Rows are streamed through iterator() (2000 per fetch, Django's
+        default) and ordered by content_hash, so the matrix is built without
+        holding 25k model instances and its row order does not depend on
+        insertion history. Purged rows are kept: the matrix mirrors the stamp,
+        and the caller's candidate set is what excludes them.
         """
         rows = (
             Image.objects.filter(**{self.stamp_field: self.stamp})
             .exclude(**{f"{self.blob_field}__isnull": True})
             .order_by("content_hash")
             .values_list("content_hash", self.blob_field)
-            .iterator(chunk_size=2000)
+            .iterator()
         )
         hashes: list[str] = []
         vectors: list[np.ndarray] = []

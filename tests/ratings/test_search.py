@@ -122,6 +122,7 @@ from hypothesis import given
 from hypothesis import settings as hsettings
 from hypothesis import strategies as st
 from hypothesis.extra.django import TestCase as HypothesisTestCase
+from loguru import logger
 from PIL import Image as PILImage
 
 from core import brain, siglip
@@ -329,6 +330,39 @@ class EncodeStaleTests(TestCase):
             {"encoder": my_encoder, "transform": my_transform, "batch_size": 7, "progress_label": "unit"},
         )
 
+    def test_progress_line_reports_done_of_total_under_the_label(self) -> None:
+        """The in-app log is how the operator follows a 10-minute slice: one line per chunk, "label: done/total images encoded with <encoder>", under the default label "index"."""
+        for _ in range(3):
+            _write_png(self.data_dir, _row(stamp=None).file_path)
+        lines: list[str] = []
+        sink_id = logger.add(lines.append, format="{message}", level="INFO")
+        try:
+            self._encode(chunk_size=2)
+        finally:
+            logger.remove(sink_id)
+        progress = [line.rstrip("\n") for line in lines if "images encoded" in line]
+        self.assertEqual(
+            progress,
+            [
+                f"index: 2/3 images encoded with {CURRENT}",
+                f"index: 3/3 images encoded with {CURRENT}",
+            ],
+        )
+
+    def test_defaults_are_chunks_of_256_rows_in_batches_of_32(self) -> None:
+        """Without explicit sizes the pass hands the encoder 256 paths at a time in batches of 32: the memory shape the 25k run was sized for."""
+        for _ in range(257):
+            _write_png(self.data_dir, _row(stamp=None).file_path)
+        calls: list[tuple[int, int]] = []
+
+        def _recording_encode(encoder, image_paths, transform=None, device=None, batch_size=32, progress_label=""):
+            calls.append((len(image_paths), batch_size))
+            return _fake_encode(encoder, image_paths)
+
+        with mock.patch.object(brain, "encode", side_effect=_recording_encode):
+            search.encode_stale_search_embeddings(self.data_dir, encoder=object(), transform=object())
+        self.assertEqual(calls, [(256, 32), (1, 32)])
+
     def test_each_row_is_saved_as_soon_as_its_chunk_is_encoded(self) -> None:
         """Contract: V3 (risk R5)"""
         rows = [_row(stamp=None) for _ in range(3)]
@@ -385,16 +419,15 @@ class EncodeStaleTests(TestCase):
         self.assertEqual(img.embedding_model, brain.ENCODER_ID)
         self.assertTrue(search.has_search_embedding(img))
 
-    def test_rows_are_loaded_without_the_taste_blob(self) -> None:
-        """Contract: V3 (risk R15: 25k rows must not drag 75 MB of DINOv3 blobs along)"""
-        img = _row(stamp=None, taste_seed=1)
-        _write_png(self.data_dir, img.file_path)
+    def test_rows_are_loaded_without_the_taste_blob_and_in_one_query(self) -> None:
+        """Contract: V3 (risk R15: 25k rows must not drag 75 MB of DINOv3 blobs along, nor be fetched one by one)"""
+        for _ in range(3):
+            _write_png(self.data_dir, _row(stamp=None, taste_seed=1).file_path)
         with CaptureQueriesContext(connection) as captured:
             self._encode()
         selects = [q["sql"] for q in captured.captured_queries if q["sql"].startswith("SELECT") and "ratings_image" in q["sql"]]
-        self.assertTrue(selects)
-        for sql in selects:
-            self.assertNotIn('"ratings_image"."embedding"', sql)
+        self.assertEqual(len(selects), 1)
+        self.assertNotIn('"ratings_image"."embedding"', selects[0])
 
     def test_missing_transform_is_loaded_from_the_checkpoint(self) -> None:
         """Contract: V9 (the processor shipped with the checkpoint, never a hand-made one)"""

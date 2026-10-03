@@ -177,6 +177,14 @@ class VectorBankTests(TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first, sorted(t.content_hash for t in twins))
 
+    def test_ties_keep_content_hash_order_even_in_large_groups(self) -> None:
+        """Contract: V6 (ties are broken by content_hash beyond the small arrays where every sort happens to be stable)"""
+        near = [_row(7) for _ in range(20)]
+        far = [_row(8) for _ in range(20)]
+        hashes, _ = _bank().rank(_vector(7))
+        self.assertEqual(hashes[:20], sorted(r.content_hash for r in near))
+        self.assertEqual(hashes[20:], sorted(r.content_hash for r in far))
+
     def test_blobs_from_the_database_round_trip_into_unit_rows(self) -> None:
         """Contract: V16 (risk R6: BinaryField hands back a memoryview)"""
         row = _row(11)
