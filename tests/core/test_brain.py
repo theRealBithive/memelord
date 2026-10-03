@@ -126,6 +126,28 @@ class _ZeroEncoder(torch.nn.Module):
         return torch.zeros(batch.size(0), 768)
 
 
+class _BatchSizeRecordingEncoder(torch.nn.Module):
+    """Records how many images each forward pass received."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batch_sizes: list[int] = []
+
+    def forward(self, batch: torch.Tensor) -> torch.Tensor:
+        self.batch_sizes.append(batch.size(0))
+        return torch.zeros(batch.size(0), 768)
+
+
+def test_encode_runs_batches_of_16_by_default(tmp_path: Path) -> None:
+    """At 448 px one image carries four times the activations of 224 px, so the default batch dropped from 32 to 16 (taste risk R9); every caller that passes no batch_size relies on it."""
+    paths = [_solid_png(tmp_path / f"{i}.png") for i in range(17)]
+    encoder = _BatchSizeRecordingEncoder()
+
+    brain.encode(encoder, paths, transform=_dummy_transform)
+
+    assert encoder.batch_sizes == [16, 1]
+
+
 def test_encode_yields_exactly_one_vector_per_image_across_batches(tmp_path: Path) -> None:
     paths = [_solid_png(tmp_path / f"{i}.png") for i in range(3)]
 

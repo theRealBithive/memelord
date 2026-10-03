@@ -53,6 +53,24 @@ V16 Die Klassifikation meldet, wie viele unbewertete Bilder wegen eines fehlende
    (tests/ratings/test_embedding_generation.py)
 V17 Der NSFW-Kopf bleibt beim DINOv3-Vektor allein und ist unverändert.
    (tests/core/test_trainer.py)
+
+Phase 3: 448 px und Neu-Kodierungs-Kette (tests in tests/core/test_brain_encoder.py,
+tests/core/test_brain.py, tests/ratings/test_embedding_generation.py and
+tests/ratings/test_taste_reencode.py)
+V18 Der Encoder sieht jedes Bild in 448×448 Pixeln. Die Vektoren tragen einen
+   neuen Stempel; jeder Vektor mit altem Stempel gilt ohne Migration als veraltet.
+V19 Die Neu-Kodierung läuft als Kette von Scheiben zu 500 Bildern, bewertete
+   zuerst, dann nach Downloadzeit. Sie endet, wenn nichts mehr veraltet ist oder eine
+   Scheibe nichts kodieren konnte, und sagt im zweiten Fall, was zu tun ist. Zwischen
+   zwei Scheiben ist die Warteschlange nie leer.
+V20 Ein Scrape kodiert höchstens 200 veraltete Bestandsbilder inline und überlässt
+   den Rest der Kette. Neue Downloads werden wie bisher beim Scrape kodiert. Die Kette
+   startet nach jedem Scrape, wenn etwas veraltet ist, und per Knopf auf der
+   Config-Seite.
+V21 Die Config-Seite zeigt, wie viele Bilder einen aktuellen Geschmacksvektor
+   haben. Der Job-Indikator zeigt die laufende Kette wie die Suchindex-Kette.
+V22 Ein Training nach dem Encoder-Wechsel kodiert die bewerteten Bilder selbst neu
+   und schreibt Geschmacks- und NSFW-Modell mit dem neuen Stempel.
 """
 
 import pickle
@@ -489,6 +507,44 @@ def test_round_trip_keeps_every_model_and_the_shared_one_stays_readable_by_brain
     assert not np.allclose(shared.predict_proba(probe), tg.predict_proba(probe))
     legacy_reader = brain.load_classifier(path)
     np.testing.assert_allclose(legacy_reader.predict_proba(probe), shared.predict_proba(probe))
+
+
+# --- V6, V8, V12: shapes the mutation run showed were unpinned ------------------------
+
+
+def test_feature_is_float32_even_from_float64_inputs() -> None:
+    """Contract: V12 (the feature keeps the float32 storage format of both blocks; a float64 feature would double the trainer's matrix)"""
+    rng = np.random.default_rng(3)
+    feature = taste.combine_features(
+        rng.standard_normal(brain.EMBEDDING_DIM), rng.standard_normal(siglip.SEARCH_DIM)
+    )
+    assert feature.dtype == np.float32
+    assert feature.shape == (taste.FEATURE_DIM,)
+
+
+def test_integer_weights_are_balanced_exactly_and_the_total_is_kept() -> None:
+    """Contract: V6 (the weight table may arrive as integers; balancing must not truncate them)"""
+    balanced = taste.balance_class_weights(np.array([0, 0, 1]), np.array([1, 1, 3]))
+    np.testing.assert_allclose(balanced, [1.25, 1.25, 2.5])
+    assert balanced.sum() == 5.0
+
+
+def test_fit_gets_a_thousand_iterations() -> None:
+    """Contract: V6 (same estimator everywhere: 1536-d features on a few thousand rows need more than sklearn's 100 lbfgs steps)"""
+    X = np.vstack([np.full(4, 0.1), np.full(4, 0.9)])
+    classifier = taste.fit_classifier(X, np.array([0, 1]), np.array([1.0, 1.0]))
+    assert classifier.get_params()["max_iter"] == 1000
+
+
+def test_save_taste_model_creates_missing_parent_directories(tmp_path: Path) -> None:
+    """Contract: V8 (a fresh DATA_DIR has no weights folder yet; the first train run must not fail on it)"""
+    X = np.vstack([np.full(taste.FEATURE_DIM, 0.1), np.full(taste.FEATURE_DIM, 0.9)])
+    model = taste.TasteModel(shared=LogisticRegression().fit(X, [0, 1]))
+    path = tmp_path / "a" / "b" / "weights.pkl"
+    taste.save_taste_model(model, path)
+    loaded = taste.load_taste_model(path)
+    assert loaded is not None
+    assert loaded.per_source == {}
 
 
 # --- V1: the category is written once, at download -----------------------------------

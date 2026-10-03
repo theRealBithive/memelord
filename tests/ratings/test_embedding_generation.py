@@ -627,12 +627,15 @@ class ReencodeTests(TestCase):
 
     def test_recently_rated_rows_come_first_then_unrated_by_download_time(self) -> None:
         """Taste contract: V19 — the chain's first slice is what the next Train run needs."""
-        old_unrated = _row(generation=LEGACY, seed=1)
+        # Inserted out of download order on purpose: SQLite returns ties in
+        # insertion order, so a sort that forgot downloaded_at would still pass
+        # if the rows had been inserted oldest first.
         new_unrated = _row(generation=LEGACY, seed=2)
+        old_unrated = _row(generation=LEGACY, seed=1)
         rated_earlier = _row(generation=LEGACY, seed=3, score=4)
         rated_later = _row(generation=LEGACY, seed=4, score=1)
-        base = old_unrated.downloaded_at
-        Image.objects.filter(pk=new_unrated.pk).update(downloaded_at=base.replace(year=base.year + 1))
+        base = new_unrated.downloaded_at
+        Image.objects.filter(pk=old_unrated.pk).update(downloaded_at=base.replace(year=base.year - 1))
         # Both rated rows were downloaded after every unrated one, so download
         # time alone would put them last; the rating must pull them forward.
         Image.objects.filter(pk=rated_earlier.pk).update(
@@ -651,6 +654,42 @@ class ReencodeTests(TestCase):
             encode.call_args.args[1],
             [self.data_dir / img.file_path for img in (rated_later, rated_earlier, old_unrated, new_unrated)],
         )
+
+    def test_progress_line_reports_done_of_total_under_the_default_label(self) -> None:
+        """The in-app log is how the operator follows a 15-minute slice: one line per chunk, "reencode: done/total images re-encoded with <encoder>", and the same label reaches brain.encode."""
+        for seed in range(3):
+            _write_png(self.data_dir, _row(generation=LEGACY, seed=seed).file_path)
+        lines: list[str] = []
+        sink_id = logger.add(lines.append, format="{message}", level="INFO")
+        try:
+            with mock.patch.object(brain, "encode", side_effect=_fake_encode) as encode:
+                reencode_stale_embeddings(self.data_dir, encoder=object(), transform=object(), chunk_size=2)
+        finally:
+            logger.remove(sink_id)
+
+        progress = [line.rstrip("\n") for line in lines if "re-encoded with" in line]
+        self.assertEqual(
+            progress,
+            [
+                f"reencode: 2/3 images re-encoded with {CURRENT}",
+                f"reencode: 3/3 images re-encoded with {CURRENT}",
+            ],
+        )
+        self.assertEqual(encode.call_args.kwargs["progress_label"], "reencode")
+
+    def test_defaults_are_chunks_of_256_rows_in_batches_of_16(self) -> None:
+        """Without explicit sizes the pass hands the encoder 256 paths at a time in batches of 16: the 448 px memory shape (risk R9)."""
+        for seed in range(257):
+            _write_png(self.data_dir, _row(generation=LEGACY, seed=seed).file_path)
+        calls: list[tuple[int, int]] = []
+
+        def _recording_encode(encoder, image_paths, transform=None, device=None, batch_size=32, progress_label=""):
+            calls.append((len(image_paths), batch_size))
+            return _fake_encode(encoder, image_paths)
+
+        with mock.patch.object(brain, "encode", side_effect=_recording_encode):
+            reencode_stale_embeddings(self.data_dir, encoder=object(), transform=object())
+        self.assertEqual(calls, [(256, 16), (1, 16)])
 
     def test_a_limit_takes_the_head_of_that_order(self) -> None:
         """Taste contract: V19 — a slice is a prefix of the order, so a rated row never waits behind unrated ones."""

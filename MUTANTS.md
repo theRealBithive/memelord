@@ -9,6 +9,68 @@ Denominators are the generated mutants per file
 (`grep -cE '^\s*def x.*__mutmut_[0-9]+\(' mutants/<file>`; the pattern must allow the
 `ǁ` separators mutmut puts into class-method names, or those are not counted).
 
+## Runs on 2026-10-03, taste model (`core/taste.py`, `ratings/features.py`, `ratings/embeddings.py`)
+
+Denominators: taste 194, features 13, embeddings 186 → **393**. Test selection:
+`tests/core/test_taste.py`, `tests/ratings/test_features.py`, `tests/core/test_trainer.py`,
+`tests/ratings/test_embedding_generation.py`, `tests/ratings/test_stats.py`,
+`tests/ratings/test_review_lazy_predicted_score.py`, `tests/ratings/test_taste_reencode.py`,
+`tests/ratings/test_search_index_job.py`. Against a copy of the dev DB, `only_mutate` and
+the selection narrowed for the run and restored afterwards.
+
+| run | scope | mutants | killed | timeout | survived | note |
+|---|---|---|---|---|---|---|
+| 1 | all three | 393 | 349 | 0 | 44 | before the tests listed below; features 13/13 killed |
+
+After run 1: 25 of the 44 killed by the tests below (each verified alone with
+`MUTANT_UNDER_TEST` inside the run-1 tree), 3 removed by a production change, 16
+equivalent. Score after the kills: **374 killed, 3 removed, 16 equivalent, 0 unjustified**.
+
+### Killed by tests added the same day (25)
+
+| mutant | test |
+|---|---|
+| embeddings `reencode_stale_embeddings` 3, 4, 55, 60, 99, 104, 106–110, 115, 116 | `test_progress_line_reports_done_of_total_under_the_default_label` (exact line `reencode: 2/3 images re-encoded with <encoder>`, label handed to `brain.encode`) |
+| embeddings `reencode_stale_embeddings` 1, 2 | `test_defaults_are_chunks_of_256_rows_in_batches_of_16` |
+| embeddings `reencode_stale_embeddings` 9 | `test_recently_rated_rows_come_first_then_unrated_by_download_time`, after the unrated rows were inserted out of download order (SQLite returns ties in insertion order, so the first draft could not tell `downloaded_at` from no secondary key) |
+| taste `_unit` 4, 6 | `test_feature_is_float32_even_from_float64_inputs` |
+| taste `balance_class_weights` 5, 7 | `test_integer_weights_are_balanced_exactly_and_the_total_is_kept` (an int array would be truncated by `empty_like`) |
+| taste `fit_classifier` 4, 6 | `test_fit_gets_a_thousand_iterations` |
+| taste `save_taste_model` 1, 3, 5 | `test_save_taste_model_creates_missing_parent_directories` |
+
+### Removed by a production change (3)
+- taste `fit_classifier` 3, 5, 7 — `random_state=42` on a lbfgs `LogisticRegression`: sklearn reads the seed only for the sag, saga and liblinear solvers, so the three mutants (`None`, dropped, `43`) could not change anything. The dead knob is gone; the docstring says why.
+
+### Equivalent (16): identical behaviour on every reachable input
+- taste `_unit` 2, 8 — `reshape(None)` and `reshape(-2)`: both callers (`features.taste_features` via `bytes_to_embedding`, the trainer via `brain.encode` rows and cached blobs) hand in 1-d vectors, for which `reshape(None)` is the identity and any negative size means "infer" (checked on numpy 2.x: 1-d `(3,)` stays `(3,)` under both).
+- taste `balance_class_weights` 14 — `y != class_value`: the loop visits both classes and reads every factor from the original `sample_weight`, so with exactly two classes `!=` only swaps which iteration writes which side and the result is identical. A single class never reaches the function: the trainer refuses an empty side and a source needs 10/10 for its own model.
+- embeddings `reencode_stale_embeddings` 10 — `nulls_last=None` drops the NULLS LAST clause; SQLite sorts NULL below every value, so in DESC order it comes last anyway (same as search `encode_stale_search_embeddings` 14).
+- embeddings `reencode_stale_embeddings` 65, 68, 69, 72, 75, 76 — `strict=` on zips whose operands have equal length by construction (`chunk`/`paths` from one list; `valid_paths`/`embeddings` by `brain.encode`'s contract).
+- embeddings `last_reencode_report` 29, 31, 34, 37, 39, 42 — defaults of `.get("remaining")` and `.get("encoded")`: every successful result comes from `run_taste_reencode`, which always writes both keys; and `None` is as falsy as `0` in the `if`.
+
+## Run on 2026-10-03, 448 px encoder (`core/brain.py` `get_transform` + `encode` default, `ratings/search.py` `encode_stale_search_embeddings`)
+
+Only the functions the 448 px change touched were run (`mutmut run` takes fnmatch
+patterns), because a full `brain.py` run re-lists the 82 survivors of 2026-10-02 that
+are recorded below and still open. Test selection: `tests/core/test_brain_encoder.py`,
+`tests/core/test_brain.py`, `tests/ratings/test_search.py`,
+`tests/ratings/test_search_index_job.py`, `tests/core/test_trainer.py`.
+
+Denominators: `get_transform` 21, `encode` 1 (the default `batch_size`),
+`encode_stale_search_embeddings` 129 (124 before `only_rated`) → **151**.
+
+| part | mutants | killed | timeout | survived | note |
+|---|---|---|---|---|---|
+| `get_transform` 1–21 | 21 | 21 | (21) | 0 | every one timed out in the run (the covering test pays the transformers import) and was re-run alone with `MUTANT_UNDER_TEST` against `tests/core/test_brain_encoder.py`: all 21 fail `test_transform_is_metas_processor_applied_per_image_at_448` |
+| `encode` 1 (`batch_size` 16→17) | 1 | 1 | 0 | 0 | survived first, killed by `test_encode_runs_batches_of_16_by_default` (17 images → forward passes of 16 and 1), confirmed by the second run |
+| `encode_stale_search_embeddings` | 129 | 120 | 0 | 9 | the 9 are the equivalents already recorded for this function below, shifted by +5 (`only_rated` adds five mutants, all killed by `test_only_rated_leaves_unrated_rows_to_the_chain` and the existing default-path tests): 8→13 (`only()` without the pk), 14→19 (`nulls_last=None`), 73/76/77/80/83/84→78/81/82/85/88/89 (`strict=` zips), 97→102 (`save()` without `update_fields`) |
+
+Score: **142 killed, 9 equivalent, 0 unjustified**. The 82 "accepted" survivors of
+2026-10-02 in `encode`/`load_classifier`/`reencode_stale_embeddings` (log text and
+cadence, `chunk_size` 256→257) were not re-measured; `reencode_stale_embeddings`'s
+share of them is now covered by the exact progress-line and default-size tests above,
+the `encode`/`load_classifier` share stays open.
+
 ## Runs on 2026-10-03 (text search: `core/siglip.py`, `ratings/vector_bank.py`, `ratings/search.py`, `ratings/similar.py`)
 
 Denominators of run 1: siglip 73, vector_bank 115, search 248, similar 26 → **462**.

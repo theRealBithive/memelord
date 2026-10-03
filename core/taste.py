@@ -105,8 +105,13 @@ def fit_classifier(
     same balancing (V6). Callers guarantee both classes are present: the
     trainer refuses to run without a liked and a disliked image, and a source
     only gets here past has_enough_examples().
+
+    max_iter is ten times sklearn's default: 1536-d features on a few thousand
+    rows need more than 100 lbfgs steps to converge. There is no random_state
+    on purpose: lbfgs is deterministic and sklearn reads the seed only for the
+    sag, saga and liblinear solvers, so the knob would be dead.
     """
-    classifier = LogisticRegression(max_iter=1000, random_state=42)
+    classifier = LogisticRegression(max_iter=1000)
     classifier.fit(X, y, sample_weight=balance_class_weights(y, sample_weight))
     return classifier
 
