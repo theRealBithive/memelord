@@ -62,6 +62,42 @@ def _queue_neighbor_hash(qs, image: Image, order: QueueOrder) -> str | None:
     )
 
 
+def _queue_head(qs):
+    """
+    The first image of the queue, fetched in two steps: its hash from the
+    covering index, then the row by key.
+
+    `qs.first()` asks SQLite for whole rows in queue order with LIMIT 1. When
+    the index cannot serve the order (newest, uncertain, and shuffle before
+    its own index existed) SQLite sorts, and a sort of whole rows reads every
+    row of the queue with its two 3 KB vectors: about a second per card for
+    28k images on the live host (review latency contract R1). Sorting hashes
+    read from the index and fetching one row by key takes milliseconds.
+    """
+    head_hash = qs.values_list("content_hash", flat=True).first()
+    if head_hash is None:
+        return None
+    return Image.objects.filter(content_hash=head_hash).prefetch_related("tags").first()
+
+
+def _file_paths_in_order(content_hashes: list[str]) -> list[str]:
+    """
+    The file paths of the given images, in the given order.
+
+    file_path is not in the queue index, so asking the ordered queue for
+    it would sort whole rows exactly like the head lookup in _queue_head;
+    a lookup by key for the two or three preload hashes stays on the index.
+    """
+    if not content_hashes:
+        return []
+    path_by_hash = dict(
+        Image.objects.filter(content_hash__in=content_hashes).values_list(
+            "content_hash", "file_path"
+        )
+    )
+    return [path_by_hash[h] for h in content_hashes if h in path_by_hash]
+
+
 def _browse_ctx(
     qs,
     content_hash: str | None,
@@ -128,7 +164,7 @@ def _browse_ctx(
     # No content_hash, or the requested image is gone (purged/deleted) — show
     # the head of the queue so the user lands on something predictable.
     if image is None:
-        image = qs.prefetch_related("tags").first()
+        image = _queue_head(qs)
 
     if image is None:
         return {"image": None, "mode": mode, "preload_paths": [], **base}
@@ -141,11 +177,12 @@ def _browse_ctx(
         .values_list("content_hash", flat=True)
         .first()
     )
-    # One query for the successor and the preload list: the first upcoming
-    # row is where rate-and-advance and the next arrow go.
-    upcoming = list(next_qs.values_list("content_hash", "file_path")[:PRELOAD_AHEAD])
-    next_hash = upcoming[0][0] if upcoming else None
-    preload_paths = [file_path for _content_hash, file_path in upcoming]
+    # One index query for the successor and the preload list: the first
+    # upcoming hash is where rate-and-advance and the next arrow go. The
+    # file paths come by key afterwards (see _file_paths_in_order).
+    upcoming_hashes = list(next_qs.values_list("content_hash", flat=True)[:PRELOAD_AHEAD])
+    next_hash = upcoming_hashes[0] if upcoming_hashes else None
+    preload_paths = _file_paths_in_order(upcoming_hashes)
     prev_count = prev_qs.count()
     # Derive total from the two halves + the image itself to skip a third
     # COUNT(*) on the queue.

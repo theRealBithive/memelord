@@ -8,8 +8,9 @@ same instant the card swaps because it was preloaded.
 
 Contract:
 R1 The review queue's head, neighbour and position queries and the nav badge
-   counts are answered from the review-queue index, never by a scan of the
-   image rows.
+   counts are answered from the review-queue indexes, never by reading image
+   rows, under every queue order: where an order needs a sort, the sort runs
+   over index entries and only the chosen image is then fetched by key.
 R2 A review card lists, as image preloads, the next PRELOAD_AHEAD images of
    its queue in the order the queue is served; the first of them is the image
    rate-and-advance and the next arrow show. A card outside the queue, and the
@@ -51,7 +52,13 @@ from ratings import embeddings, search
 from ratings.models import Image, ReviewThresholds
 from ratings.queue_rules import QUEUE_ORDERS, get_queue_order
 from ratings.views.common import nav_counts
-from ratings.views.review import PRELOAD_AHEAD, _review_ctx, _review_nsfw_qs, _review_qs
+from ratings.views.review import (
+    PRELOAD_AHEAD,
+    _review_ctx,
+    _review_nsfw_ctx,
+    _review_nsfw_qs,
+    _review_qs,
+)
 
 HEX64 = st.text(alphabet="0123456789abcdef", min_size=64, max_size=64)
 BASE_TIME = timezone.make_aware(timezone.datetime(2026, 1, 1, 12, 0, 0))
@@ -98,19 +105,56 @@ def _plan(queryset_or_sql) -> str:
     return queryset_or_sql.explain()
 
 
+def _image_table_queries(captured) -> list[str]:
+    """The SELECTs on the image table itself (the tag prefetch is not part of the queue)."""
+    return [
+        q["sql"]
+        for q in captured
+        if 'FROM "ratings_image"' in q["sql"] and "ratings_image_tags" not in q["sql"]
+    ]
+
+
 class QueueQueriesUseTheIndexTests(TestCase):
     def setUp(self) -> None:
         _wipe()
         _set_order(ReviewThresholds.ORDER_OLDEST)
         for i in range(3):
             _create(f"{i:064x}", download_minutes=i, predicted=0.8)
+        _create(f"{7:064x}", download_minutes=7, predicted=0.8, is_nsfw=True)
 
-    def test_head_lookup_is_an_index_seek(self) -> None:
-        """Contract: R1"""
+    def test_every_card_query_reads_index_entries_or_one_row_by_key(self) -> None:
+        """Contract: R1 (every order, the head card and a later card, both queues)"""
+        for order_name in sorted(QUEUE_ORDERS):
+            _set_order(order_name)
+            for build_ctx, content_hash in (
+                (_review_ctx, None),
+                (_review_ctx, f"{1:064x}"),
+                (_review_nsfw_ctx, None),
+            ):
+                with CaptureQueriesContext(connection) as ctx:
+                    build_ctx(content_hash, False)
+                for sql in _image_table_queries(ctx.captured_queries):
+                    plan = _plan(sql)
+                    reads_index_entries = "COVERING INDEX" in plan
+                    one_row_by_key = "(content_hash=?)" in plan
+                    self.assertTrue(
+                        reads_index_entries or one_row_by_key,
+                        f"{order_name} {build_ctx.__name__} {content_hash}:\n{plan}\n{sql}",
+                    )
+
+    def test_oldest_and_shuffle_heads_are_seeks_without_a_sort(self) -> None:
+        """Contract: R1 (each of the two has an index in its own sort order)"""
+        _set_order(ReviewThresholds.ORDER_OLDEST)
         plan = _plan(_review_qs(False).values_list("content_hash", flat=True)[:1])
-        self.assertIn("image_review_queue_idx", plan)
+        self.assertIn("COVERING INDEX image_review_queue_idx", plan)
+        self.assertNotIn("TEMP B-TREE", plan)
+
+        _set_order("shuffle")
+        plan = _plan(_review_qs(False).values_list("content_hash", flat=True)[:1])
+        self.assertIn("COVERING INDEX image_review_shuffle_idx", plan)
+        self.assertNotIn("TEMP B-TREE", plan)
         plan = _plan(_review_nsfw_qs(False).values_list("content_hash", flat=True)[:1])
-        self.assertIn("image_review_queue_idx", plan)
+        self.assertIn("COVERING INDEX image_review_shuffle_idx", plan)
 
     def test_neighbour_and_position_queries_use_the_index(self) -> None:
         """Contract: R1"""
@@ -121,8 +165,8 @@ class QueueQueriesUseTheIndexTests(TestCase):
         self.assertIn("image_review_queue_idx", _plan(qs.filter(prev_filter)))
         self.assertIn("image_review_queue_idx", _plan(qs.filter(next_filter)))
         self.assertIn(
-            "image_review_queue_idx",
-            _plan(qs.filter(next_filter).values_list("content_hash", "file_path")[:PRELOAD_AHEAD]),
+            "COVERING INDEX image_review_queue_idx",
+            _plan(qs.filter(next_filter).values_list("content_hash", flat=True)[:PRELOAD_AHEAD]),
         )
 
     def test_nav_badge_counts_walk_the_index_not_the_rows(self) -> None:
@@ -131,7 +175,8 @@ class QueueQueriesUseTheIndexTests(TestCase):
             with CaptureQueriesContext(connection) as ctx:
                 nav_counts(show_nsfw)
             plan = _plan(ctx.captured_queries[-1]["sql"])
-            self.assertIn("COVERING INDEX image_review_queue_idx", plan, show_nsfw)
+            # Either review index covers the aggregate; SQLite picks one.
+            self.assertIn("COVERING INDEX image_review_", plan, show_nsfw)
 
     def test_media_purged_check_is_an_index_lookup(self) -> None:
         """Contract: R4"""

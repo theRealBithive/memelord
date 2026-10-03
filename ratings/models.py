@@ -82,6 +82,24 @@ class Image(models.Model):
                 ],
                 name="image_review_queue_idx",
             ),
+            # The shuffle order sorts each seen-block by content_hash, but the
+            # review index puts downloaded_at before the hash, so SQLite had
+            # to sort the whole block for every head and neighbour query of a
+            # shuffled queue. This twin with the hash in the sort position
+            # makes shuffle a seek like oldest (review latency contract R1).
+            # newest and uncertain still sort, but over index entries only,
+            # which is cheap; sorting whole rows was the problem.
+            models.Index(
+                fields=[
+                    "is_purged",
+                    "score",
+                    "is_nsfw",
+                    "queue_seen_at",
+                    "content_hash",
+                    "predicted_score",
+                ],
+                name="image_review_shuffle_idx",
+            ),
             # The two chain counts ("N left" in the nav on every page while a
             # chain is queued, and the Config page) ask how many live rows
             # carry the current stamp and a blob. Partial on the blob so the
