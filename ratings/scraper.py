@@ -12,7 +12,7 @@ from core import brain, dedup, nsfw, taste
 from ratings import features
 from ratings.embeddings import has_current_embedding, stale_images
 from ratings.models import Image, Source
-from retina import fourchan, imgur, pixelfed, tumblr
+from retina import flickr, fourchan, imgur, pixelfed, tumblr
 from retina import mastodon as mastodon_scraper
 
 # How many stale library rows classify_images re-encodes inline per run (taste
@@ -108,6 +108,9 @@ def _load_sources(config_path: Path) -> dict:
         result["mastodon_accounts"] = [
             s.name for s in db_sources if s.type == Source.MASTODON
         ]
+        result["flickr_sources"] = [
+            s.name for s in db_sources if s.type == Source.FLICKR
+        ]
         return result
 
     logger.info("No sources in DB — falling back to config.toml")
@@ -120,7 +123,25 @@ def _load_sources(config_path: Path) -> dict:
         a.strip() for a in cfg.get("pixelfed", {}).get("accounts", []) if a.strip()
     ]
     result["mastodon_accounts"] = cfg.get("mastodon", {}).get("accounts", [])
+    result["flickr_sources"] = _flickr_sources_from_config(cfg)
     return result
+
+
+def _flickr_sources_from_config(cfg: dict) -> list[str]:
+    """
+    The [flickr] sources of config.toml in canonical form.
+
+    config.toml bypasses the add-source view, so its entries go through the
+    same normalize_source as typed ones; an invalid entry is logged and dropped.
+    """
+    names = []
+    for entry in cfg.get("flickr", {}).get("sources", []):
+        canonical = flickr.normalize_source(str(entry))
+        if canonical is None:
+            logger.warning("config.toml: {!r} is not a Flickr group or user, skipped", entry)
+            continue
+        names.append(canonical)
+    return names
 
 
 def import_from_config(config_path: Path) -> int:
@@ -139,6 +160,9 @@ def import_from_config(config_path: Path) -> int:
     for acct in cfg.get("mastodon", {}).get("accounts", []):
         acct = acct.strip()
         if acct and Source.objects.get_or_create(type=Source.MASTODON, name=acct)[1]:
+            created += 1
+    for name in _flickr_sources_from_config(cfg):
+        if Source.objects.get_or_create(type=Source.FLICKR, name=name)[1]:
             created += 1
     return created
 
@@ -623,6 +647,26 @@ def _scrape_account(module, source_type: str, account: str, token: str | None, s
     return inserted
 
 
+def _scrape_flickr(name: str, api_key: str | None, scrape: _ScrapeRun) -> int:
+    """
+    One Flickr group pool or photostream. With an API key the source's cursor
+    is the newest added/upload time seen and moves only after the downloads
+    are in the DB; without a key the feed returns no cursor and the stored one
+    stays as it is (see retina/flickr.py).
+    """
+    source_obj = Source.objects.filter(type=Source.FLICKR, name=name).first()
+    since = source_obj.cursor if source_obj else None
+    items, new_cursor = flickr.iter_image_items(name, since=since, api_key=api_key)
+    downloaded = flickr.download_images(
+        items, scrape.images_dir, name, skip_dirs=[scrape.images_dir]
+    )
+    inserted = _ingest(scrape, downloaded)
+    if new_cursor and source_obj:
+        source_obj.cursor = new_cursor
+        source_obj.save(update_fields=["cursor"])
+    return inserted
+
+
 def run(
     config_path: Path,
     data_dir: Path,
@@ -673,6 +717,15 @@ def run(
             except Exception as e:
                 logger.exception("Scraping {} {} failed: {}", service, account, e)
 
+    flickr_api_key = _flickr_api_key()
+    for name in sources["flickr_sources"]:
+        label = f"flickr/{name}"
+        logger.info("Scraping {}", label)
+        try:
+            counts[label] = _scrape_flickr(name, flickr_api_key, scrape)
+        except Exception as e:
+            logger.exception("Scraping {} failed: {}", label, e)
+
     has_taste_weights = bool(vision.weights_path and vision.weights_path.exists())
     if has_taste_weights or scrape.nsfw_clf is not None:
         classify_images(
@@ -686,6 +739,15 @@ def run(
     populate_knn_tag_suggestions()
 
     return counts
+
+
+def _flickr_api_key() -> str | None:
+    """FLICKR_API_KEY from the environment via settings; None selects the public feed."""
+    from django.conf import settings as dj_settings
+
+    if not dj_settings.FLICKR_API_KEY:
+        return None
+    return dj_settings.FLICKR_API_KEY
 
 
 def vision_config_from_settings() -> VisionConfig:

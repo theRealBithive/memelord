@@ -172,8 +172,9 @@ class LogEntry(models.Model):
 
 class Source(models.Model):
     """
-    User-configured scrape source (a 4chan board, Imgur topic, Tumblr blog, or
-    Mastodon/Pixelfed account handle).
+    User-configured scrape source (a 4chan board, Imgur topic, Tumblr blog,
+    Mastodon/Pixelfed account handle, or a Flickr group pool / photostream
+    stored canonically as "group/<id>" or "user/<id>").
 
     Sources in the DB take precedence over config.toml entries — the DB is
     the live config that the UI edits, while config.toml serves as the seed
@@ -185,12 +186,14 @@ class Source(models.Model):
     TUMBLR = "tumblr"
     PIXELFED = "pixelfed"
     MASTODON = "mastodon"
+    FLICKR = "flickr"
     TYPE_CHOICES = [
         (FOURCHAN, "4chan"),
         (IMGUR, "Imgur"),
         (TUMBLR, "Tumblr"),
         (PIXELFED, "Pixelfed"),
         (MASTODON, "Mastodon"),
+        (FLICKR, "Flickr"),
     ]
 
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
@@ -200,6 +203,7 @@ class Source(models.Model):
     added_at = models.DateTimeField(auto_now_add=True)
     # Highest status ID seen on the last scrape — lets Mastodon/Pixelfed account
     # scrapes resume forward instead of re-walking the whole timeline each run.
+    # 4chan stores a last_modified stamp, Flickr the newest added/upload time.
     cursor = models.CharField(max_length=255, null=True, blank=True)
 
     class Meta:

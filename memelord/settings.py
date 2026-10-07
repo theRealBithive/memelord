@@ -167,6 +167,10 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 
 WEIGHTS_PATH = DATA_DIR / "Janulon_weights.pkl"
 NSFW_WEIGHTS_PATH = DATA_DIR / "Janulon_nsfw_weights.pkl"
+# Flickr REST API key (free, non-commercial). Without it the Flickr scraper
+# falls back to the public feed: the 20 newest photos per source, no backlog.
+FLICKR_API_KEY = os.environ.get("FLICKR_API_KEY", "").strip()
+
 PHASH_MAX_DISTANCE = int(os.environ.get("PHASH_MAX_DISTANCE", "5"))
 DINO_DEDUP_COSINE_THRESHOLD = float(
     os.environ.get("DINO_DEDUP_COSINE_THRESHOLD", "0.92")

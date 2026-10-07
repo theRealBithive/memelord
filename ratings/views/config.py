@@ -28,6 +28,7 @@ from ratings.views.jobs import (
     index_status_ctx,
     reencode_status_ctx,
 )
+from retina import flickr
 
 _INTERVAL_CHOICES = [1, 2, 4, 6, 12, 24, 48, 72, 168]
 
@@ -180,6 +181,19 @@ def source_add(request):
         return _source_error(
             request, f"{service} handle must include an instance, e.g. @user@{host}"
         )
+
+    # Flickr: every spelling of one group or user (pasted URL, short form) is
+    # stored under one canonical name, so the unique (type, name) pair also
+    # catches duplicates. The whitelist here is the input check (OWASP A03).
+    if stype == Source.FLICKR:
+        canonical = flickr.normalize_source(name)
+        if canonical is None:
+            return _source_error(
+                request,
+                "Flickr source must be a group or user URL, e.g. "
+                "https://www.flickr.com/groups/419512@N22/pool/ or group/419512@N22",
+            )
+        name = canonical
 
     source, created = Source.objects.get_or_create(type=stype, name=name)
     if not created:

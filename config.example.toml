@@ -38,3 +38,10 @@ accounts = []
 [vision]
 sfw_threshold = 1
 nsfw_threshold = 1
+
+# Flickr: group pools and user photostreams, as URL or "group/<id>" / "user/<id>".
+# Set FLICKR_API_KEY in .env for the full pool; without it only the 20 newest
+# photos per run come from the public feed (and only numeric ids work).
+[flickr]
+sources = []
+

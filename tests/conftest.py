@@ -17,13 +17,18 @@ from PIL import Image
 # example inserts rows into SQLite), so too_slow is a tooling signal here, not a
 # property. Under mutmut the same test method runs twice in one process, which
 # trips differing_executors; that profile is selected with
-# HYPOTHESIS_PROFILE=mutmut and exists only for that runner.
+# HYPOTHESIS_PROFILE=mutmut and exists only for that runner. mutmut's
+# trampolines also slow every call down several times, so an example that
+# takes 60 ms in the plain run (the Flickr pool model walks ~30 runs per
+# example) crosses the 200 ms deadline; the deadline is a timing guard, not a
+# property, and stays on in the default profile.
 hypothesis_settings.register_profile(
     "default", suppress_health_check=[HealthCheck.too_slow]
 )
 hypothesis_settings.register_profile(
     "mutmut",
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.differing_executors],
+    deadline=None,
 )
 hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 

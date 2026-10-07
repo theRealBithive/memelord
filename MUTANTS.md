@@ -9,6 +9,84 @@ Denominators are the generated mutants per file
 (`grep -cE '^\s*def x.*__mutmut_[0-9]+\(' mutants/<file>`; the pattern must allow the
 `ǁ` separators mutmut puts into class-method names, or those are not counted).
 
+## Runs on 2026-10-07, Flickr scraper (`retina/flickr.py`)
+
+`retina/` is not in the permanent `[tool.mutmut]` scope, so the run used a temporary
+config (restored afterwards): `source_paths = ["retina"]`, `only_mutate =
+["retina/flickr.py"]`, `also_copy` with `core` and `ratings` instead of `retina`,
+test selection `tests/retina/test_flickr.py` (no DB access, so four children and no
+DB copy). The scraper wiring (`ratings/scraper.py` `_scrape_flickr`, the source-add
+view) stays outside the measured scope like the rest of those modules; it is covered
+by `tests/ratings/test_scraper_flickr.py` and `test_source_add.py`.
+
+| run | mutants | killed | survived | note |
+|---|---|---|---|---|
+| 1 | 618 | 485 | 133 | log texts, request details (`format`, `nojsoncallback`, timeouts, user agent), defaults and `break`/`continue` in the download loop not asserted exactly |
+| 2 | 607 | 599 | 8 | after the tests below and the production rewrites below |
+| re-check | 2 | 2 | 0 | `is_allowed_image_url` 13 (URL without host) and `download_images` 24 (two skipped photos), by hand with `MUTANT_UNDER_TEST` |
+
+### Killed by tests added the same day
+Exact log lines for every path (`test_api_walk_logs_each_page_and_the_failing_one`,
+`test_feed_logs_its_size_and_its_failure`, `test_invalid_stored_name_is_logged_as_such`,
+`test_api_error_is_logged_with_code_and_a_bounded_message`,
+`test_download_goes_on_after_skips_and_failures_and_logs_the_tally`); the fake Flickr
+refuses requests without `format=json`/`nojsoncallback=1` or without the key;
+timeouts and user agent (`test_get_json_uses_a_timeout_and_names_a_wrong_shape`,
+`test_image_request_sends_the_user_agent_with_a_timeout`); the page count
+(`test_walk_requests_exactly_the_pages_flickr_reports`); the default pace, nested
+output dir and urllib's own redirect checks behind the allowlist.
+
+### Removed by a production change
+Defaults that could never matter were written out plainly: `found.get("id")` /
+`entry.get("id")` with an `isinstance` check instead of `str(…get("id", ""))`, an
+explicit `hostname is None` instead of `or ""`, the newest stamp as `max()` of the
+stamps seen instead of a running comparison, `total_pages is None or page >=
+total_pages` instead of `or 0`, `path.unlink()` without `missing_ok` (the file was
+just written), and a dead `kind not in (GROUP, USER)` check in the short-form parser.
+
+### Equivalent (6): identical behaviour on every reachable input
+- `_get_json` 7, 8 and `_fetch_image` 10, 11: the `User-Agent` key in other letter case.
+  `urllib.request.Request` stores header names via `str.capitalize()`, so every
+  spelling sends the same header.
+- `_iter_api` 71: `reached_cursor = None` instead of `False`; the flag is only read
+  in a truth test.
+- `iter_image_items` 12: `rpartition("/")` instead of `partition("/")`; the name was
+  checked to be canonical one line earlier and has exactly one `/`.
+
+Score: **601 killed, 6 equivalent, 0 unjustified** (of 607).
+
+Follow-up the same day: `iter_image_items` now catches every exception on the API
+path (the key sits in frame locals that `logger.exception`'s diagnose mode would
+print, V9) and logs type and text. Re-run of `retina.flickr.x_iter_image_items*`
+only: all killed except the known equivalent `iter_image_items` 12.
+
+Second follow-up the same day, the gapless range (V4 revised, V12–V14): the API
+walk was rewritten (`_api_entries`, `_take_whole_groups`, `_backlog_budget`,
+`_backlog_cut_is_known`, `_read_walk`, `_next_cursor`, `_parse_cursor`). The
+`mutmut` Hypothesis profile got `deadline=None`: under the trampolines one example
+of the pool model took 280 ms and tripped the 200 ms deadline in the stats run (a
+timing guard, not a property; the default profile keeps it). Two full runs over
+`retina/flickr.py`; the last: 819 mutants, 801 killed, 6 timeouts, 12 survived.
+
+- Timeouts, real hangs: `_take_whole_groups` 5, 6, 10, 11, 12 (the group never grows,
+  so the loop never advances) and `_api_entries` 67 (`page = 1` re-reads page one
+  forever); three re-run by hand under `timeout 40`, all hung (exit 124).
+- Killed by tests added after the runs, each re-checked by hand with
+  `MUTANT_UNDER_TEST`: `_api_entries` 48 (an empty page 1 of 2 taken for the end),
+  `_backlog_cut_is_known` 7 and, from the first run, 5 and `_read_walk` 52 (read further
+  than needed: page-count tests), `_read_walk` 11 (`oldest > 1`: a range down to second 1
+  never completes), `_read_walk` 74, 78 from the first run (`must_progress` on the
+  end-of-pool path).
+- Removed by a production change: `_next_cursor` 19; the `fetched[0] == 0` condition was
+  redundant (the last branch keeps an oldest mark of 0 anyway) and is gone.
+- Equivalent: `_get_json` 7, 8 and `_fetch_image` 10, 11 (header case, see above),
+  `_normalize_url` 6 (`urlsplit` lowercases the scheme), `iter_image_items` 12 (see
+  above), `_parse_cursor` 4 (`rpartition`: with two colons one side holds a colon and
+  fails `int()` either way), `_backlog_cut_is_known` 1 (`<` instead of `<=`: at equality
+  the stamp at the budget is the last entry itself, so the comparison is false both ways).
+
+Score of the rewrite: **810 killed or hung, 8 equivalent, 1 removed, 0 unjustified** (of 819).
+
 ## Run on 2026-10-03, chain counts on partial indexes (`ratings/embeddings.py` `taste_vector_counts`, `ratings/search.py` `index_counts`)
 
 Only the two functions the change touched were run (`mutmut run` with the patterns

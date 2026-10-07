@@ -125,6 +125,7 @@
           <option value="tumblr">Tumblr</option>
           <option value="pixelfed">Pixelfed</option>
           <option value="mastodon">Mastodon</option>
+          <option value="flickr">Flickr</option>
         </select>
         <input class="field" type="text" name="name" id="src-name" placeholder="board (e.g. wg)" required autocomplete="off">
         <button type="submit" class="btn-primary">Add</button>
@@ -160,6 +161,7 @@
       "tumblr":   'Tumblr blog name, e.g. <code>myblog</code>',
       "pixelfed": 'Pixelfed account handle, e.g. <code>@user@pixelfed.social</code>',
       "mastodon": 'Mastodon account handle, e.g. <code>@user@mastodon.social</code>',
+      "flickr":   'Flickr group or user URL, e.g. <code>flickr.com/groups/419512@N22/pool/</code>; without FLICKR_API_KEY only the 20 newest photos per run',
     };
     const placeholders = {
       "4chan": "board (e.g. wg)",
@@ -167,6 +169,7 @@
       "tumblr": "blog name",
       "pixelfed": "@user@pixelfed.social",
       "mastodon": "@user@mastodon.social",
+      "flickr": "flickr.com/groups/… or /photos/…",
     };
     function updateHint(sel) {
       document.getElementById("src-hint").innerHTML = hints[sel.value] || "";

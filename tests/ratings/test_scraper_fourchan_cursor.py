@@ -28,6 +28,7 @@ _EMPTY_SOURCES = {
     "blogs": [],
     "pixelfed_accounts": [],
     "mastodon_accounts": [],
+    "flickr_sources": [],
 }
 
 
